@@ -1,0 +1,7 @@
+interface:
+  display_name: "Kado Search CLI"
+  short_description: "Search Kado through the Kado CLI"
+  default_prompt: "Use $kado-search-cli to find tools for automating invoice approvals."
+
+policy:
+  allow_implicit_invocation: true
