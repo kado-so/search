@@ -2,6 +2,8 @@
 
 Reusable agent skills for searching Kado from coding agents and AI assistants.
 
+[Kado](https://kado.so) helps teams discover and compare software for real workflows, with search results designed for both people and agents.
+
 ## Skills
 
 - `kado-search-curl`: Use the hosted Kado Agent API with `curl`. Prefer a user-provided `sk-kado-...` API key when available; otherwise use the device grant flow.
