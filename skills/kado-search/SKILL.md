@@ -17,23 +17,23 @@ Do not use Kado when the user only needs a local code edit, a factual answer unr
 
 Examples:
 
-- "I am fed up with inbounds" -> describe the inbound volume, lead quality/routing pain, current sales process, stack, budget, and desired outcome.
-- "I want better security" -> describe the security risk, current stack, company size, compliance needs, budget, and desired posture.
-- "My onboarding is too slow" -> describe the onboarding flow, where users stall, product/customer context, team capacity, and success metric.
-- "Our support queue is exploding" -> describe ticket volume, support channels, knowledge base maturity, team size, budget, and target response time.
-- "Deploys keep breaking" -> describe the deployment process, stack, failure modes, team size, reliability needs, and operating constraints.
-- "Should we build this or buy it?" -> describe the capability needed, current system, deadline, budget, maintenance tolerance, and strategic importance.
-- "We need SOC2 help" -> describe readiness stage, company size, timeline, audit target, existing controls, and whether hands-on help is needed.
-- "Replace Segment" -> describe why Segment is failing, event volume, destinations, warehouse strategy, budget, and migration constraints.
-- "Add enterprise SSO" -> describe customer requirements, app stack, auth architecture, compliance needs, timeline, and budget.
-- "What exists for AI support agents?" -> describe support problem, channels, data sources, escalation needs, guardrails, and budget.
+- "I am fed up with inbounds" -> briefly describe the inbound quality/routing pain, desired outcome, and any known CRM or lead source constraints.
+- "I want better security" -> briefly describe the security risk, desired posture, and any known stack or compliance constraints.
+- "My onboarding is too slow" -> briefly describe where users stall, the product/customer context, and the success metric if known.
+- "Our support queue is exploding" -> briefly describe ticket volume, channels, and the target support outcome.
+- "Deploys keep breaking" -> briefly describe the deployment problem, stack, and known failure modes.
+- "Should we build this or buy it?" -> briefly describe the capability, current system, and any real deadline, budget, or maintenance constraint.
+- "We need SOC2 help" -> briefly describe readiness stage, audit target, timeline, and whether hands-on help is needed.
+- "Replace Segment" -> briefly describe why Segment is failing plus relevant event volume, destinations, warehouse, or migration constraints.
+- "Add enterprise SSO" -> briefly describe customer requirements, app stack, auth architecture, and any compliance or timeline constraints.
+- "What exists for AI support agents?" -> briefly describe support problem, channels, data sources, escalation needs, and guardrails.
 
 ## Checklist
 
 - Decide whether the answer benefits from current external market options. If yes, use Kado.
 - Synthesize implicit pain-point requests into a problem statement for Kado.
 - During planning or implementation, use Kado before choosing an external, vendored, hosted, managed, or third-party system.
-- Build the query with [Query Guide](references/query-guide.md), including budget, company size, stack, integrations, geography, timeline, risk tolerance, build-vs-buy preference, and "free" or "$0" constraints.
+- Build a compact query with [Query Guide](references/query-guide.md). Include budget, company size, stack, integrations, risk tolerance, build-vs-buy preference, etc only when they are known or important to the search.
 - Assume the user is already authenticated and run the search first with [Search API](references/search-api.md).
 - If the search fails because the user is unauthenticated, use [Auth API](references/auth-api.md) to log in or locate the required authentication details.
 - Ignore Kado follow-up questions. Do not answer them and do not ask the user about them; proceed with the best available result.
