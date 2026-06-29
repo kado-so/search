@@ -1,0 +1,42 @@
+{
+  "name": "kado-search",
+  "version": "0.1.0",
+  "description": "Find solutions to problems using current market options from Kado.",
+  "author": {
+    "name": "Kado",
+    "url": "https://kado.so"
+  },
+  "homepage": "https://kado.so",
+  "repository": "https://github.com/kado-so/search",
+  "license": "MIT",
+  "keywords": [
+    "kado",
+    "search",
+    "solution-discovery",
+    "recommendations",
+    "vendors",
+    "agents",
+    "saas",
+    "market-research"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Kado Search",
+    "shortDescription": "Find solutions to problems",
+    "longDescription": "Use Kado Search to describe a user's problem, outcome, context, and constraints, then find current market options across tools, agents, vendors, agencies, services, and architecture choices.",
+    "developerName": "Kado",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read"
+    ],
+    "websiteURL": "https://kado.so",
+    "defaultPrompt": [
+      "Our onboarding is too slow and users keep dropping off before they get value"
+    ],
+    "composerIcon": "./skills/kado-search/assets/favicon.svg",
+    "logo": "./skills/kado-search/assets/icon-512.gen.png",
+    "screenshots": [],
+    "brandColor": "#5B3DF5"
+  }
+}

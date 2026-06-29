@@ -1,0 +1,8 @@
+{
+  "name": "kado-search",
+  "description": "Find solutions to problems using current market options from Kado.",
+  "author": {
+    "name": "Kado",
+    "url": "https://kado.so"
+  }
+}

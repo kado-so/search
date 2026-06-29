@@ -1,7 +1,0 @@
-interface:
-  display_name: "Kado Search Curl"
-  short_description: "Search Kado with curl and device auth"
-  default_prompt: "Use $kado-search-curl to find tools for automating invoice approvals."
-
-policy:
-  allow_implicit_invocation: true

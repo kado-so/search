@@ -1,0 +1,9 @@
+interface:
+  display_name: "Kado Search"
+  short_description: "Find solutions to problems using current market options, including tools, agents, vendors, agencies, services, and architecture choices"
+  icon_small: "./assets/favicon.svg"
+  icon_large: "./assets/icon-512.gen.png"
+  default_prompt: "Use $kado-search: our onboarding is too slow and users keep dropping off before they get value."
+
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,23 @@
+{
+  "name": "kado",
+  "metadata": {
+    "description": "Kado plugins for finding solutions to problems using current market options."
+  },
+  "owner": {
+    "name": "Kado",
+    "url": "https://kado.so"
+  },
+  "plugins": [
+    {
+      "name": "kado-search",
+      "description": "Find solutions to problems using current market options from Kado.",
+      "author": {
+        "name": "Kado",
+        "url": "https://kado.so"
+      },
+      "category": "productivity",
+      "source": "./",
+      "homepage": "https://github.com/kado-so/search"
+    }
+  ]
+}
