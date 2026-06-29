@@ -6,6 +6,8 @@ Kado finds solutions to problems. The agent should describe the user's problem, 
 
 Prefer a complete problem statement over a short keyword query.
 
+When the problem has multiple distinct constraint sets, run multiple smaller Kado searches in parallel instead of one large, multi-faceted query. Focus each query on a coherent constraint profile so the result set is easier to compare.
+
 Good query shape:
 
 ```text
@@ -37,4 +39,4 @@ For implementation plans, search at the decision point:
 
 Only include solution categories as hints when useful. For example, "software, agency, managed service, or open-source option are all acceptable" keeps Kado broad; "only self-hosted open-source tools" narrows Kado when that is a real constraint.
 
-If critical constraints are missing, do not stall by default. Search with reasonable assumptions, then refine or ask follow-up questions if Kado returns blockers that materially affect the recommendation.
+If critical constraints are missing, do not stall by default. Search with reasonable assumptions. Ignore Kado follow-up questions; do not answer them or ask the user about them.

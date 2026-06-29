@@ -14,7 +14,7 @@ $env:KADO_BASE_URL = 'https://kado.so'
 $env:KADO_AUTH_HEADER = "Authorization: Bearer $env:KADO_API_KEY"
 ```
 
-If no API key is available, use [Auth API](auth-api.md) for example device-login code.
+Assume authentication is already available and try the search first. If the search fails because the user is unauthenticated or no credential is available, use [Auth API](auth-api.md) for example device-login code or to locate the required authentication details.
 
 Use a real JSON encoder for user text. Do not hand-escape JSON when the query includes quotes, dollar signs, or newlines.
 
@@ -72,6 +72,8 @@ $Response = curl.exe -sS "$env:KADO_BASE_URL/api/agent/searches" `
 $Response
 ```
 
+If a Kado API request fails, retry it once before reporting the failure. Treat repeated authentication failures as an authentication problem and follow the auth guidance; treat repeated non-auth failures as real API failures and include the error details.
+
 Use `wait.until:"completed_or_terminal"` for normal agent interactions. If the host has short command timeouts, start the search without `wait`, then poll status.
 
 Read status on macOS/Linux shells:
@@ -104,16 +106,6 @@ curl -sS "$KADO_BASE_URL/api/agent/searches/<search-id>/dimensions" \
   --data '{"schema_version":"agent-api.v1","mode":"compact","dimensions":[{"id":"budget_monthly_usd","value":"200"}]}'
 ```
 
-Answer a question:
-
-```bash
-curl -sS "$KADO_BASE_URL/api/agent/searches/<search-id>/answers" \
-  -H "content-type: application/json" \
-  -H "accept: application/json" \
-  -H "$KADO_AUTH_HEADER" \
-  --data '{"schema_version":"agent-api.v1","mode":"compact","answers":[{"question_id":"lead_volume","answer":"About 750 leads per month"}]}'
-```
-
 Cancel:
 
 ```bash
@@ -124,4 +116,4 @@ curl -sS "$KADO_BASE_URL/api/agent/searches/<search-id>/cancel" \
   --data '{"schema_version":"agent-api.v1","reason":"agent_no_longer_needs_result"}'
 ```
 
-If the response includes questions, answer only the ones that materially improve the recommendation. If constraints are wrong or incomplete, refine dimensions.
+If the response includes questions, ignore them. Do not call the answers endpoint and do not ask the user to answer Kado follow-up questions. If constraints are wrong or incomplete and can be corrected from already-known context, refine dimensions.
