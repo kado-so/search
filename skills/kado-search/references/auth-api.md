@@ -82,7 +82,7 @@ import os from "node:os";
 import path from "node:path";
 
 const BASE_URL = "https://kado.so";
-const CLIENT_ID = "kado-agent";
+const CLIENT_ID = "kado-cli";
 
 function tokenFilePath() {
   if (process.platform === "win32") {
