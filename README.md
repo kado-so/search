@@ -133,7 +133,7 @@ It prefers an API key when the user already provides one:
 export KADO_API_KEY="sk-kado-..."
 ```
 
-If no API key is available, the skill includes example device-login code in [auth-api.md](skills/kado-search/references/auth-api.md). Agents can adapt or run it from a temporary location; it is not a required bundled script.
+If no API key is available, follow the platform-specific, browser-approved device-login guidance in [auth-api.md](skills/kado-search/references/auth-api.md). The skill does not install a native Kado CLI or npm wrapper.
 
 ## Repository Layout
 

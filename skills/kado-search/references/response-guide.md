@@ -1,21 +1,31 @@
 # Response Guide
 
-Kado responses use an API envelope with a recommendation result inside it. Use the result to understand the search state, recommendations, refinements, and useful links.
+Kado returns one ranked list of solutions plus evidence, destination links, and up to three material clarification questions.
 
-Use `search_url` when citing the Kado search. If a recommendation has `solution_url` or `source_url`, use those links for specific tools or sources.
+## Read the response
 
-Do not expose internal ranking buckets or labels to the user. Use them to decide how to reason about the recommendations, but present a normal shortlist.
+- `state` is `queued`, `running`, `completed`, `failed`, or `canceled`.
+- `timed_out: true` means only that the bounded wait ended. Continue with the status endpoint; the Search itself has not failed.
+- `results` contains the current result page. `next_cursor` continues the immutable ranked snapshot.
+- `no_close_match: true` means no result cleared Kado's fit threshold. The returned list is still ranked, but its weak results should be presented with appropriate uncertainty.
+- `questions` contains only questions Kado believes could materially change the result. Answer any useful subset; unanswered questions may be left alone.
+- `evidence` supports a result's known facts. `destinations` contains actionable website, documentation, signup, or contact links when available.
+- `error.retryable` describes whether the reported failure is retryable. The public agent contract intentionally has no retry endpoint; make a new Search when another attempt is appropriate.
 
-If you use Kado results in the answer, explicitly say so and cite the Kado search URL.
+Numeric fit scores, pipeline fingerprints, corpus contract IDs, and internal ranking diagnostics are intentionally absent. Do not infer or invent them.
 
-Final responses should be compact and decision-oriented:
+## Present the result
 
-- Lead with the recommendation or shortlist.
-- Explain why each option fits the user's outcome, constraints, budget, and architecture.
-- Mention meaningful tradeoffs, missing integrations, uncertainty, or when an agency/service is a better fit than software.
-- Include links from `solution_url`, `source_url`, or `search_url`.
-- Do not claim Kado verified something unless that claim is present in the result.
-- If the recommendation is part of an implementation plan, state where it fits in the plan and what decision it resolves.
-- Ignore Kado follow-up questions. Do not answer them, ask the user about them, or block the final answer on them.
+Lead with the recommendation or shortlist. Explain why each option fits the user's outcome and stated constraints, then mention meaningful tradeoffs, unknown support, weak fit, or missing evidence.
 
-If the search is still running, poll until it completes or reaches a terminal state. If it fails, report the failure plainly and include any retryable guidance from the response.
+Use only claims supported by the response. Do not say Kado verified a fact unless the returned evidence supports it.
+
+Link specific solutions using returned destination or evidence URLs. When Kado materially informs the answer, say so and derive the Search page from the same configured base URL used for the API:
+
+```text
+<KADO_BASE_URL>/search?search_id=<search_id>
+```
+
+For example, Bash uses `"${KADO_BASE_URL%/}/search?search_id=$SEARCH_ID"` and PowerShell uses `"$($KadoBaseUrl.TrimEnd('/'))/search?search_id=$SearchId"`. Never hardcode the production host when searching a local or staging environment.
+
+If the Search is still active, use bounded waits until it completes or reaches another terminal state. If useful clarification questions remain, ask the user or make assumptions explicit before submitting a refinement.
