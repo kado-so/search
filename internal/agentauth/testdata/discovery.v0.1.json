@@ -1,41 +1,43 @@
 {
-	"authorization_server": {
-		"issuer": "https://kado.so",
-		"token_endpoint": "https://kado.so/oauth/token",
-		"jwks_uri": "https://kado.so/.well-known/jwks.json",
-		"token_endpoint_auth_methods_supported": ["private_key_jwt"],
-		"grant_types_supported": ["client_credentials"],
-		"agent_principal_protocol_versions_supported": ["0.1"],
-		"agent_nonce_endpoint": "https://kado.so/api/auth/agent/nonce",
-		"agent_enrollment_endpoint": "https://kado.so/api/auth/agent/enroll",
-		"agent_credential_endpoint": "https://kado.so/api/auth/agent/credentials",
-		"agent_autonomous_enrollment_supported": true,
-		"agent_key_algorithms_supported": ["Ed25519"],
-		"agent_jws_algorithms_supported": ["EdDSA"],
-		"agent_admission_challenge_types_supported": [
-			"urn:agent-principal:challenge:argon2id-deterministic-v1"
-		],
-		"agent_principal_metadata_uri": "https://kado.so/.well-known/agent-principal"
-	},
-	"protected_resource": {
-		"resource": "https://kado.so",
-		"authorization_servers": ["https://kado.so"],
-		"scopes_supported": ["search:read"],
-		"bearer_methods_supported": ["header"],
-		"agent_principal_metadata_uri": "https://kado.so/.well-known/agent-principal"
-	},
-	"agent_extension": {
-		"issuer": "https://kado.so",
-		"protected_resource": "https://kado.so",
-		"agent_principal_protocol_versions_supported": ["0.1"],
-		"agent_nonce_endpoint": "https://kado.so/api/auth/agent/nonce",
-		"agent_enrollment_endpoint": "https://kado.so/api/auth/agent/enroll",
-		"agent_credential_endpoint": "https://kado.so/api/auth/agent/credentials",
-		"agent_autonomous_enrollment_supported": true,
-		"agent_key_algorithms_supported": ["Ed25519"],
-		"agent_jws_algorithms_supported": ["EdDSA"],
-		"agent_admission_challenge_types_supported": [
-			"urn:agent-principal:challenge:argon2id-deterministic-v1"
-		]
-	}
+  "authorization_server": {
+    "issuer": "https://kado.so",
+    "token_endpoint": "https://kado.so/oauth/token",
+    "jwks_uri": "https://kado.so/.well-known/jwks.json",
+    "token_endpoint_auth_methods_supported": ["private_key_jwt"],
+    "grant_types_supported": ["client_credentials"],
+    "agent_principal_protocol_versions_supported": ["0.1"],
+    "agent_nonce_endpoint": "https://kado.so/api/auth/agent/nonce",
+    "agent_enrollment_endpoint": "https://kado.so/api/auth/agent/enroll",
+    "agent_admission_endpoint": "https://kado.so/api/auth/agent/enroll/admission",
+    "agent_credential_endpoint": "https://kado.so/api/auth/agent/credentials",
+    "agent_autonomous_enrollment_supported": true,
+    "agent_key_algorithms_supported": ["Ed25519"],
+    "agent_jws_algorithms_supported": ["EdDSA"],
+    "agent_admission_challenge_types_supported": [
+      "urn:agent-principal:challenge:argon2id-deterministic-v1"
+    ],
+    "agent_principal_metadata_uri": "https://kado.so/.well-known/agent-principal"
+  },
+  "protected_resource": {
+    "resource": "https://kado.so",
+    "authorization_servers": ["https://kado.so"],
+    "scopes_supported": ["search:read"],
+    "bearer_methods_supported": ["header"],
+    "agent_principal_metadata_uri": "https://kado.so/.well-known/agent-principal"
+  },
+  "agent_extension": {
+    "issuer": "https://kado.so",
+    "protected_resource": "https://kado.so",
+    "agent_principal_protocol_versions_supported": ["0.1"],
+    "agent_nonce_endpoint": "https://kado.so/api/auth/agent/nonce",
+    "agent_enrollment_endpoint": "https://kado.so/api/auth/agent/enroll",
+    "agent_admission_endpoint": "https://kado.so/api/auth/agent/enroll/admission",
+    "agent_credential_endpoint": "https://kado.so/api/auth/agent/credentials",
+    "agent_autonomous_enrollment_supported": true,
+    "agent_key_algorithms_supported": ["Ed25519"],
+    "agent_jws_algorithms_supported": ["EdDSA"],
+    "agent_admission_challenge_types_supported": [
+      "urn:agent-principal:challenge:argon2id-deterministic-v1"
+    ]
+  }
 }

@@ -46,6 +46,7 @@ type authorizationMetadata struct {
 	ProtocolVersions          []string `json:"agent_principal_protocol_versions_supported"`
 	NonceEndpoint             string   `json:"agent_nonce_endpoint"`
 	EnrollmentEndpoint        string   `json:"agent_enrollment_endpoint"`
+	AdmissionEndpoint         string   `json:"agent_admission_endpoint"`
 	CredentialEndpoint        string   `json:"agent_credential_endpoint"`
 	AutonomousEnrollment      *bool    `json:"agent_autonomous_enrollment_supported"`
 	KeyAlgorithms             []string `json:"agent_key_algorithms_supported"`
@@ -60,6 +61,7 @@ type agentProtocolMetadata struct {
 	ProtocolVersions        []string `json:"agent_principal_protocol_versions_supported"`
 	NonceEndpoint           string   `json:"agent_nonce_endpoint"`
 	EnrollmentEndpoint      string   `json:"agent_enrollment_endpoint"`
+	AdmissionEndpoint       string   `json:"agent_admission_endpoint"`
 	CredentialEndpoint      string   `json:"agent_credential_endpoint"`
 	AutonomousEnrollment    *bool    `json:"agent_autonomous_enrollment_supported"`
 	KeyAlgorithms           []string `json:"agent_key_algorithms_supported"`
@@ -84,6 +86,7 @@ var authorizationMetadataFields = []string{
 	"agent_principal_protocol_versions_supported",
 	"agent_nonce_endpoint",
 	"agent_enrollment_endpoint",
+	"agent_admission_endpoint",
 	"agent_credential_endpoint",
 	"agent_autonomous_enrollment_supported",
 	"agent_key_algorithms_supported",
@@ -98,6 +101,7 @@ var agentProtocolMetadataFields = []string{
 	"agent_principal_protocol_versions_supported",
 	"agent_nonce_endpoint",
 	"agent_enrollment_endpoint",
+	"agent_admission_endpoint",
 	"agent_credential_endpoint",
 	"agent_autonomous_enrollment_supported",
 	"agent_key_algorithms_supported",
@@ -152,7 +156,23 @@ func validateLimits(limits Limits) error {
 		limits.MaxProofLifetime <= 0 ||
 		limits.MaxProofLifetime > 60*time.Second ||
 		limits.MaxHTTPTimeout <= 0 ||
-		limits.MaxHTTPTimeout > 2*time.Minute {
+		limits.MaxHTTPTimeout > 2*time.Minute ||
+		limits.MaxChallengeLifetime <= 0 ||
+		limits.MaxChallengeLifetime > 10*time.Minute ||
+		limits.MaxArgonMemoryKiB < 8 ||
+		limits.MaxArgonMemoryKiB > 128*1024 ||
+		limits.MaxArgonPasses < 1 ||
+		limits.MaxArgonPasses > 4 ||
+		limits.MaxArgonParallelism < 1 ||
+		limits.MaxArgonParallelism > 4 ||
+		limits.MaxArgonAttempts < 1 ||
+		limits.MaxArgonAttempts > 10_000 ||
+		limits.MaxArgonElapsed <= 0 ||
+		limits.MaxArgonElapsed > 10*time.Minute ||
+		limits.MaxSessionLifetime <= 0 ||
+		limits.MaxSessionLifetime > 24*time.Hour ||
+		limits.MaxAccessTokenLifetime <= 0 ||
+		limits.MaxAccessTokenLifetime > 5*time.Minute {
 		return errors.New("invalid agent authentication limits")
 	}
 	return nil
@@ -214,6 +234,13 @@ func (client *Client) Discover(ctx context.Context) (Metadata, error) {
 	if err != nil {
 		return Metadata{}, newProtocolError(ErrDiscovery, err)
 	}
+	admissionEndpoint, err := validateAdvertisedEndpoint(
+		authorization.AdmissionEndpoint,
+		client.issuer,
+	)
+	if err != nil {
+		return Metadata{}, newProtocolError(ErrDiscovery, err)
+	}
 	credentialEndpoint, err := validateAdvertisedEndpoint(
 		authorization.CredentialEndpoint,
 		client.issuer,
@@ -252,6 +279,7 @@ func (client *Client) Discover(ctx context.Context) (Metadata, error) {
 		) ||
 		extension.NonceEndpoint != authorization.NonceEndpoint ||
 		extension.EnrollmentEndpoint != authorization.EnrollmentEndpoint ||
+		extension.AdmissionEndpoint != authorization.AdmissionEndpoint ||
 		extension.CredentialEndpoint != authorization.CredentialEndpoint {
 		return Metadata{}, newProtocolError(ErrDiscovery, nil)
 	}
@@ -262,6 +290,7 @@ func (client *Client) Discover(ctx context.Context) (Metadata, error) {
 		JWKSURI:              jwksURI.String(),
 		NonceEndpoint:        nonceEndpoint.String(),
 		EnrollmentEndpoint:   enrollmentEndpoint.String(),
+		AdmissionEndpoint:    admissionEndpoint.String(),
 		CredentialEndpoint:   credentialEndpoint.String(),
 		AgentMetadataURI:     agentMetadataURI.String(),
 		AutonomousEnrollment: *authorization.AutonomousEnrollment,

@@ -4,7 +4,8 @@ go 1.24.0
 
 require (
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/sys v0.27.0
+	golang.org/x/crypto v0.31.0
+	golang.org/x/sys v0.28.0
 )
 
 require (

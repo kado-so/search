@@ -3,9 +3,11 @@ package agentauth
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -165,5 +167,324 @@ func TestPhase02BValidatorAcceptsSharedFixture(t *testing.T) {
 	command.Stderr = &output
 	if err := command.Run(); err != nil {
 		t.Fatalf("Phase 02B fixture verification error = %v; output = %s", err, output.String())
+	}
+}
+
+func TestPhase02BValidatorAcceptsGoAdmissionSolutionAndProofs(t *testing.T) {
+	admissionPath := os.Getenv("KADO_PHASE_02B_ADMISSION")
+	if admissionPath == "" {
+		t.Skip("set KADO_PHASE_02B_ADMISSION to run the authoritative TypeScript validator")
+	}
+	profile := loadAdmissionFixture(t)
+	bindingInput := fixtureBindingInput(profile)
+	binding, err := encodeAdmissionBinding(bindingInput)
+	if err != nil {
+		t.Fatalf("encodeAdmissionBinding() error = %v", err)
+	}
+	management := newFixtureSigner(t)
+	session := fixtureSigner{
+		private: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x24}, ed25519.SeedSize)),
+	}
+	managementJWK, err := publicJWK(management)
+	if err != nil {
+		t.Fatalf("publicJWK(management) error = %v", err)
+	}
+	sessionJWK, err := publicJWK(session)
+	if err != nil {
+		t.Fatalf("publicJWK(session) error = %v", err)
+	}
+	endpoint := bindingInput.Endpoint
+	managementProof, err := signFlattenedJWS(
+		bytes.NewReader(nil),
+		management,
+		binding,
+		protectedHeader{
+			Type: admissionManagementProofType,
+			Alg:  "EdDSA",
+			JWK:  &managementJWK,
+			URL:  endpoint,
+		},
+	)
+	if err != nil {
+		t.Fatalf("sign management proof error = %v", err)
+	}
+	sessionProof, err := signFlattenedJWS(
+		bytes.NewReader(nil),
+		session,
+		binding,
+		protectedHeader{
+			Type: admissionSessionProofType,
+			Alg:  "EdDSA",
+			JWK:  &sessionJWK,
+			URL:  endpoint,
+		},
+	)
+	if err != nil {
+		t.Fatalf("sign session proof error = %v", err)
+	}
+	fixture := struct {
+		BindingInput    admissionInteropBinding `json:"binding_input"`
+		Binding         string                  `json:"binding_statement"`
+		Challenge       admissionChallenge      `json:"challenge"`
+		Solution        admissionSolution       `json:"solution"`
+		HMACSecret      string                  `json:"hmac_secret"`
+		ManagementJWK   PublicJWK               `json:"management_jwk"`
+		ManagementProof flattenedJWS            `json:"management_proof"`
+		SessionJWK      PublicJWK               `json:"session_jwk"`
+		SessionProof    flattenedJWS            `json:"session_proof"`
+		Endpoint        string                  `json:"endpoint"`
+	}{
+		BindingInput: interopBinding(bindingInput),
+		Binding:      rawBase64URL.EncodeToString(binding),
+		Challenge:    fixtureChallenge(profile),
+		Solution: admissionSolution{
+			Counter:    profile.Vector.Solution.Counter,
+			DerivedKey: profile.Vector.Solution.DerivedKey,
+		},
+		HMACSecret:      profile.Vector.HMACSecretBase64URL,
+		ManagementJWK:   managementJWK,
+		ManagementProof: managementProof,
+		SessionJWK:      sessionJWK,
+		SessionProof:    sessionProof,
+		Endpoint:        endpoint,
+	}
+	encoded, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatalf("Marshal(admission interop fixture) error = %v", err)
+	}
+	fixturePath := filepath.Join(t.TempDir(), "go-admission.json")
+	if err := os.WriteFile(fixturePath, encoded, 0o600); err != nil {
+		t.Fatalf("WriteFile(admission interop fixture) error = %v", err)
+	}
+	runtime := os.Getenv("KADO_TYPESCRIPT_RUNTIME")
+	if runtime == "" {
+		runtime = "node"
+	}
+	validatorPath := admissionPath
+	runtimeArguments := []string{}
+	if filepath.Base(runtime) == "node" {
+		validatorPath = prepareNodeAdmissionValidator(t, admissionPath)
+		runtimeArguments = append(runtimeArguments, "--experimental-strip-types")
+	}
+	runtimeArguments = append(
+		runtimeArguments,
+		"testdata/verify-phase02b-admission.ts",
+		fixturePath,
+		validatorPath,
+	)
+	command := exec.CommandContext(
+		context.Background(),
+		runtime,
+		runtimeArguments...,
+	)
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		t.Fatalf(
+			"Phase 02B admission verification error = %v; output = %s",
+			err,
+			output.String(),
+		)
+	}
+}
+
+func TestPhase02BValidatorAcceptsGoPrivateKeyJWT(t *testing.T) {
+	tokenPath := os.Getenv("KADO_PHASE_02B_TOKEN")
+	if tokenPath == "" {
+		t.Skip("set KADO_PHASE_02B_TOKEN to run the authoritative TypeScript validator")
+	}
+	session := fixtureSigner{
+		private: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x35}, ed25519.SeedSize)),
+	}
+	sessionJWK, err := publicJWK(session)
+	if err != nil {
+		t.Fatalf("publicJWK(session) error = %v", err)
+	}
+	const (
+		clientID = "clt_00000000000000000000000000000001"
+		keyID    = "scred_00000000000000000000000000000001"
+		issuer   = "https://kado.so"
+		now      = int64(1784370000)
+	)
+	assertion, err := signCompactJWT(
+		bytes.NewReader(nil),
+		session,
+		privateKeyJWTHeader{
+			Algorithm: "EdDSA",
+			KeyID:     keyID,
+			Type:      "JWT",
+		},
+		privateKeyJWTClaims{
+			Audience:  issuer + "/oauth/token",
+			ExpiresAt: now + 60,
+			IssuedAt:  now,
+			Issuer:    clientID,
+			JTI:       rawBase64URL.EncodeToString(bytes.Repeat([]byte{0x45}, 16)),
+			Subject:   clientID,
+		},
+	)
+	if err != nil {
+		t.Fatalf("signCompactJWT() error = %v", err)
+	}
+	fixture := struct {
+		Assertion  string    `json:"assertion"`
+		PublicJWK  PublicJWK `json:"public_jwk"`
+		ClientID   string    `json:"client_id"`
+		KeyID      string    `json:"key_id"`
+		Issuer     string    `json:"issuer"`
+		NowSeconds int64     `json:"now_seconds"`
+	}{
+		Assertion:  assertion,
+		PublicJWK:  sessionJWK,
+		ClientID:   clientID,
+		KeyID:      keyID,
+		Issuer:     issuer,
+		NowSeconds: now,
+	}
+	encoded, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatalf("Marshal(private_key_jwt fixture) error = %v", err)
+	}
+	fixturePath := filepath.Join(t.TempDir(), "go-private-key-jwt.json")
+	if err := os.WriteFile(fixturePath, encoded, 0o600); err != nil {
+		t.Fatalf("WriteFile(private_key_jwt fixture) error = %v", err)
+	}
+	runtime := os.Getenv("KADO_TYPESCRIPT_RUNTIME")
+	if runtime == "" {
+		runtime = "node"
+	}
+	validatorPath := tokenPath
+	runtimeArguments := []string{}
+	if filepath.Base(runtime) == "node" {
+		validatorPath = prepareNodeTokenValidator(t, tokenPath)
+		runtimeArguments = append(runtimeArguments, "--experimental-strip-types")
+	}
+	runtimeArguments = append(
+		runtimeArguments,
+		"testdata/verify-phase02b-token.ts",
+		fixturePath,
+		validatorPath,
+	)
+	command := exec.CommandContext(context.Background(), runtime, runtimeArguments...)
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		t.Fatalf(
+			"Phase 02B private_key_jwt verification error = %v; output = %s",
+			err,
+			output.String(),
+		)
+	}
+}
+
+func prepareNodeAdmissionValidator(t *testing.T, admissionPath string) string {
+	t.Helper()
+	admissionSource, err := os.ReadFile(admissionPath)
+	if err != nil {
+		t.Fatalf("ReadFile(Phase 02B admission validator) error = %v", err)
+	}
+	protocolPath := filepath.Join(filepath.Dir(admissionPath), "protocol.ts")
+	protocolSource, err := os.ReadFile(protocolPath)
+	if err != nil {
+		t.Fatalf("ReadFile(Phase 02B protocol dependency) error = %v", err)
+	}
+	directory := t.TempDir()
+	copiedAdmission := filepath.Join(directory, "admission.ts")
+	copiedProtocol := filepath.Join(directory, "protocol.ts")
+	adaptedAdmission := bytes.ReplaceAll(
+		admissionSource,
+		[]byte(`"./protocol"`),
+		[]byte(`"./protocol.ts"`),
+	)
+	adaptedProtocol := adaptProtocolForNode(protocolSource)
+	if err := os.WriteFile(copiedAdmission, adaptedAdmission, 0o600); err != nil {
+		t.Fatalf("WriteFile(admission validator copy) error = %v", err)
+	}
+	if err := os.WriteFile(copiedProtocol, adaptedProtocol, 0o600); err != nil {
+		t.Fatalf("WriteFile(protocol validator copy) error = %v", err)
+	}
+	return copiedAdmission
+}
+
+func prepareNodeTokenValidator(t *testing.T, tokenPath string) string {
+	t.Helper()
+	tokenSource, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatalf("ReadFile(Phase 02B token validator) error = %v", err)
+	}
+	protocolPath := filepath.Join(filepath.Dir(tokenPath), "protocol.ts")
+	protocolSource, err := os.ReadFile(protocolPath)
+	if err != nil {
+		t.Fatalf("ReadFile(Phase 02B protocol dependency) error = %v", err)
+	}
+	directory := t.TempDir()
+	copiedToken := filepath.Join(directory, "token.ts")
+	copiedProtocol := filepath.Join(directory, "protocol.ts")
+	adaptedToken := bytes.ReplaceAll(
+		tokenSource,
+		[]byte(`"./protocol"`),
+		[]byte(`"./protocol.ts"`),
+	)
+	if err := os.WriteFile(copiedToken, adaptedToken, 0o600); err != nil {
+		t.Fatalf("WriteFile(token validator copy) error = %v", err)
+	}
+	if err := os.WriteFile(copiedProtocol, adaptProtocolForNode(protocolSource), 0o600); err != nil {
+		t.Fatalf("WriteFile(protocol validator copy) error = %v", err)
+	}
+	return copiedToken
+}
+
+func adaptProtocolForNode(protocolSource []byte) []byte {
+	adaptedProtocol := bytes.ReplaceAll(
+		protocolSource,
+		[]byte("export class AgentAuthProtocolError extends Error {\n  readonly status: number;"),
+		[]byte("export class AgentAuthProtocolError extends Error {\n  readonly code: AgentAuthErrorCode;\n  readonly status: number;"),
+	)
+	adaptedProtocol = bytes.ReplaceAll(
+		adaptedProtocol,
+		[]byte("  constructor(readonly code: AgentAuthErrorCode) {\n    const definition = errorDefinitions[code];\n    super(definition.message);"),
+		[]byte("  constructor(code: AgentAuthErrorCode) {\n    const definition = errorDefinitions[code];\n    super(definition.message);\n    this.code = code;"),
+	)
+	adaptedProtocol = bytes.ReplaceAll(
+		adaptedProtocol,
+		[]byte("class JsonScanner {\n  private offset = 0;\n\n  constructor(private readonly text: string) {}"),
+		[]byte("class JsonScanner {\n  private offset = 0;\n  private readonly text: string;\n\n  constructor(text: string) { this.text = text; }"),
+	)
+	return adaptedProtocol
+}
+
+type admissionInteropBinding struct {
+	ProtocolVersion      string   `json:"protocolVersion"`
+	Operation            string   `json:"operation"`
+	Issuer               string   `json:"issuer"`
+	Endpoint             string   `json:"endpoint"`
+	TransactionID        string   `json:"transactionId"`
+	ExpiresAt            int64    `json:"expiresAt"`
+	ManagementThumbprint string   `json:"managementThumbprint"`
+	SessionThumbprint    string   `json:"sessionThumbprint"`
+	RequestedScopes      []string `json:"requestedScopes"`
+	Audience             string   `json:"audience"`
+	ServerNonce          string   `json:"serverNonce"`
+	ClientNonce          string   `json:"clientNonce"`
+	CreateIfMissing      bool     `json:"createIfMissing"`
+}
+
+func interopBinding(input admissionBindingInput) admissionInteropBinding {
+	return admissionInteropBinding{
+		ProtocolVersion:      input.ProtocolVersion,
+		Operation:            input.Operation,
+		Issuer:               input.Issuer,
+		Endpoint:             input.Endpoint,
+		TransactionID:        input.TransactionID,
+		ExpiresAt:            input.ExpiresAt,
+		ManagementThumbprint: input.ManagementThumbprint,
+		SessionThumbprint:    input.SessionThumbprint,
+		RequestedScopes:      input.RequestedScopes,
+		Audience:             input.Audience,
+		ServerNonce:          input.ServerNonce,
+		ClientNonce:          input.ClientNonce,
+		CreateIfMissing:      input.CreateIfMissing,
 	}
 }

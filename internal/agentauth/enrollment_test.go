@@ -27,7 +27,7 @@ func TestPinnedPhase02BDiscoveryFixture(t *testing.T) {
 	}
 	digest := sha256.Sum256(encoded)
 	if got := rawBase64URL.EncodeToString(digest[:]); got !=
-		"idrw2TAbw9T_-ii2Mjkttjtrbzq1uabr6CPjF68nLlo" {
+		"WZgPWwSQFtFPImdNZEEueQKnKtvEW3K1vq7pK7GHHWM" {
 		t.Fatalf("discovery fixture checksum changed: %q", got)
 	}
 	var fixture struct {
@@ -39,6 +39,8 @@ func TestPinnedPhase02BDiscoveryFixture(t *testing.T) {
 		t.Fatalf("decodeStrictJSON(discovery fixture) error = %v", err)
 	}
 	if fixture.Authorization.EnrollmentEndpoint != "https://kado.so/api/auth/agent/enroll" ||
+		fixture.Authorization.AdmissionEndpoint !=
+			"https://kado.so/api/auth/agent/enroll/admission" ||
 		fixture.Protected.Resource != "https://kado.so" ||
 		fixture.Extension.Issuer != fixture.Authorization.Issuer {
 		t.Fatalf("unexpected pinned discovery fixture: %#v", fixture)

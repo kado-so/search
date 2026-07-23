@@ -60,8 +60,17 @@
   Phase 02B TypeScript validator. Set `KADO_PHASE_02B_PROTOCOL` to the validator
   source path and optionally `KADO_TYPESCRIPT_RUNTIME` (default `bun`) to run
   that cross-repository integration test without a production dependency.
-- Phase 02B currently advertises the deterministic Argon2id admission challenge
-  type but does not define a challenge-response or session-key-binding wire.
-  Goal 4 must not invent those shapes. Align its solver and eventual
-  short-lived `private_key_jwt` exchange to the authoritative Phase 02B
-  contracts when those server goals land.
+- Phase 02B Goal 4 is pinned byte-for-byte through
+  `discovery.v0.1.json`, `admission-profile.v0.1.json`, and
+  `token-profile.v0.1.json`. `Client.AcquireToken` performs admission with a
+  fresh memory-only session signer, bounded deterministic Argon2id work, dual
+  possession proofs, an exact `private_key_jwt` client-credentials exchange,
+  and local JWKS/access-JWT verification.
+- Admission limits cap memory, passes, parallelism, attempts, and elapsed time.
+  The absolute access-token lifetime is the authoritative 300 seconds.
+  `SessionToken` keeps the bearer value private and redacts formatting; callers
+  use `AuthorizationHeader` only when constructing the protected request.
+- Cross-repository validators use `KADO_PHASE_02B_ADMISSION` and
+  `KADO_PHASE_02B_TOKEN`. Node's strip-only TypeScript runtime requires a
+  temporary import-specifier/parameter-property adaptation; the test copies
+  authoritative sources to a private temp directory without changing them.
