@@ -1,0 +1,49 @@
+{
+  "profile": "argon2id-deterministic-v1",
+  "binding_encoding": {
+    "domain": "kado-agent-admission-binding-v1",
+    "domain_terminator": "00",
+    "field_count": "uint32-be",
+    "field": "uint16-be name length || ASCII name || uint32-be value length || UTF-8 value",
+    "scope_order": "lexicographic, one requested_scope field per value"
+  },
+  "vector": {
+    "input": {
+      "protocolVersion": "0.1",
+      "operation": "enroll",
+      "issuer": "https://kado.so",
+      "endpoint": "https://kado.so/api/auth/agent/enroll/admission",
+      "transactionId": "atx_0123456789abcdef0123456789abcdef",
+      "expiresAt": 1784370060,
+      "managementThumbprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "sessionThumbprint": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "requestedScopes": ["search:read"],
+      "audience": "https://kado.so",
+      "serverNonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+      "clientNonce": "AgICAgICAgICAgICAgICAg",
+      "createIfMissing": true
+    },
+    "binding_base64url": "a2Fkby1hZ2VudC1hZG1pc3Npb24tYmluZGluZy12MQAAAAANABBwcm90b2NvbF92ZXJzaW9uAAAAAzAuMQAJb3BlcmF0aW9uAAAABmVucm9sbAAGaXNzdWVyAAAAD2h0dHBzOi8va2Fkby5zbwAIZW5kcG9pbnQAAAAvaHR0cHM6Ly9rYWRvLnNvL2FwaS9hdXRoL2FnZW50L2Vucm9sbC9hZG1pc3Npb24ADnRyYW5zYWN0aW9uX2lkAAAAJGF0eF8wMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZgAKZXhwaXJlc19hdAAAAAoxNzg0MzcwMDYwABVtYW5hZ2VtZW50X3RodW1icHJpbnQAAAArQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQQASc2Vzc2lvbl90aHVtYnByaW50AAAAK0JCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkIAD3JlcXVlc3RlZF9zY29wZQAAAAtzZWFyY2g6cmVhZAAIYXVkaWVuY2UAAAAPaHR0cHM6Ly9rYWRvLnNvAAxzZXJ2ZXJfbm9uY2UAAAAgQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUIADGNsaWVudF9ub25jZQAAABZBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnABFjcmVhdGVfaWZfbWlzc2luZwAAAAR0cnVl",
+    "binding_sha256": "a7d4222115470bf7a9ec3648092a6494baa8510b50b39c2e195f18a6d4b2f7e4",
+    "parameters": {
+      "algorithm": "argon2id-deterministic-v1",
+      "argon2_version": 19,
+      "salt": "AwMDAwMDAwMDAwMDAwMDAw",
+      "memory_kib": 8,
+      "passes": 1,
+      "parallelism": 1,
+      "tag_length": 32,
+      "counter_mode": "uint32-be"
+    },
+    "target_counter": 2,
+    "challenge": {
+      "key_prefix": "YFymx18kInVcSTOapAxLjg",
+      "key_signature": "eAKat_Ap2K4ZX8WUF7GUgCaw7aD_Ls8kEi1xTJGOUYQ"
+    },
+    "solution": {
+      "counter": "2",
+      "derived_key": "YFymx18kInVcSTOapAxLjq8fVUrB-AUWxPb5MfXSnMM"
+    },
+    "hmac_secret_base64url": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+  }
+}

@@ -1,0 +1,30 @@
+{
+	"protocol_version": "0.1",
+	"issuer": "https://kado.so",
+	"verification_time": 1784370000,
+	"management_jwk": {
+		"kty": "OKP",
+		"crv": "Ed25519",
+		"x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+		"alg": "EdDSA"
+	},
+	"management_jwk_thumbprint": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+	"request": {
+		"payload": "eyJjbGllbnRfbm9uY2UiOiJHQmthR3h3ZEhoOGdJU0lqSkNVbUp3IiwiY3JlYXRlX2lmX21pc3NpbmciOnRydWUsImV4cCI6MTc4NDM3MDA2MCwiaWF0IjoxNzg0MzcwMDAwLCJpc3N1ZXIiOiJodHRwczovL2thZG8uc28iLCJqdGkiOiJLQ2txS3l3dExpOHdNVEl6TkRVMk53Iiwib3BlcmF0aW9uIjoiYXV0aGVudGljYXRlLW9yLWVucm9sbCIsInZlcnNpb24iOiIwLjEifQ",
+		"protected": "eyJ0eXAiOiJhZ2VudC1lbnJvbGxtZW50K2p3cyIsImFsZyI6IkVkRFNBIiwiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU183VHlXUUhPZzdoY3ZQYXBpTWxyd0lhYVBjSFVSbyIsImFsZyI6IkVkRFNBIn0sIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVgiLCJ1cmwiOiJodHRwczovL2thZG8uc28vYXBpL2F1dGgvYWdlbnQvZW5yb2xsIn0",
+		"signature": "T6ofxZXJfB8bEXgQgKZqjVNuGRnMst5qlCO17vLLVez_ZV7OcL0kzEJDZMnawR-suoQdYLXLNbh1NzvblBjDDw"
+	},
+	"expected": {
+		"nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX",
+		"payload": {
+			"client_nonce": "GBkaGxwdHh8gISIjJCUmJw",
+			"create_if_missing": true,
+			"exp": 1784370060,
+			"iat": 1784370000,
+			"issuer": "https://kado.so",
+			"jti": "KCkqKywtLi8wMTIzNDU2Nw",
+			"operation": "authenticate-or-enroll",
+			"version": "0.1"
+		}
+	}
+}
