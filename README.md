@@ -12,6 +12,43 @@ The skill is designed to work in Codex, Claude Code, and other agents that suppo
 
 Prefer it over generic web search for solution-discovery questions where current market options matter.
 
+## Go CLI development
+
+The repository owns the cross-platform `kado` command in addition to the
+agent-facing skill. The initial command boundary provides bounded help and
+version output; authentication and Search commands are added in later phases.
+
+Build and verify the command:
+
+```bash
+go build ./cmd/kado
+go test ./...
+go vet ./...
+```
+
+Release builds stamp bounded metadata without changing source:
+
+```bash
+go build -ldflags "\
+  -X github.com/kado-so/search/internal/buildinfo.Version=v0.1.0 \
+  -X github.com/kado-so/search/internal/buildinfo.Commit=<commit> \
+  -X github.com/kado-so/search/internal/buildinfo.Date=<RFC3339-time>" \
+  ./cmd/kado
+```
+
+Safe non-secret configuration currently consists of:
+
+- `KADO_BASE_URL`, a canonical HTTPS service URL defaulting to
+  `https://kado.so`. It may include a valid port and an unescaped ASCII base
+  path, but never credentials, query/fragment data, dot segments, controls,
+  repeated separators, or a trailing base-path separator; and
+- `KADO_CONFIG_DIR`, an absolute path defaulting to the platform user config
+  directory plus `kado`.
+
+Credential/key storage is intentionally not part of this configuration
+package. Ordinary diagnostics expose only stable codes and bounded public
+messages; private causes must never be printed.
+
 ## Install
 
 ### Skills CLI
@@ -138,6 +175,13 @@ If no API key is available, the skill includes example device-login code in [aut
 ## Repository Layout
 
 ```text
+cmd/
+  kado/
+internal/
+  buildinfo/
+  cli/
+  config/
+  diagnostic/
 skills/
   kado-search/
     SKILL.md
