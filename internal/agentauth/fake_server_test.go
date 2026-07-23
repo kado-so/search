@@ -22,6 +22,7 @@ type fakePrincipal struct {
 	principalID  string
 	credentialID string
 	clientID     string
+	revoked      bool
 }
 
 func newFakePersistentState() *fakePersistentState {
@@ -51,6 +52,23 @@ func (state *fakePersistentState) resolve(
 	return principal, true, true
 }
 
+func (state *fakePersistentState) manage(
+	thumbprint string,
+	revoke bool,
+) (fakePrincipal, bool) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	principal, found := state.principals[thumbprint]
+	if !found {
+		return fakePrincipal{}, false
+	}
+	if revoke {
+		principal.revoked = true
+		state.principals[thumbprint] = principal
+	}
+	return principal, true
+}
+
 type fakeAuthServer struct {
 	server            *httptest.Server
 	persistent        *fakePersistentState
@@ -65,6 +83,9 @@ type fakeAuthServer struct {
 	extensionMismatch bool
 	resultTokenURL    string
 	resultStatus      int
+	credentialStatus  int
+	credentialCalls   int
+	credentialInvalid bool
 }
 
 func newFakeAuthServer(state *fakePersistentState) *fakeAuthServer {
@@ -100,7 +121,12 @@ func (fake *fakeAuthServer) handle(response http.ResponseWriter, request *http.R
 		fake.sendJSON(response, http.StatusOK, protectedResourceMetadata{
 			Resource:                  fake.issuer(),
 			AuthorizationServers:      []string{fake.issuer()},
-			ScopesSupported:           []string{"search:read"},
+			ScopesSupported: []string{
+				"search:cancel",
+				"search:create",
+				"search:read",
+				"search:refine",
+			},
 			BearerMethodsSupported:    []string{"header"},
 			AgentPrincipalMetadataURI: fake.issuer() + "/.well-known/agent-principal",
 		})
@@ -156,6 +182,9 @@ func (fake *fakeAuthServer) handle(response http.ResponseWriter, request *http.R
 	case request.Method == http.MethodPost &&
 		request.URL.Path == "/api/auth/agent/enroll":
 		fake.handleEnrollment(response, request)
+	case request.Method == http.MethodPost &&
+		request.URL.Path == "/api/auth/agent/credentials":
+		fake.handleCredential(response, request)
 	default:
 		fake.sendError(response, http.StatusNotFound, "not_found", false)
 	}
@@ -271,6 +300,10 @@ func (fake *fakeAuthServer) handleEnrollment(
 		return
 	}
 	principal, created, _ := fake.persistent.resolve(thumbprint, payload.CreateIfMissing)
+	if principal.revoked {
+		fake.sendError(response, http.StatusForbidden, "credential_revoked", false)
+		return
+	}
 	tokenEndpoint := fake.resultTokenURL
 	if tokenEndpoint == "" {
 		tokenEndpoint = fake.issuer() + "/oauth/token"
@@ -290,6 +323,125 @@ func (fake *fakeAuthServer) handleEnrollment(
 		ClientID:                principal.clientID,
 		TokenEndpoint:           tokenEndpoint,
 		TokenEndpointAuthMethod: "private_key_jwt",
+	})
+}
+
+func (fake *fakeAuthServer) handleCredential(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	fake.mu.Lock()
+	fake.credentialCalls++
+	overrideStatus := fake.credentialStatus
+	invalidResponse := fake.credentialInvalid
+	fake.mu.Unlock()
+	if overrideStatus != 0 {
+		fake.sendError(response, overrideStatus, "server_unavailable", true)
+		return
+	}
+	if request.Header.Get("Content-Type") != "application/jose+json" {
+		fake.sendError(response, http.StatusBadRequest, "invalid_request", false)
+		return
+	}
+	encoded, err := io.ReadAll(io.LimitReader(request.Body, 16*1024+1))
+	if err != nil || len(encoded) > 16*1024 {
+		fake.sendError(response, http.StatusBadRequest, "invalid_request", false)
+		return
+	}
+	var jws flattenedJWS
+	if err := decodeStrictJSON(encoded, &jws, true); err != nil {
+		fake.sendError(response, http.StatusBadRequest, "invalid_proof", false)
+		return
+	}
+	protectedBytes, protectedErr := rawBase64URL.DecodeString(jws.Protected)
+	payloadBytes, payloadErr := rawBase64URL.DecodeString(jws.Payload)
+	if protectedErr != nil || payloadErr != nil {
+		fake.sendError(response, http.StatusBadRequest, "invalid_proof", false)
+		return
+	}
+	var header protectedHeader
+	if err := decodeStrictJSON(protectedBytes, &header, true); err != nil {
+		fake.sendError(response, http.StatusBadRequest, "invalid_proof", false)
+		return
+	}
+	fake.mu.Lock()
+	consumed, found := fake.nonces[header.Nonce]
+	if found && !consumed {
+		fake.nonces[header.Nonce] = true
+	}
+	fake.mu.Unlock()
+	if !found || consumed {
+		fake.sendError(response, http.StatusBadRequest, "bad_nonce", true)
+		return
+	}
+	jwk, err := verifyFlattenedJWS(
+		jws,
+		credentialProofType,
+		fake.issuer()+"/api/auth/agent/credentials",
+		payloadBytes,
+	)
+	if err != nil {
+		fake.sendError(response, http.StatusBadRequest, "invalid_proof", false)
+		return
+	}
+	var payload credentialPayload
+	now := time.Now().Unix()
+	if err := decodeStrictJSON(payloadBytes, &payload, true); err != nil ||
+		payload.Version != ProtocolVersion ||
+		(payload.Operation != credentialStatusOperation &&
+			payload.Operation != credentialRevokeOperation) ||
+		payload.Issuer != fake.issuer() ||
+		payload.ExpiresAt <= payload.IssuedAt ||
+		payload.ExpiresAt-payload.IssuedAt > 60 ||
+		payload.IssuedAt > now+30 ||
+		payload.ExpiresAt <= now {
+		fake.sendError(response, http.StatusBadRequest, "invalid_request", false)
+		return
+	}
+	if _, err := decodeBase64URL(payload.JTI, 12, 64); err != nil {
+		fake.sendError(response, http.StatusBadRequest, "invalid_proof", false)
+		return
+	}
+	fake.mu.Lock()
+	replayed := fake.jtis[payload.JTI]
+	fake.jtis[payload.JTI] = true
+	fake.mu.Unlock()
+	if replayed {
+		fake.sendError(response, http.StatusBadRequest, "proof_replayed", false)
+		return
+	}
+	thumbprint, err := jwkThumbprint(jwk)
+	if err != nil {
+		fake.sendError(response, http.StatusBadRequest, "invalid_jwk", false)
+		return
+	}
+	principal, known := fake.persistent.manage(
+		thumbprint,
+		payload.Operation == credentialRevokeOperation,
+	)
+	if !known {
+		fake.sendError(response, http.StatusNotFound, "agent_not_found", false)
+		return
+	}
+	if invalidResponse {
+		fake.sendJSON(response, http.StatusOK, map[string]any{
+			"status":        "revoked",
+			"principal_id":  principal.principalID,
+			"credential_id": principal.credentialID,
+			"client_id":     principal.clientID,
+			"private_jwk":   "must-not-be-accepted",
+		})
+		return
+	}
+	status := StatusActive
+	if principal.revoked {
+		status = StatusRevoked
+	}
+	fake.sendJSON(response, http.StatusOK, credentialResponse{
+		Status:       status,
+		PrincipalID:  principal.principalID,
+		CredentialID: principal.credentialID,
+		ClientID:     principal.clientID,
 	})
 }
 
@@ -365,6 +517,17 @@ func (store *memoryKeyStore) Delete() error {
 	clear(store.payload)
 	store.payload = nil
 	return nil
+}
+
+func (store *memoryKeyStore) DeleteIfMatches(expected []byte) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.payload == nil || !bytes.Equal(store.payload, expected) {
+		return false, nil
+	}
+	clear(store.payload)
+	store.payload = nil
+	return true, nil
 }
 
 func integerString(value int) string {

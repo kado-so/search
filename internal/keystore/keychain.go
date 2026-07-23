@@ -1,6 +1,7 @@
 package keystore
 
 import (
+	"crypto/subtle"
 	"errors"
 
 	keyring "github.com/zalando/go-keyring"
@@ -70,8 +71,7 @@ func (store *OSKeychainStore) Load() ([]byte, error) {
 func (store *OSKeychainStore) Create(keyMaterial []byte) ([]byte, bool, error) {
 	var winning []byte
 	var created bool
-	identifier := "keychain:" + store.service + "\x00" + store.account
-	err := withProcessLock(identifier, func() error {
+	err := withProcessLock(store.lockIdentifier(), func() error {
 		existing, err := store.Load()
 		if err == nil {
 			winning = existing
@@ -80,7 +80,7 @@ func (store *OSKeychainStore) Create(keyMaterial []byte) ([]byte, bool, error) {
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		if err := store.Save(keyMaterial); err != nil {
+		if err := store.saveUnlocked(keyMaterial); err != nil {
 			return err
 		}
 		winning = append([]byte(nil), keyMaterial...)
@@ -91,6 +91,12 @@ func (store *OSKeychainStore) Create(keyMaterial []byte) ([]byte, bool, error) {
 }
 
 func (store *OSKeychainStore) Save(keyMaterial []byte) error {
+	return withProcessLock(store.lockIdentifier(), func() error {
+		return store.saveUnlocked(keyMaterial)
+	})
+}
+
+func (store *OSKeychainStore) saveUnlocked(keyMaterial []byte) error {
 	encoded, err := encodeRecord(keyMaterial)
 	if err != nil {
 		return err
@@ -102,6 +108,10 @@ func (store *OSKeychainStore) Save(keyMaterial []byte) error {
 }
 
 func (store *OSKeychainStore) Delete() error {
+	return withProcessLock(store.lockIdentifier(), store.deleteUnlocked)
+}
+
+func (store *OSKeychainStore) deleteUnlocked() error {
 	if err := store.backend.Delete(store.service, store.account); err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
 			return storageError("delete", ErrNotFound, err)
@@ -109,4 +119,34 @@ func (store *OSKeychainStore) Delete() error {
 		return storageError("delete", ErrUnavailable, err)
 	}
 	return nil
+}
+
+func (store *OSKeychainStore) DeleteIfMatches(expected []byte) (bool, error) {
+	if len(expected) == 0 || len(expected) > maxKeyMaterialBytes {
+		return false, storageError("conditionally delete", ErrInvalid, nil)
+	}
+	deleted := false
+	err := withProcessLock(store.lockIdentifier(), func() error {
+		current, err := store.Load()
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer clear(current)
+		if subtle.ConstantTimeCompare(current, expected) != 1 {
+			return nil
+		}
+		if err := store.deleteUnlocked(); err != nil {
+			return err
+		}
+		deleted = true
+		return nil
+	})
+	return deleted, err
+}
+
+func (store *OSKeychainStore) lockIdentifier() string {
+	return "keychain:" + store.service + "\x00" + store.account
 }

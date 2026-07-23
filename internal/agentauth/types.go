@@ -21,6 +21,9 @@ var (
 	ErrRedirect           = errors.New("agent authentication redirect rejected")
 	ErrProtocol           = errors.New("agent authentication protocol failed")
 	ErrCredentialNotFound = errors.New("agent management credential not found")
+	ErrCredentialRevoked  = errors.New("agent management credential revoked")
+	ErrCredentialChanged  = errors.New("agent management credential changed during revocation")
+	ErrCredentialCleanup  = errors.New("agent management credential local cleanup failed")
 	ErrAgentNotFound      = errors.New("agent principal not found")
 	ErrAdmissionRequired  = errors.New("agent enrollment admission proof required")
 	ErrChallengeLimits    = errors.New("agent admission challenge exceeds client limits")
@@ -91,6 +94,39 @@ type Result struct {
 	ClientID                string
 	TokenEndpoint           string
 	TokenEndpointAuthMethod string
+}
+
+// CredentialStatus is the bounded, non-secret identity state returned by the
+// management-credential endpoint. An empty set of identifiers with
+// StatusNotConfigured represents an installation with no local management key.
+type CredentialStatus struct {
+	Status       string
+	PrincipalID  string
+	CredentialID string
+	ClientID     string
+}
+
+const (
+	StatusActive        = "active"
+	StatusRevoked       = "revoked"
+	StatusNotConfigured = "not-configured"
+)
+
+func (status CredentialStatus) String() string {
+	if status.Status == StatusNotConfigured {
+		return "agent credential status=not-configured"
+	}
+	return fmt.Sprintf(
+		"agent credential status=%s principal=%s credential=%s client=%s",
+		status.Status,
+		status.PrincipalID,
+		status.CredentialID,
+		status.ClientID,
+	)
+}
+
+func (CredentialStatus) GoString() string {
+	return "agentauth.CredentialStatus{safe identifiers}"
 }
 
 func (result Result) String() string {

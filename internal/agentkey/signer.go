@@ -33,6 +33,14 @@ type ManagementSigner struct {
 	signer ed25519Signer
 }
 
+// StoredManagementSigner retains an opaque snapshot of the persisted record so
+// revocation can conditionally delete only the exact key that authorized it.
+// Its formatting methods never expose the signer or snapshot.
+type StoredManagementSigner struct {
+	signer      *ManagementSigner
+	keyMaterial []byte
+}
+
 // SessionSigner is an ephemeral, memory-only signer. It deliberately has no
 // save, marshal, seed, or private-key export method.
 type SessionSigner struct {
@@ -124,6 +132,74 @@ func LoadManagementSigner(store keystore.Store) (*ManagementSigner, error) {
 	}
 	defer clear(payload)
 	return decodeManagementSigner(payload)
+}
+
+// LoadStoredManagementSigner loads a signer together with an opaque record
+// snapshot suitable for atomic compare-and-delete after server revocation.
+func LoadStoredManagementSigner(store keystore.Store) (*StoredManagementSigner, error) {
+	if store == nil {
+		return nil, ErrInvalidKey
+	}
+	payload, err := store.Load()
+	if err != nil {
+		return nil, newPersistenceError(err)
+	}
+	defer clear(payload)
+	signer, err := decodeManagementSigner(payload)
+	if err != nil {
+		return nil, err
+	}
+	return &StoredManagementSigner{
+		signer:      signer,
+		keyMaterial: append([]byte(nil), payload...),
+	}, nil
+}
+
+// Signer returns the loaded management signer while the snapshot is alive.
+func (stored *StoredManagementSigner) Signer() *ManagementSigner {
+	if stored == nil {
+		return nil
+	}
+	return stored.signer
+}
+
+// DeleteIfCurrent atomically deletes the persisted key only if it still
+// matches the record loaded with this signer.
+func (stored *StoredManagementSigner) DeleteIfCurrent(
+	store keystore.Store,
+) (bool, error) {
+	if stored == nil ||
+		stored.signer == nil ||
+		len(stored.keyMaterial) == 0 ||
+		store == nil {
+		return false, ErrInvalidKey
+	}
+	deleted, err := store.DeleteIfMatches(stored.keyMaterial)
+	if err != nil {
+		return false, newPersistenceError(err)
+	}
+	return deleted, nil
+}
+
+// Destroy clears the retained record snapshot and in-memory private key.
+func (stored *StoredManagementSigner) Destroy() {
+	if stored == nil {
+		return
+	}
+	clear(stored.keyMaterial)
+	stored.keyMaterial = nil
+	if stored.signer != nil {
+		clear(stored.signer.signer.private)
+		stored.signer = nil
+	}
+}
+
+func (StoredManagementSigner) String() string {
+	return "stored Ed25519 management signer [redacted]"
+}
+
+func (StoredManagementSigner) GoString() string {
+	return "agentkey.StoredManagementSigner{redacted}"
 }
 
 func encodeManagementSigner(signer *ManagementSigner) ([]byte, error) {

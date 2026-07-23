@@ -35,6 +35,10 @@ type Store interface {
 	Create(keyMaterial []byte) (winning []byte, created bool, err error)
 	Save(keyMaterial []byte) error
 	Delete() error
+	// DeleteIfMatches atomically deletes the current record only when its
+	// decoded opaque material equals expected. A missing or different record is
+	// reported as deleted=false without modifying it.
+	DeleteIfMatches(expected []byte) (deleted bool, err error)
 }
 
 // Error retains a private cause for trusted diagnostics while rendering only a

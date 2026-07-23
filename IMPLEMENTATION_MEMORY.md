@@ -74,3 +74,24 @@
   `KADO_PHASE_02B_TOKEN`. Node's strip-only TypeScript runtime requires a
   temporary import-specifier/parameter-property adaptation; the test copies
   authoritative sources to a private temp directory without changing them.
+- Phase 02B Goal 5 publishes
+  `contracts/agent-auth/v0.1/credential-profile.json`; its pinned Go copy is
+  byte-identical. Credential status and current-installation revocation use an
+  exact `agent-credential+jws` management-key proof with a fresh replay nonce,
+  endpoint binding, issuer, time bounds, and JTI.
+- Server `200` status results contain only status plus opaque
+  principal/credential/client identifiers. Revocation deletes the local
+  management key only after an authoritative `revoked` result. A failed server
+  or protocol exchange retains the key; a failed local deletion returns
+  `ErrCredentialCleanup`, retaining the key so a retry can receive the
+  tombstone-backed idempotent `revoked` result and finish cleanup.
+- `kado auth status` and `kado auth revoke` initialize config, network, and
+  keychain access lazily. Their output is restricted to validated opaque
+  identifiers and state; private JWKs, assertions, bearer tokens, backend
+  errors, and filesystem paths never reach ordinary output.
+- File and keychain mutations share one per-record cross-process lock.
+  Revocation retains an opaque snapshot of the management-key record and uses
+  `Store.DeleteIfMatches` after server confirmation. A stale revoker can never
+  delete a concurrently installed replacement; it returns
+  `ErrCredentialChanged`, leaves the replacement intact, and asks the caller to
+  retry if that newer installation should also be revoked.

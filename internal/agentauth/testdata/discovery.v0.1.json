@@ -21,7 +21,7 @@
   "protected_resource": {
     "resource": "https://kado.so",
     "authorization_servers": ["https://kado.so"],
-    "scopes_supported": ["search:read"],
+    "scopes_supported": ["search:cancel", "search:create", "search:read", "search:refine"],
     "bearer_methods_supported": ["header"],
     "agent_principal_metadata_uri": "https://kado.so/.well-known/agent-principal"
   },

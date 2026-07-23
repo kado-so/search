@@ -195,6 +195,10 @@ func classifyEnrollmentFailure(status int, encoded []byte) error {
 		if status == http.StatusForbidden {
 			return newProtocolError(ErrAdmissionRequired, nil)
 		}
+	case "credential_revoked":
+		if status == http.StatusForbidden {
+			return newProtocolError(ErrCredentialRevoked, nil)
+		}
 	}
 	return newProtocolError(ErrAuthentication, nil)
 }

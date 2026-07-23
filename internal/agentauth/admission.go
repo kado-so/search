@@ -542,6 +542,10 @@ func classifyAdmissionFailure(status int, encoded []byte) error {
 		if status == http.StatusNotFound {
 			return newProtocolError(ErrAgentNotFound, nil)
 		}
+	case "credential_revoked":
+		if status == http.StatusForbidden {
+			return newProtocolError(ErrCredentialRevoked, nil)
+		}
 	}
 	return newProtocolError(ErrAuthentication, nil)
 }

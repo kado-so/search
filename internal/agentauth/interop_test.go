@@ -379,6 +379,106 @@ func TestPhase02BValidatorAcceptsGoPrivateKeyJWT(t *testing.T) {
 	}
 }
 
+func TestPhase02BValidatorAcceptsGoCredentialProof(t *testing.T) {
+	protocolPath := os.Getenv("KADO_PHASE_02B_PROTOCOL")
+	if protocolPath == "" {
+		t.Skip("set KADO_PHASE_02B_PROTOCOL to run the authoritative TypeScript validator")
+	}
+	management := newFixtureSigner(t)
+	managementJWK, err := publicJWK(management)
+	if err != nil {
+		t.Fatalf("publicJWK(management) error = %v", err)
+	}
+	thumbprint, err := jwkThumbprint(managementJWK)
+	if err != nil {
+		t.Fatalf("jwkThumbprint(management) error = %v", err)
+	}
+	const (
+		issuer = "https://kado.so"
+		now    = int64(1784370000)
+	)
+	nonce := rawBase64URL.EncodeToString(bytes.Repeat([]byte{0x56}, 24))
+	payload := credentialPayload{
+		ExpiresAt: now + 60,
+		IssuedAt:  now,
+		Issuer:    issuer,
+		JTI:       rawBase64URL.EncodeToString(bytes.Repeat([]byte{0x67}, 16)),
+		Operation: credentialRevokeOperation,
+		Version:   ProtocolVersion,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal(credential payload) error = %v", err)
+	}
+	proof, err := signFlattenedJWS(
+		bytes.NewReader(nil),
+		management,
+		payloadBytes,
+		protectedHeader{
+			Type:  credentialProofType,
+			Alg:   "EdDSA",
+			JWK:   &managementJWK,
+			Nonce: nonce,
+			URL:   issuer + "/api/auth/agent/credentials",
+		},
+	)
+	if err != nil {
+		t.Fatalf("signFlattenedJWS(credential) error = %v", err)
+	}
+	fixture := struct {
+		Issuer     string            `json:"issuer"`
+		NowSeconds int64             `json:"now_seconds"`
+		Nonce      string            `json:"nonce"`
+		Thumbprint string            `json:"thumbprint"`
+		PublicJWK  PublicJWK         `json:"public_jwk"`
+		Payload    credentialPayload `json:"payload"`
+		Request    flattenedJWS      `json:"request"`
+	}{
+		Issuer:     issuer,
+		NowSeconds: now,
+		Nonce:      nonce,
+		Thumbprint: thumbprint,
+		PublicJWK:  managementJWK,
+		Payload:    payload,
+		Request:    proof,
+	}
+	encoded, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatalf("Marshal(credential fixture) error = %v", err)
+	}
+	fixturePath := filepath.Join(t.TempDir(), "go-credential-proof.json")
+	if err := os.WriteFile(fixturePath, encoded, 0o600); err != nil {
+		t.Fatalf("WriteFile(credential fixture) error = %v", err)
+	}
+	runtime := os.Getenv("KADO_TYPESCRIPT_RUNTIME")
+	if runtime == "" {
+		runtime = "node"
+	}
+	validatorPath := protocolPath
+	runtimeArguments := []string{}
+	if filepath.Base(runtime) == "node" {
+		validatorPath = prepareNodeProtocolValidator(t, protocolPath)
+		runtimeArguments = append(runtimeArguments, "--experimental-strip-types")
+	}
+	runtimeArguments = append(
+		runtimeArguments,
+		"testdata/verify-phase02b-credential.ts",
+		fixturePath,
+		validatorPath,
+	)
+	command := exec.CommandContext(context.Background(), runtime, runtimeArguments...)
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		t.Fatalf(
+			"Phase 02B credential proof verification error = %v; output = %s",
+			err,
+			output.String(),
+		)
+	}
+}
+
 func prepareNodeAdmissionValidator(t *testing.T, admissionPath string) string {
 	t.Helper()
 	admissionSource, err := os.ReadFile(admissionPath)
@@ -406,6 +506,23 @@ func prepareNodeAdmissionValidator(t *testing.T, admissionPath string) string {
 		t.Fatalf("WriteFile(protocol validator copy) error = %v", err)
 	}
 	return copiedAdmission
+}
+
+func prepareNodeProtocolValidator(t *testing.T, protocolPath string) string {
+	t.Helper()
+	protocolSource, err := os.ReadFile(protocolPath)
+	if err != nil {
+		t.Fatalf("ReadFile(Phase 02B protocol validator) error = %v", err)
+	}
+	copiedProtocol := filepath.Join(t.TempDir(), "protocol.ts")
+	if err := os.WriteFile(
+		copiedProtocol,
+		adaptProtocolForNode(protocolSource),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile(protocol validator copy) error = %v", err)
+	}
+	return copiedProtocol
 }
 
 func prepareNodeTokenValidator(t *testing.T, tokenPath string) string {

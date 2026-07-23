@@ -67,6 +67,15 @@ func (store *memoryStore) Delete() error {
 	return nil
 }
 
+func (store *memoryStore) DeleteIfMatches(expected []byte) (bool, error) {
+	if store.payload == nil || !bytes.Equal(store.payload, expected) {
+		return false, nil
+	}
+	clear(store.payload)
+	store.payload = nil
+	return true, nil
+}
+
 func deterministicManagementSigner(t *testing.T) *ManagementSigner {
 	t.Helper()
 	signer, err := generateSigner(bytes.NewReader(bytes.Repeat([]byte{0xA5}, ed25519.SeedSize)))
@@ -105,6 +114,73 @@ func TestManagementSignerPersistsAndSignsAcrossLoads(t *testing.T) {
 	}
 	if ed25519.Verify(loadedPublic, []byte("tampered"), signature) {
 		t.Fatal("signature verified a tampered message")
+	}
+}
+
+func TestStoredManagementSignerConditionallyDeletesOnlyItsSnapshot(t *testing.T) {
+	t.Parallel()
+
+	store := &memoryStore{}
+	oldSigner := deterministicManagementSigner(t)
+	if err := SaveManagementSigner(store, oldSigner); err != nil {
+		t.Fatalf("SaveManagementSigner(old) error = %v", err)
+	}
+	stored, err := LoadStoredManagementSigner(store)
+	if err != nil {
+		t.Fatalf("LoadStoredManagementSigner() error = %v", err)
+	}
+	defer stored.Destroy()
+	if !bytes.Equal(
+		stored.Signer().Public().(ed25519.PublicKey),
+		oldSigner.Public().(ed25519.PublicKey),
+	) {
+		t.Fatal("stored signer identity differs")
+	}
+	privateEncodings := []string{
+		hex.EncodeToString(stored.keyMaterial),
+		base64.StdEncoding.EncodeToString(stored.keyMaterial),
+		fmt.Sprint(stored.keyMaterial),
+	}
+	for _, rendered := range []string{
+		fmt.Sprintf("%v", stored),
+		fmt.Sprintf("%+v", stored),
+		fmt.Sprintf("%#v", stored),
+		fmt.Sprintf("%s", stored),
+		fmt.Sprintf("%v", *stored),
+		fmt.Sprintf("%+v", *stored),
+		fmt.Sprintf("%#v", *stored),
+		fmt.Sprintf("%s", *stored),
+	} {
+		for _, private := range privateEncodings {
+			if private != "" && strings.Contains(rendered, private) {
+				t.Fatalf("stored signer formatting leaked key material: %q", rendered)
+			}
+		}
+	}
+
+	replacement, err := GenerateManagementSigner()
+	if err != nil {
+		t.Fatalf("GenerateManagementSigner(replacement) error = %v", err)
+	}
+	if err := SaveManagementSigner(store, replacement); err != nil {
+		t.Fatalf("SaveManagementSigner(replacement) error = %v", err)
+	}
+	deleted, err := stored.DeleteIfCurrent(store)
+	if err != nil {
+		t.Fatalf("DeleteIfCurrent(stale) error = %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteIfCurrent(stale) deleted replacement")
+	}
+	current, err := LoadManagementSigner(store)
+	if err != nil {
+		t.Fatalf("LoadManagementSigner(replacement) error = %v", err)
+	}
+	if !bytes.Equal(
+		current.Public().(ed25519.PublicKey),
+		replacement.Public().(ed25519.PublicKey),
+	) {
+		t.Fatal("replacement identity changed")
 	}
 }
 

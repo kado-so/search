@@ -27,7 +27,7 @@ func TestPinnedPhase02BDiscoveryFixture(t *testing.T) {
 	}
 	digest := sha256.Sum256(encoded)
 	if got := rawBase64URL.EncodeToString(digest[:]); got !=
-		"WZgPWwSQFtFPImdNZEEueQKnKtvEW3K1vq7pK7GHHWM" {
+		"THq5anLtlarMRfWdRwAp4a7AUdYBt03YYZcp2728GUo" {
 		t.Fatalf("discovery fixture checksum changed: %q", got)
 	}
 	var fixture struct {

@@ -2,6 +2,7 @@ package keystore
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -63,7 +64,7 @@ func (store *FileStore) Load() ([]byte, error) {
 func (store *FileStore) Create(keyMaterial []byte) ([]byte, bool, error) {
 	var winning []byte
 	var created bool
-	err := withProcessLock("file:"+store.path, func() error {
+	err := withProcessLock(store.lockIdentifier(), func() error {
 		existing, err := store.Load()
 		if err == nil {
 			winning = existing
@@ -72,7 +73,7 @@ func (store *FileStore) Create(keyMaterial []byte) ([]byte, bool, error) {
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		if err := store.Save(keyMaterial); err != nil {
+		if err := store.saveUnlocked(keyMaterial); err != nil {
 			return err
 		}
 		winning = append([]byte(nil), keyMaterial...)
@@ -83,6 +84,12 @@ func (store *FileStore) Create(keyMaterial []byte) ([]byte, bool, error) {
 }
 
 func (store *FileStore) Save(keyMaterial []byte) error {
+	return withProcessLock(store.lockIdentifier(), func() error {
+		return store.saveUnlocked(keyMaterial)
+	})
+}
+
+func (store *FileStore) saveUnlocked(keyMaterial []byte) error {
 	encoded, err := encodeRecord(keyMaterial)
 	if err != nil {
 		return err
@@ -97,6 +104,10 @@ func (store *FileStore) Save(keyMaterial []byte) error {
 }
 
 func (store *FileStore) Delete() error {
+	return withProcessLock(store.lockIdentifier(), store.deleteUnlocked)
+}
+
+func (store *FileStore) deleteUnlocked() error {
 	parent, err := openPrivateDirectory(filepath.Dir(store.path), false)
 	if err != nil {
 		return err
@@ -117,6 +128,36 @@ func (store *FileStore) Delete() error {
 		return storageError("delete file fallback", ErrUnavailable, err)
 	}
 	return nil
+}
+
+func (store *FileStore) DeleteIfMatches(expected []byte) (bool, error) {
+	if len(expected) == 0 || len(expected) > maxKeyMaterialBytes {
+		return false, storageError("conditionally delete file fallback", ErrInvalid, nil)
+	}
+	deleted := false
+	err := withProcessLock(store.lockIdentifier(), func() error {
+		current, err := store.Load()
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer clear(current)
+		if subtle.ConstantTimeCompare(current, expected) != 1 {
+			return nil
+		}
+		if err := store.deleteUnlocked(); err != nil {
+			return err
+		}
+		deleted = true
+		return nil
+	})
+	return deleted, err
+}
+
+func (store *FileStore) lockIdentifier() string {
+	return "file:" + store.path
 }
 
 // openPrivateDirectory walks from the filesystem root one component at a time,

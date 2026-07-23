@@ -93,6 +93,34 @@ func TestOSKeychainStorePersistsAcrossAdapterInstances(t *testing.T) {
 	}
 }
 
+func TestOSKeychainStoreConditionalDeleteRetainsReplacement(t *testing.T) {
+	t.Parallel()
+
+	store := newOSKeychainStore(newFakeKeychainBackend())
+	oldKey := []byte("management-key-A")
+	newKey := []byte("management-key-B")
+	if err := store.Save(oldKey); err != nil {
+		t.Fatalf("Save(old key) error = %v", err)
+	}
+	if err := store.Save(newKey); err != nil {
+		t.Fatalf("Save(new key) error = %v", err)
+	}
+	deleted, err := store.DeleteIfMatches(oldKey)
+	if err != nil {
+		t.Fatalf("DeleteIfMatches(old key) error = %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteIfMatches(old key) deleted replacement")
+	}
+	deleted, err = store.DeleteIfMatches(newKey)
+	if err != nil || !deleted {
+		t.Fatalf("DeleteIfMatches(new key) deleted=%t error=%v", deleted, err)
+	}
+	if _, err := store.Load(); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Load() after matched delete error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestOSKeychainStoreRejectsCorruptRecords(t *testing.T) {
 	t.Parallel()
 

@@ -72,6 +72,40 @@ func TestFileStoreIsExplicitAndPermissionRestricted(t *testing.T) {
 	}
 }
 
+func TestFileStoreConditionalDeleteRetainsReplacement(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("file fallback is intentionally unsupported on Windows")
+	}
+	storePath := filepath.Join(resolvedTempDir(t), "private", "management-key.json")
+	store, err := NewFileStore(storePath)
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	oldKey := []byte("management-key-A")
+	newKey := []byte("management-key-B")
+	if err := store.Save(oldKey); err != nil {
+		t.Fatalf("Save(old key) error = %v", err)
+	}
+	if err := store.Save(newKey); err != nil {
+		t.Fatalf("Save(new key) error = %v", err)
+	}
+	deleted, err := store.DeleteIfMatches(oldKey)
+	if err != nil {
+		t.Fatalf("DeleteIfMatches(old key) error = %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteIfMatches(old key) deleted replacement")
+	}
+	deleted, err = store.DeleteIfMatches(newKey)
+	if err != nil || !deleted {
+		t.Fatalf("DeleteIfMatches(new key) deleted=%t error=%v", deleted, err)
+	}
+	if _, err := store.Load(); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Load() after matched delete error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestFileStoreRejectsInsecureDirectoryAndFileModes(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
