@@ -49,6 +49,22 @@ Credential/key storage is intentionally not part of this configuration
 package. Ordinary diagnostics expose only stable codes and bounded public
 messages; private causes must never be printed.
 
+Long-lived agent management keys use the operating-system credential store:
+macOS Keychain, Windows Credential Manager, or a Secret Service-compatible
+keyring on Linux/BSD. A local file store is available only as an explicit
+Unix-like fallback; it is never selected automatically and requires an exact
+`0700` parent directory, a `0600` regular file, and a path with no symlink
+components. File operations remain anchored to the validated parent directory
+so an ancestor replacement cannot redirect key access. Windows callers must
+use Credential Manager because portable file modes do not provide an
+equivalent ACL guarantee.
+
+Both stores use the same versioned, bounded record. There is no legacy
+credential format to migrate, and unknown versions fail closed. Management
+keys can be persisted only through the credential-store boundary. Session
+signing keys deliberately expose no save, marshal, seed, or private-key export
+operation and remain memory-only.
+
 ## Install
 
 ### Skills CLI
