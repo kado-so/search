@@ -29,6 +29,10 @@ var (
 // Store persists one opaque long-lived key payload.
 type Store interface {
 	Load() ([]byte, error)
+	// Create persists keyMaterial only when no record exists. It returns the
+	// winning material and whether this call created it. Implementations must
+	// serialize this operation across processes.
+	Create(keyMaterial []byte) (winning []byte, created bool, err error)
 	Save(keyMaterial []byte) error
 	Delete() error
 }

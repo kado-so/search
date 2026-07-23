@@ -67,6 +67,29 @@ func (store *OSKeychainStore) Load() ([]byte, error) {
 	return keyMaterial, nil
 }
 
+func (store *OSKeychainStore) Create(keyMaterial []byte) ([]byte, bool, error) {
+	var winning []byte
+	var created bool
+	identifier := "keychain:" + store.service + "\x00" + store.account
+	err := withProcessLock(identifier, func() error {
+		existing, err := store.Load()
+		if err == nil {
+			winning = existing
+			return nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if err := store.Save(keyMaterial); err != nil {
+			return err
+		}
+		winning = append([]byte(nil), keyMaterial...)
+		created = true
+		return nil
+	})
+	return winning, created, err
+}
+
 func (store *OSKeychainStore) Save(keyMaterial []byte) error {
 	encoded, err := encodeRecord(keyMaterial)
 	if err != nil {

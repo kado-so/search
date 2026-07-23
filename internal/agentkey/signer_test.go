@@ -48,6 +48,16 @@ func (store *memoryStore) Save(payload []byte) error {
 	return nil
 }
 
+func (store *memoryStore) Create(payload []byte) ([]byte, bool, error) {
+	if store.payload != nil {
+		return append([]byte(nil), store.payload...), false, nil
+	}
+	if err := store.Save(payload); err != nil {
+		return nil, false, err
+	}
+	return append([]byte(nil), payload...), true, nil
+}
+
 func (store *memoryStore) Delete() error {
 	if store.payload == nil {
 		return keystore.ErrNotFound

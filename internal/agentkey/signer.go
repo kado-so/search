@@ -68,19 +68,49 @@ func generateSigner(random io.Reader) (ed25519Signer, error) {
 // SaveManagementSigner persists the management seed through the selected key
 // store. It never returns or renders private material.
 func SaveManagementSigner(store keystore.Store, signer *ManagementSigner) error {
-	if store == nil || signer == nil || len(signer.signer.private) != ed25519.PrivateKeySize {
+	payload, err := encodeManagementSigner(signer)
+	if err != nil {
+		return err
+	}
+	defer clear(payload)
+	if store == nil {
 		return ErrInvalidKey
 	}
-	payload := make([]byte, len(managementKeyPrefix)+ed25519.SeedSize)
-	copy(payload, managementKeyPrefix)
-	seed := signer.signer.private.Seed()
-	copy(payload[len(managementKeyPrefix):], seed)
-	clear(seed)
-	defer clear(payload)
 	if err := store.Save(payload); err != nil {
 		return newPersistenceError(err)
 	}
 	return nil
+}
+
+// LoadOrCreateManagementSigner atomically retains the first management
+// credential created by concurrent processes.
+func LoadOrCreateManagementSigner(store keystore.Store) (*ManagementSigner, bool, error) {
+	if store == nil {
+		return nil, false, ErrInvalidKey
+	}
+	if signer, err := LoadManagementSigner(store); err == nil {
+		return signer, false, nil
+	} else if !errors.Is(err, keystore.ErrNotFound) {
+		return nil, false, err
+	}
+
+	candidate, err := GenerateManagementSigner()
+	if err != nil {
+		return nil, false, err
+	}
+	defer clear(candidate.signer.private)
+	payload, err := encodeManagementSigner(candidate)
+	if err != nil {
+		return nil, false, err
+	}
+	defer clear(payload)
+	winning, created, err := store.Create(payload)
+	if err != nil {
+		return nil, false, newPersistenceError(err)
+	}
+	defer clear(winning)
+	signer, err := decodeManagementSigner(winning)
+	return signer, created, err
 }
 
 // LoadManagementSigner restores a previously persisted management signer.
@@ -93,6 +123,22 @@ func LoadManagementSigner(store keystore.Store) (*ManagementSigner, error) {
 		return nil, newPersistenceError(err)
 	}
 	defer clear(payload)
+	return decodeManagementSigner(payload)
+}
+
+func encodeManagementSigner(signer *ManagementSigner) ([]byte, error) {
+	if signer == nil || len(signer.signer.private) != ed25519.PrivateKeySize {
+		return nil, ErrInvalidKey
+	}
+	payload := make([]byte, len(managementKeyPrefix)+ed25519.SeedSize)
+	copy(payload, managementKeyPrefix)
+	seed := signer.signer.private.Seed()
+	copy(payload[len(managementKeyPrefix):], seed)
+	clear(seed)
+	return payload, nil
+}
+
+func decodeManagementSigner(payload []byte) (*ManagementSigner, error) {
 	if len(payload) != len(managementKeyPrefix)+ed25519.SeedSize ||
 		!bytes.Equal(payload[:len(managementKeyPrefix)], managementKeyPrefix) {
 		return nil, ErrInvalidKey

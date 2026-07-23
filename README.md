@@ -65,6 +65,23 @@ keys can be persisted only through the credential-store boundary. Session
 signing keys deliberately expose no save, marshal, seed, or private-key export
 operation and remain memory-only.
 
+The autonomous-auth client discovers protected-resource and authorization-server
+metadata before using any advertised endpoint. It requires the exact configured
+Kado issuer, canonical same-issuer HTTPS endpoints, no redirects, bounded
+exact case-sensitive/non-null duplicate-free JSON, and fresh replay nonces.
+Authenticate-only and create-if-missing are separate call modes. Concurrent
+first runs use atomic first-writer storage so they retain one management
+identity instead of overwriting the winner.
+
+Enrollment uses the Phase 02B v0.1 wire contract: the persistent management key
+signs one bounded `agent-enrollment+jws` request containing the exact
+authenticate-or-enroll payload. The client pins the published discovery
+fixture, validates response/status coupling, and exposes authenticate-only and
+create-if-missing as distinct modes. The currently published server contract
+reports admission-required as a terminal response; Argon2id admission proof,
+session-key binding, and token exchange are later goals once their server wire
+profiles are defined.
+
 ## Install
 
 ### Skills CLI

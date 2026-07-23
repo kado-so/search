@@ -3,12 +3,14 @@ package keystore
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	keyring "github.com/zalando/go-keyring"
 )
 
 type fakeKeychainBackend struct {
+	mu        sync.Mutex
 	values    map[string]string
 	getError  error
 	setError  error
@@ -20,6 +22,8 @@ func newFakeKeychainBackend() *fakeKeychainBackend {
 }
 
 func (fake *fakeKeychainBackend) Get(service, account string) (string, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
 	if fake.getError != nil {
 		return "", fake.getError
 	}
@@ -31,6 +35,8 @@ func (fake *fakeKeychainBackend) Get(service, account string) (string, error) {
 }
 
 func (fake *fakeKeychainBackend) Set(service, account, value string) error {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
 	if fake.setError != nil {
 		return fake.setError
 	}
@@ -39,6 +45,8 @@ func (fake *fakeKeychainBackend) Set(service, account, value string) error {
 }
 
 func (fake *fakeKeychainBackend) Delete(service, account string) error {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
 	if fake.deleteErr != nil {
 		return fake.deleteErr
 	}

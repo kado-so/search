@@ -1,0 +1,58 @@
+{
+	"protocol_version": "0.1",
+	"discovery_fixture": "discovery.json",
+	"account_resolution": {
+		"endpoint_path": "/api/auth/agent/enroll",
+		"request": {
+			"media_type": "application/jose+json",
+			"serialization": "JWS Flattened JSON Serialization",
+			"envelope_fields": ["payload", "protected", "signature"],
+			"protected_header_fields": ["alg", "jwk", "nonce", "typ", "url"],
+			"protected_header_constants": {
+				"alg": "EdDSA",
+				"typ": "agent-enrollment+jws"
+			},
+			"public_jwk_fields": ["alg", "crv", "kty", "x"],
+			"public_jwk_constants": {
+				"alg": "EdDSA",
+				"crv": "Ed25519",
+				"kty": "OKP"
+			},
+			"thumbprint_projection_fields": ["crv", "kty", "x"],
+			"payload_fields": [
+				"client_nonce",
+				"create_if_missing",
+				"exp",
+				"iat",
+				"issuer",
+				"jti",
+				"operation",
+				"version"
+			],
+			"payload_constants": {
+				"operation": "authenticate-or-enroll",
+				"version": "0.1"
+			},
+			"server_nonce_bytes": 24,
+			"minimum_client_nonce_bytes": 16,
+			"minimum_jti_bytes": 12,
+			"maximum_proof_lifetime_seconds": 60
+		},
+		"active_response": {
+			"status_codes": [200, 201],
+			"fields": [
+				"status",
+				"created",
+				"principal_id",
+				"credential_id",
+				"client_id",
+				"token_endpoint",
+				"token_endpoint_auth_method"
+			],
+			"constants": {
+				"status": "active",
+				"token_endpoint_auth_method": "private_key_jwt"
+			}
+		}
+	}
+}

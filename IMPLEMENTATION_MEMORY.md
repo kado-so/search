@@ -33,13 +33,35 @@
 - Storage and persistence errors retain trusted `errors.Is`/`Unwrap` causes but
   keep those causes behind pointer-held private details and safe formatters so
   `%v`, `%+v`, `%#v`, and `%s` cannot reflect backend secrets.
+- `internal/agentauth` owns protected-resource and authorization-server
+  discovery plus authenticate-or-enroll. It requires the configured Kado
+  resource and issuer, same-issuer canonical HTTPS endpoints, no redirects,
+  exact case-sensitive/non-null duplicate-free bounded JSON, and a fresh replay
+  nonce.
+- Enrollment uses the Phase 02B v0.1 `agent-enrollment+jws` wire profile. The
+  persistent management signer authorizes the exact
+  `authenticate-or-enroll` payload and the server returns a direct active
+  principal/credential/client result. Public keys use OKP Ed25519 JWKs and RFC
+  7638 SHA-256 thumbprints.
+- The client pins the Phase 02B discovery fixture byte-for-byte and requires
+  exact response/status coupling: `201` means newly created and `200` means an
+  existing credential.
+- `keystore.Store.Create` is an atomic first-writer operation. File and
+  keychain adapters serialize it across processes with a per-identity lock, and
+  agent authentication uses `LoadOrCreateManagementSigner` so concurrent first
+  runs cannot replace the winning installation identity.
 
 ## Notes for later goals
 
-- Goal 3 should reuse `Config.BaseURL` as the validated HTTPS service base and
-  add injectable HTTP behavior in a dedicated client/discovery package. Its
-  path is `/` or a canonical unescaped ASCII prefix without a trailing slash;
-  append endpoint segments without decoding or cleaning the base again.
-- Goal 3 should load or create the management signer through the Goal 2
-  keystore boundary. It must not add key material to `config.Config` or persist
-  session signers.
+- Phase 02B Goal 2 publishes
+  `contracts/agent-auth/v0.1/discovery.json` and `wire-profile.json`; Goal 3's
+  pinned copies are byte-identical. `signed-enrollment.v0.1.json` is a
+  deterministic non-secret vector generated exactly by Go and accepted by the
+  Phase 02B TypeScript validator. Set `KADO_PHASE_02B_PROTOCOL` to the validator
+  source path and optionally `KADO_TYPESCRIPT_RUNTIME` (default `bun`) to run
+  that cross-repository integration test without a production dependency.
+- Phase 02B currently advertises the deterministic Argon2id admission challenge
+  type but does not define a challenge-response or session-key-binding wire.
+  Goal 4 must not invent those shapes. Align its solver and eventual
+  short-lived `private_key_jwt` exchange to the authoritative Phase 02B
+  contracts when those server goals land.

@@ -60,6 +60,28 @@ func (store *FileStore) Load() ([]byte, error) {
 	return keyMaterial, nil
 }
 
+func (store *FileStore) Create(keyMaterial []byte) ([]byte, bool, error) {
+	var winning []byte
+	var created bool
+	err := withProcessLock("file:"+store.path, func() error {
+		existing, err := store.Load()
+		if err == nil {
+			winning = existing
+			return nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if err := store.Save(keyMaterial); err != nil {
+			return err
+		}
+		winning = append([]byte(nil), keyMaterial...)
+		created = true
+		return nil
+	})
+	return winning, created, err
+}
+
 func (store *FileStore) Save(keyMaterial []byte) error {
 	encoded, err := encodeRecord(keyMaterial)
 	if err != nil {
