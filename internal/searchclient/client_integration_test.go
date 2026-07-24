@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf16"
 )
 
@@ -446,6 +447,78 @@ func TestRunReturnsBoundedStructuredFailureWithoutRemoteSecrets(t *testing.T) {
 	}
 }
 
+func TestServerDerivedFailureAndProblemDiagnosticsAreTerminalSafe(t *testing.T) {
+	t.Parallel()
+
+	const unsafeMessage = "before\u001b\u0085\u009b\u2028\u2029\u202e\u2066after Café 世界 🧭"
+	const safeMessage = "before after Café 世界 🧭"
+	t.Run("Search Document failure", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewTLSServer(http.HandlerFunc(func(
+			response http.ResponseWriter,
+			request *http.Request,
+		) {
+			assertMachineRequest(t, request, "Bearer token-one")
+			self := serverURL(request) + "/search?q=failing+tools"
+			writeDocument(response, failedDocument(
+				self,
+				"failing tools",
+				"search_failure",
+				"SOURCE_UNAVAILABLE",
+				unsafeMessage,
+				false,
+			))
+		}))
+		defer server.Close()
+
+		client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
+		_, err := client.Run(
+			context.Background(),
+			"failing tools",
+			DefaultRunOptions(),
+		)
+		var failure *FailureError
+		if !errors.As(err, &failure) ||
+			failure.Failure.Message != safeMessage ||
+			strings.ContainsFunc(failure.Error(), unsafeDiagnosticRune) {
+			t.Fatalf("Run() failure = %#v error=%T %q", failure, err, err)
+		}
+	})
+
+	t.Run("HTTP problem", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewTLSServer(http.HandlerFunc(func(
+			response http.ResponseWriter,
+			request *http.Request,
+		) {
+			assertMachineRequest(t, request, "Bearer token-one")
+			response.Header().Set("Content-Type", "application/problem+json")
+			response.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(response).Encode(map[string]any{
+				"error": map[string]any{
+					"code":      "rate_limited",
+					"message":   unsafeMessage,
+					"retryable": true,
+				},
+			})
+		}))
+		defer server.Close()
+
+		client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
+		_, err := client.Search(context.Background(), "agent tools")
+		var problem *Error
+		if !errors.As(err, &problem) ||
+			problem.Code() != "rate_limited" ||
+			problem.Error() != safeMessage ||
+			!problem.Retryable() ||
+			strings.ContainsFunc(problem.Error(), unsafeDiagnosticRune) {
+			t.Fatalf("Search() problem = %#v error=%T %q", problem, err, err)
+		}
+	})
+}
+
 func TestClientRejectsOversizedBodiesWrongMediaAndForeignLinks(t *testing.T) {
 	t.Parallel()
 
@@ -566,6 +639,40 @@ func TestClientRejectsResponsesThatReflectItsBearerCredential(t *testing.T) {
 				t.Fatalf("Search() error = %T %v", err, err)
 			}
 		})
+	}
+}
+
+func TestClientRejectsUnsupportedSearchDocumentMajorClearly(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		document := completeDocument(
+			serverURL(request),
+			"tools",
+			"search_unsupported",
+			"",
+			"",
+		)
+		document["schema_version"] = "kado.search-document.v9"
+		document["metadata"].(map[string]any)["extensions"] = map[string]any{
+			"private": "must-not-appear",
+		}
+		writeDocument(response, document)
+	}))
+	defer server.Close()
+
+	client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
+	_, err := client.Search(context.Background(), "tools")
+	var failure *Error
+	if !errors.Is(err, ErrUnsupportedVersion) ||
+		!errors.As(err, &failure) ||
+		failure.Code() != "search_document_version_unsupported" ||
+		!strings.Contains(failure.Error(), "v9") ||
+		strings.Contains(fmt.Sprintf("%v %+v %#v", err, err, err), "must-not-appear") {
+		t.Fatalf("Search() error = %T %v", err, err)
 	}
 }
 
@@ -1012,8 +1119,8 @@ func TestClientBindsDocumentsAndRelationsToTheExactRequestedQuery(t *testing.T) 
 		defer server.Close()
 
 		client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
-		self, _ := url.Parse(server.URL + "/search?q=requested+query")
-		next, _ := url.Parse(server.URL + "/search?q=different+query&cursor=opaque_next")
+		self, _ := url.Parse("https://kado.so/search?q=requested+query")
+		next, _ := url.Parse("https://kado.so/search?q=different+query&cursor=opaque_next")
 		document := Document{
 			self:     self,
 			next:     next,
@@ -1335,15 +1442,41 @@ func newIntegrationClientWithLimits(
 	limits Limits,
 ) *Client {
 	t.Helper()
-	base, err := url.Parse(server.URL)
+	base, err := url.Parse("https://kado.so")
+	if err != nil {
+		t.Fatalf("Parse(kado.so) error = %v", err)
+	}
+	target, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatalf("Parse(server URL) error = %v", err)
 	}
-	client, err := New(base, server.Client(), source, limits)
+	httpClient := *server.Client()
+	httpClient.Transport = &testServerTransport{
+		target: target,
+		next:   httpClient.Transport,
+	}
+	client, err := New(base, &httpClient, source, limits)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	return client
+}
+
+type testServerTransport struct {
+	target *url.URL
+	next   http.RoundTripper
+}
+
+func (transport *testServerTransport) RoundTrip(
+	request *http.Request,
+) (*http.Response, error) {
+	cloned := request.Clone(request.Context())
+	endpoint := *request.URL
+	endpoint.Scheme = transport.target.Scheme
+	endpoint.Host = transport.target.Host
+	cloned.URL = &endpoint
+	cloned.Host = "kado.so"
+	return transport.next.RoundTrip(cloned)
 }
 
 func assertMachineRequest(t *testing.T, request *http.Request, authorization string) {
@@ -1426,6 +1559,11 @@ func failedDocument(
 	})
 }
 
+func unsafeDiagnosticRune(character rune) bool {
+	return unicode.IsControl(character) ||
+		unicode.In(character, unicode.Cf, unicode.Zl, unicode.Zp)
+}
+
 func completeDocument(
 	origin string,
 	query string,
@@ -1446,7 +1584,18 @@ func completeDocument(
 		previousValue = previous
 	}
 	document["result_set"] = map[string]any{
-		"items": []any{},
+		"@type":       "ItemList",
+		"result_type": "mixed_results",
+		"items":       []any{},
+		"pagination": map[string]any{
+			"kind":            "cursor",
+			"page_size":       20,
+			"returned":        0,
+			"total":           nil,
+			"has_more":        next != "",
+			"next_cursor":     cursorFromLink(next),
+			"previous_cursor": cursorFromLink(previous),
+		},
 		"links": map[string]any{
 			"self":     self,
 			"next":     nextValue,
@@ -1462,30 +1611,55 @@ func baseDocument(
 	searchID string,
 	state map[string]any,
 ) map[string]any {
+	search := map[string]any{
+		"id":         searchID,
+		"query":      query,
+		"created_at": "2026-07-23T00:00:00Z",
+	}
+	if state["status"] != StatusQueued {
+		search["started_at"] = "2026-07-23T00:00:01Z"
+	}
+	switch state["status"] {
+	case StatusComplete, StatusFailed, StatusCanceled:
+		search["completed_at"] = "2026-07-23T00:00:02Z"
+	}
 	return map[string]any{
 		"@context":       "https://kado.so/contexts/search-document/v1.jsonld",
 		"@id":            self,
 		"@type":          "SearchResultsPage",
 		"schema_version": SchemaVersion,
-		"search": map[string]any{
-			"id":    searchID,
-			"query": query,
-		},
-		"state": state,
+		"search":         search,
+		"state":          state,
 		"links": map[string]any{
 			"self":    self,
 			"schema":  "https://kado.so/schemas/search-document/v1.json",
 			"context": "https://kado.so/contexts/search-document/v1.jsonld",
 		},
 		"metadata": map[string]any{
-			"revision":   1,
-			"extensions": map[string]any{},
+			"revision":     1,
+			"generated_at": "2026-07-23T00:00:02Z",
+			"extensions":   map[string]any{},
 		},
 	}
 }
 
 func serverURL(request *http.Request) string {
 	return "https://" + request.Host
+}
+
+func cursorFromLink(raw string) any {
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		panic(err)
+	}
+	cursor := parsed.Query().Get("cursor")
+	if cursor == "" {
+		return "opaque_relation"
+	}
+	return cursor
 }
 
 func noWait(context.Context, time.Duration) error {

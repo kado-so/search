@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"net/url"
 	"time"
+
+	"github.com/kado-so/search/internal/diagnostic"
+	"github.com/kado-so/search/internal/searchcontract"
 )
 
 const (
 	// CanonicalMediaType is the versioned Phase 03A Search Document media type.
 	CanonicalMediaType = "application/vnd.kado.search.v1+json"
-	SchemaVersion      = "kado.search-document.v1"
+	SchemaVersion      = searchcontract.SchemaVersion
 )
 
 const (
@@ -25,13 +28,16 @@ const (
 )
 
 var (
-	ErrProtocol       = errors.New("search response protocol failed")
-	ErrAuthentication = errors.New("search authentication failed")
-	ErrNeedsInput     = errors.New("search needs input")
-	ErrFailed         = errors.New("search failed")
-	ErrCanceled       = errors.New("search canceled")
-	ErrTimeout        = errors.New("search timed out")
-	ErrRedirect       = errors.New("search redirect rejected")
+	ErrProtocol           = errors.New("search response protocol failed")
+	ErrAuthentication     = errors.New("search authentication failed")
+	ErrNeedsInput         = errors.New("search needs input")
+	ErrFailed             = errors.New("search failed")
+	ErrCanceled           = errors.New("search canceled")
+	ErrTimeout            = errors.New("search timed out")
+	ErrRedirect           = errors.New("search redirect rejected")
+	ErrUnsupportedVersion = errors.New(
+		"search document major version is not supported",
+	)
 )
 
 // AuthorizationSource returns an in-memory Phase 02C bearer authorization
@@ -80,9 +86,9 @@ type Failure struct {
 	Retryable bool
 }
 
-// Document preserves the exact response bytes while exposing only the stable
-// lifecycle fields needed by this phase. Goal 2 owns full contract validation
-// and output projection.
+// Document preserves the exact response bytes after full Search Document v1
+// schema, JSON-LD, and semantic validation while exposing stable lifecycle
+// fields used by the lifecycle client.
 type Document struct {
 	raw           []byte
 	self          *url.URL
@@ -149,7 +155,7 @@ type Error struct {
 func newError(code, message string, status int, retryable bool, cause error) *Error {
 	return &Error{
 		code:       boundedCode(code),
-		message:    boundedText(message, 280),
+		message:    diagnostic.TerminalSafeText(message, 280),
 		status:     status,
 		retryable:  retryable,
 		privateErr: cause,

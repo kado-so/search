@@ -6,6 +6,7 @@ package diagnostic
 import (
 	"errors"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -37,7 +38,7 @@ type Error struct {
 // removed from values that can reach ordinary output.
 func New(code, message string, exitCode int, cause error) *Error {
 	code = boundedCode(code)
-	message = bounded(message, maxMessageBytes)
+	message = TerminalSafeText(message, maxMessageBytes)
 	if code == "" {
 		code = fallbackCode
 	}
@@ -99,12 +100,18 @@ func boundedCode(value string) string {
 	return strings.Trim(string(output), "_")
 }
 
-func bounded(value string, maximum int) string {
-	value = strings.TrimSpace(value)
+// TerminalSafeText returns valid Unicode text that is safe for an ordinary
+// terminal and bounded by UTF-8 bytes. It replaces C0/C1 controls, format and
+// bidi controls, and line/paragraph separators before collapsing whitespace.
+func TerminalSafeText(value string, maximum int) string {
+	if maximum <= 0 || !utf8.ValidString(value) {
+		return ""
+	}
 	output := make([]rune, 0, min(len(value), maximum))
 	byteCount := 0
 	for _, character := range value {
-		if character < ' ' || character == '\u007f' {
+		if unicode.IsControl(character) ||
+			unicode.In(character, unicode.Cf, unicode.Zl, unicode.Zp) {
 			character = ' '
 		}
 		characterBytes := utf8.RuneLen(character)

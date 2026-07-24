@@ -20,6 +20,9 @@ authentication management, and an authenticated Search lifecycle:
 
 ```bash
 kado search "find an agent-native support platform"
+kado search --json "find an agent-native support platform"
+kado search --jsonl "find an agent-native support platform"
+kado search --width 72 "find an agent-native support platform"
 kado search --answer Web "deployment tools [mock:clarify]"
 kado search --timeout 45s --first-page "current retrieval tools"
 ```
@@ -37,6 +40,22 @@ cancellation. Only safe GETs receive a bounded transient retry; a `401` may
 refresh the short-lived token once because authorization rejection occurs
 before the Search operation. Bounded response bodies are checked for bearer
 reflection before either refresh or retry.
+
+The default human view is a deterministic terminal-safe projection. It wraps
+Unicode by display width, strips terminal control characters, bounds result
+previews, and accepts `--width` values from 40 through 160 columns. `--jsonl`
+emits deterministic search, result, and explicit pagination records; each
+result retains its arbitrary `data` JSON value without converting object,
+array, scalar, or null shapes. `--json` emits exactly one canonical server
+document byte-for-byte, including the server's existing whitespace/newline
+choice, and therefore does not follow pagination.
+
+Every server document is validated before output against generated copies of
+the released `kado-app` Search Document v1 manifest, JSON Schema 2020-12,
+JSON-LD 1.1 context, semantic-rule manifest, and conformance fixtures. Their
+release checksums are pinned in the Go client and JSON-LD context resolution is
+local-only. Unsupported major versions fail with a clear bounded diagnostic
+instead of being partially rendered.
 
 Build and verify the command:
 

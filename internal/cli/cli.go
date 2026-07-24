@@ -11,7 +11,9 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kado-so/search/internal/agentauth"
@@ -20,6 +22,8 @@ import (
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/keystore"
 	"github.com/kado-so/search/internal/searchclient"
+	"github.com/kado-so/search/internal/searchcontract"
+	"github.com/kado-so/search/internal/searchoutput"
 )
 
 const helpText = `Kado Search command-line client
@@ -35,8 +39,11 @@ Commands:
   version        Show bounded build information
 
 Options:
-  -h, --help       Show this help
-  -v, --version    Show bounded build information
+  --json            Emit one exact canonical Search Document
+  --jsonl           Emit deterministic result and pagination records
+  --width columns   Human output width from 40 to 160 (default 96)
+  -h, --help        Show this help
+  -v, --version     Show bounded build information
 `
 
 type authCommands interface {
@@ -45,7 +52,13 @@ type authCommands interface {
 }
 
 type searchCommands interface {
-	Run(context.Context, string, searchclient.RunOptions) (searchclient.Result, error)
+	Run(context.Context, string, searchclient.RunOptions) (searchRunResult, error)
+}
+
+type searchRunResult struct {
+	status    string
+	canonical []byte
+	pages     [][]byte
 }
 
 type dependencies struct {
@@ -69,6 +82,7 @@ type phase02CAuthorizationSource struct {
 }
 
 var outputIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$`)
+var errBrokenPipe = errors.New("CLI output pipe closed")
 
 // Run executes one CLI invocation and returns a process exit status.
 func Run(args []string, stdout, stderr io.Writer, info buildinfo.Info) int {
@@ -87,6 +101,9 @@ func runWithDependencies(
 ) int {
 	err := run(args, stdout, info, dependencies)
 	if err == nil {
+		return 0
+	}
+	if errors.Is(err, errBrokenPipe) {
 		return 0
 	}
 	code, message, exitCode := diagnostic.Public(err)
@@ -128,7 +145,7 @@ func run(
 }
 
 func runSearch(args []string, stdout io.Writer, dependencies dependencies) error {
-	query, options, err := parseSearchArguments(args)
+	query, options, outputOptions, err := parseSearchArguments(args)
 	if err != nil {
 		return err
 	}
@@ -143,27 +160,46 @@ func runSearch(args []string, stdout io.Writer, dependencies dependencies) error
 	defer stop()
 	result, err := search.Run(ctx, query, options)
 	if err != nil {
+		if len(result.canonical) > 0 {
+			rendered, renderErr := searchoutput.Render(
+				result.canonical,
+				result.pages,
+				outputOptions,
+			)
+			if renderErr != nil {
+				return searchOutputDiagnostic(renderErr)
+			}
+			if writeErr := writeOutput(stdout, rendered); writeErr != nil {
+				return writeErr
+			}
+		}
 		return searchDiagnostic(err)
 	}
-	if result.Document.Status != searchclient.StatusComplete ||
-		!outputIdentifierPattern.MatchString(result.Document.SearchID) ||
-		len(result.Pages) < 1 {
+	if result.status != searchclient.StatusComplete ||
+		len(result.canonical) == 0 ||
+		len(result.pages) < 1 {
 		return searchDiagnostic(searchclient.ErrProtocol)
 	}
-	_, _ = fmt.Fprintf(
-		stdout,
-		"status: complete\nsearch: %s\npages: %d\n",
-		result.Document.SearchID,
-		len(result.Pages),
+	rendered, err := searchoutput.Render(
+		result.canonical,
+		result.pages,
+		outputOptions,
 	)
-	return nil
+	if err != nil {
+		return searchOutputDiagnostic(err)
+	}
+	return writeOutput(stdout, rendered)
 }
 
-func parseSearchArguments(args []string) (string, searchclient.RunOptions, error) {
+func parseSearchArguments(
+	args []string,
+) (string, searchclient.RunOptions, searchoutput.Options, error) {
 	options := searchclient.DefaultRunOptions()
+	outputOptions := searchoutput.Options{Mode: searchoutput.ModeHuman}
 	var queryParts []string
 	var answer string
 	answerSet := false
+	modeSet := false
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		switch argument {
@@ -173,17 +209,17 @@ func parseSearchArguments(args []string) (string, searchclient.RunOptions, error
 		case "--timeout":
 			index++
 			if index >= len(args) {
-				return "", options, usageError("search --timeout requires a duration")
+				return "", options, outputOptions, usageError("search --timeout requires a duration")
 			}
 			timeout, err := time.ParseDuration(args[index])
 			if err != nil || timeout <= 0 || timeout > 30*time.Minute {
-				return "", options, usageError("search timeout must be between 1ns and 30m")
+				return "", options, outputOptions, usageError("search timeout must be between 1ns and 30m")
 			}
 			options.Timeout = timeout
 		case "--answer":
 			index++
 			if index >= len(args) || answerSet {
-				return "", options, usageError("search --answer requires one value")
+				return "", options, outputOptions, usageError("search --answer requires one value")
 			}
 			answer = args[index]
 			answerSet = true
@@ -191,17 +227,44 @@ func parseSearchArguments(args []string) (string, searchclient.RunOptions, error
 			options.FollowPages = false
 		case "--retry":
 			options.RetryFailure = true
+		case "--json", "--jsonl":
+			if modeSet {
+				return "", options, outputOptions, usageError(
+					"search output accepts only one of --json or --jsonl",
+				)
+			}
+			modeSet = true
+			if argument == "--json" {
+				outputOptions.Mode = searchoutput.ModeJSON
+				options.FollowPages = false
+			} else {
+				outputOptions.Mode = searchoutput.ModeJSONL
+			}
+		case "--width":
+			index++
+			if index >= len(args) {
+				return "", options, outputOptions, usageError(
+					"search --width requires a column count",
+				)
+			}
+			width, err := strconv.Atoi(args[index])
+			if err != nil || width < 40 || width > 160 {
+				return "", options, outputOptions, usageError(
+					"search width must be between 40 and 160 columns",
+				)
+			}
+			outputOptions.Width = width
 		default:
 			if strings.HasPrefix(argument, "-") {
-				return "", options, usageError("unknown search option")
+				return "", options, outputOptions, usageError("unknown search option")
 			}
 			queryParts = append(queryParts, argument)
 		}
 	}
 	query := strings.Join(queryParts, " ")
 	if query == "" {
-		return "", options, usageError(
-			"usage: kado search [--timeout duration] [--answer value] [--first-page] [--retry] <query>",
+		return "", options, outputOptions, usageError(
+			"usage: kado search [--json|--jsonl] [--width columns] [--timeout duration] [--answer value] [--first-page] [--retry] <query>",
 		)
 	}
 	if answerSet {
@@ -209,7 +272,44 @@ func parseSearchArguments(args []string) (string, searchclient.RunOptions, error
 			return answer, nil
 		}
 	}
-	return query, options, nil
+	return query, options, outputOptions, nil
+}
+
+func writeOutput(output io.Writer, value []byte) error {
+	written, err := output.Write(value)
+	if err == nil && written != len(value) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) {
+		return errBrokenPipe
+	}
+	return diagnostic.New(
+		"output_failed",
+		"could not write Search output",
+		diagnostic.ExitFailure,
+		err,
+	)
+}
+
+func searchOutputDiagnostic(cause error) error {
+	var unsupported *searchcontract.UnsupportedVersionError
+	if errors.As(cause, &unsupported) {
+		return diagnostic.New(
+			"search_document_version_unsupported",
+			unsupported.Error(),
+			diagnostic.ExitFailure,
+			cause,
+		)
+	}
+	return diagnostic.New(
+		"search_output_invalid",
+		"Search output could not be validated or rendered",
+		diagnostic.ExitFailure,
+		cause,
+	)
 }
 
 func runAuth(args []string, stdout io.Writer, dependencies dependencies) error {
@@ -430,8 +530,17 @@ func (commands *defaultSearchCommands) Run(
 	ctx context.Context,
 	query string,
 	options searchclient.RunOptions,
-) (searchclient.Result, error) {
-	return commands.client.Run(ctx, query, options)
+) (searchRunResult, error) {
+	result, err := commands.client.Run(ctx, query, options)
+	output := searchRunResult{
+		status:    result.Document.Status,
+		canonical: result.Document.Bytes(),
+		pages:     make([][]byte, 0, len(result.Pages)),
+	}
+	for _, page := range result.Pages {
+		output.pages = append(output.pages, page.Bytes())
+	}
+	return output, err
 }
 
 func (source *phase02CAuthorizationSource) Authorization(

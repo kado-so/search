@@ -101,8 +101,8 @@
 - `internal/searchclient` owns the protected `/search` HTTP boundary. It sends
   only `Accept: application/vnd.kado.search.v1+json`, rejects redirects and
   foreign issuer/host links, bounds document/error bodies, preserves exact
-  canonical response bytes, and exposes only the minimal lifecycle fields
-  needed before Goal 2 adds full contract validation and output projections.
+  canonical response bytes, and validates every accepted document before it
+  reaches lifecycle handling or output.
 - The client derives status/clarify/cancel/retry operations from the
   server-provided `links.self` identity and follows pagination relation URLs
   exactly. It never reconstructs a cursor/page relation or follows a relation
@@ -125,6 +125,33 @@
   bounded cancellation after a local deadline or interrupt. Client-level
   lifecycle-operation and clarification-submission budgets remain enforced
   when `RunOptions.Timeout` is zero; a blocking clarifier is isolated so
-  cancellation cannot hang `Run`. Goal 2 may replace the current minimal CLI
-  completion summary with canonical/human/JSONL renderers without changing this
-  client boundary.
+  cancellation cannot hang `Run`.
+- `internal/searchcontract` pins the released Search Document v1 manifest hash
+  outside generated code, verifies every manifest artifact checksum, and
+  embeds deterministically generated copies of the authoritative JSON Schema
+  2020-12, JSON-LD 1.1 context, semantic-rule manifest, and all lifecycle
+  fixtures from the sibling `kado-app` repository. `go generate
+  ./internal/searchcontract` fails unless the source release matches that pin.
+- Contract acceptance rejects duplicate JSON members, trailing data, invalid
+  UTF-8, unsupported envelopes, schema drift, all 18 released semantic
+  invariants, and non-canonical JSON-LD expansion/compaction. JSON-LD context
+  loading is local-only. Unsupported majors retain a distinct bounded error
+  containing only the parsed major number.
+- JSON-LD 1.1 compaction has no `@container` for `result_set.items`; the
+  authoritative processor therefore emits an empty array for zero items, the
+  item object directly for one item, and an array for many. Semantic validation
+  normalizes those cardinalities only after canonical expansion checks and
+  preserves arbitrary `data` objects, arrays, scalars, and null.
+- `internal/searchoutput` validates every page before returning any bytes.
+  `--json` returns one isolated byte-for-byte canonical server document and
+  disables pagination following. Human output is deterministic, terminal-safe,
+  display-width-aware, and bounded. JSONL is a deterministic bounded
+  projection with explicit pagination/link records and preserves each
+  arbitrary `data` value as raw object, array, scalar, or null JSON.
+- CLI output is rendered completely before one write. A broken pipe exits
+  silently and successfully; other writes fail with a safe diagnostic.
+  `diagnostic.TerminalSafeText` is the shared bounded sanitizer for terminal
+  projections, Search Document failures, HTTP problems, and stderr; it removes
+  C0/C1, format/bidi controls, and Zl/Zp while preserving ordinary Unicode.
+  Cross-repository asset checks, released lifecycle fixtures, human/JSONL
+  goldens, and exact JSON checks cover both cursor and page pagination.

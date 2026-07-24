@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+
+	"github.com/kado-so/search/internal/diagnostic"
 )
 
 type documentEnvelope struct {
@@ -131,7 +133,7 @@ func decodeEnvelope(encoded []byte) (decodedEnvelope, error) {
 		}
 		output.Failure = &Failure{
 			Code:      boundedCode(failure.Code),
-			Message:   boundedText(failure.Message, 280),
+			Message:   diagnostic.TerminalSafeText(failure.Message, 280),
 			Retryable: failure.Retryable,
 		}
 	case StatusComplete:

@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/kado-so/search/internal/searchcontract"
 )
 
 type Client struct {
@@ -498,6 +500,19 @@ func (client *Client) decodeDocument(
 	encoded []byte,
 	expectedQuery string,
 ) (Document, error) {
+	if _, err := searchcontract.Validate(encoded); err != nil {
+		var unsupported *searchcontract.UnsupportedVersionError
+		if errors.As(err, &unsupported) {
+			return Document{}, newError(
+				"search_document_version_unsupported",
+				unsupported.Error(),
+				0,
+				false,
+				ErrUnsupportedVersion,
+			)
+		}
+		return Document{}, protocolError()
+	}
 	envelope, err := decodeEnvelope(encoded)
 	if err != nil || envelope.Query != expectedQuery {
 		return Document{}, protocolError()
@@ -918,24 +933,6 @@ func decodeProblem(encoded []byte) (decodedProblem, error) {
 		Message:   problem.Error.Message,
 		Retryable: problem.Error.Retryable,
 	}, nil
-}
-
-func boundedText(value string, maximum int) string {
-	if !utf8.ValidString(value) {
-		return ""
-	}
-	var output strings.Builder
-	for _, character := range value {
-		if character < ' ' || character == '\u007f' {
-			character = ' '
-		}
-		size := utf8.RuneLen(character)
-		if output.Len()+size > maximum {
-			break
-		}
-		output.WriteRune(character)
-	}
-	return strings.Join(strings.Fields(output.String()), " ")
 }
 
 func boundedCode(value string) string {
