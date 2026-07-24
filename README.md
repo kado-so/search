@@ -122,71 +122,19 @@ closed.
 
 ## Install
 
-### Skills CLI
+Use the generated [installation and removal reference](distribution/INSTALL.md)
+for Agent Skills, Codex, and Claude Code. It is derived from the same
+distribution source as every plugin and marketplace manifest.
 
-Install the skill:
+Install the external `kado` CLI before enabling the skill. The canonical CLI
+installation URL is [kado.so/install](https://kado.so/install). The release
+pipeline owns binary commands, checksums, updates, and CLI removal, so the
+plugin manifests do not publish provisional commands.
 
-```bash
-npx skills add kado-so/search
-```
-
-The `skills` CLI can install skills into supported local agents or into a project skill directory, depending on your environment and prompts.
-
-### Claude Code Plugin
-
-Claude Code users can install Kado Search through `/plugin` by first adding this repo as a marketplace, then installing the plugin.
-
-In Claude Code:
-
-```text
-/plugin marketplace add kado-so/search
-/plugin install kado-search@kado
-```
-
-Equivalent CLI commands:
-
-```bash
-claude plugin marketplace add kado-so/search
-claude plugin install kado-search@kado
-```
-
-This repository includes the Claude marketplace manifest at `.claude-plugin/marketplace.json` and the plugin manifest at `.claude-plugin/plugin.json`.
-
-### Codex Plugin
-
-This repository includes a Codex plugin manifest at `.codex-plugin/plugin.json` and a Codex marketplace manifest at `.agents/plugins/marketplace.json`.
-
-Add this repository as a Codex plugin marketplace:
-
-```bash
-codex plugin marketplace add kado-so/search
-```
-
-For local development, add your checkout directly:
-
-```bash
-codex plugin marketplace add /path/to/kado/search
-```
-
-Then install **Kado Search** from the Codex plugin marketplace UI. The marketplace name is `kado`, and the plugin name is `kado-search`.
-
-### Codex Skill Installer
-
-Ask Codex to install a skill from this GitHub repository, or use Codex's skill installer helper with these paths:
-
-```bash
-python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-  --repo kado-so/search \
-  --path skills/kado-search
-```
-
-Restart Codex after installing new skills.
-
-### Validation
-
-Use an isolated virtual environment for the system validators. This avoids
-depending on whichever `python3` happens to be installed at a fixed operating
-system path and keeps PyYAML out of the repository:
+Generate and validate distribution metadata in the pinned, isolated validator
+environment. The generator always validates the canonical source against its
+Draft 2020-12 schema before it checks or writes generated files; it fails with
+an installation instruction when this environment is missing.
 
 ```bash
 validation_python="$(command -v python3)" || {
@@ -195,8 +143,12 @@ validation_python="$(command -v python3)" || {
 }
 validation_venv="$(mktemp -d "${TMPDIR:-/tmp}/kado-validation.XXXXXX")"
 "$validation_python" -m venv "$validation_venv"
-"$validation_venv/bin/python" -m pip install --disable-pip-version-check PyYAML
+"$validation_venv/bin/python" -m pip install \
+  --disable-pip-version-check \
+  --requirement tools/requirements-validation.txt
 
+"$validation_venv/bin/python" -B \
+  tools/generate_distribution_manifests.py --check
 "$validation_venv/bin/python" -B \
   ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
   skills/kado-search
@@ -209,38 +161,9 @@ validation_venv="$(mktemp -d "${TMPDIR:-/tmp}/kado-validation.XXXXXX")"
   "$validation_venv"
 ```
 
-### Manual Install For Other Agents
-
-For agents that use filesystem skill folders, copy or symlink the skill directory into that agent's skills directory:
-
-```bash
-mkdir -p ~/.codex/skills
-cp -R skills/kado-search ~/.codex/skills/
-```
-
-For Claude Code-style installs:
-
-```bash
-mkdir -p ~/.claude/skills
-cp -R skills/kado-search ~/.claude/skills/
-```
-
-Claude Code uses the `name` and `description` fields in `SKILL.md` to decide when to load a skill automatically. No separate `agents/claude.yaml` file is required.
-
-Check your agent's documentation for its exact skill directory and reload behavior.
-
-### Other Agents
-
-No other agent-specific manifests are required right now. Prefer the standard `SKILL.md` package wherever the agent supports skills.
-
-For agents that use rule or instruction files instead of skills:
-
-- **OpenCode**: add `skills/kado-search/SKILL.md` to `instructions` in `opencode.json`, or copy the skill into an OpenCode-compatible skills/instructions location.
-- **Cursor**: use `npx skills add kado-so/search` if your Cursor setup supports skills. Otherwise, create a Cursor project rule that points to the Kado usage policy in `skills/kado-search/SKILL.md` and the problem-statement guidance in `skills/kado-search/references/query-guide.md`.
-- **GitHub Copilot**: use Copilot agent skills when available. For repository instructions, summarize the Kado trigger policy in `.github/copilot-instructions.md` or an appropriate `.github/instructions/*.instructions.md` file.
-- **Continue**: add a rule that tells the agent to use Kado for problem-to-solution discovery and to describe the user's problem, outcome, context, and constraints.
-
-Avoid maintaining parallel, divergent instructions for each agent. The source of truth should remain `skills/kado-search/SKILL.md` plus the reference files.
+Set `KADO_DISTRIBUTION_INSTALL_SMOKE=1` to include clean local install,
+discovery, and uninstall smoke tests for installed Codex, Claude, and Agent
+Skills clients in the same pinned environment.
 
 ## Authentication
 
@@ -270,6 +193,10 @@ internal/
   diagnostic/
   keystore/
   searchclient/
+distribution/
+  INSTALL.md
+  kado-search.manifest.json
+  kado-search.manifest.schema.json
 skills/
   kado-search/
     SKILL.md
@@ -287,6 +214,9 @@ skills/
 .claude-plugin/
   marketplace.json
   plugin.json
+tools/
+  generate_distribution_manifests.py
+  requirements-validation.txt
 ```
 
 ## Safety

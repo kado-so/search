@@ -6,7 +6,7 @@
     "name": "Kado",
     "url": "https://kado.so"
   },
-  "homepage": "https://kado.so",
+  "homepage": "https://kado.so/install",
   "repository": "https://github.com/kado-so/search",
   "license": "MIT",
   "keywords": [
@@ -22,7 +22,7 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Kado Search",
-    "shortDescription": "Find solutions to problems",
+    "shortDescription": "Find current solutions with the Kado CLI",
     "longDescription": "Use Kado Search to describe a user's problem, outcome, context, and constraints, then find current market options across tools, agents, vendors, agencies, services, and architecture choices.",
     "developerName": "Kado",
     "category": "Productivity",
@@ -32,7 +32,7 @@
     ],
     "websiteURL": "https://kado.so",
     "defaultPrompt": [
-      "Our onboarding is too slow and users keep dropping off before they get value"
+      "Use $kado-search to find current solutions for our slow onboarding and early user drop-off."
     ],
     "composerIcon": "./skills/kado-search/assets/favicon.svg",
     "logo": "./skills/kado-search/assets/icon-512.gen.png",

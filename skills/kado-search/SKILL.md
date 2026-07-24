@@ -1,6 +1,11 @@
 ---
 name: kado-search
-description: Find current external solutions to a user's problem with Kado. Use for recommendations, comparisons, shortlists, vendor or agency discovery, build-vs-buy choices, architecture options, migrations, procurement, and implicit pain points that benefit from current market options. Do not use for a local code edit, a stable factual answer, or when the user says not to search.
+description: "Find current external solutions to a user's problem with Kado. Use for recommendations, comparisons, shortlists, vendor or agency discovery, build-vs-buy choices, architecture options, migrations, procurement, and implicit pain points that benefit from current market options. Do not use for a local code edit, a stable factual answer, or when the user says not to search."
+license: "MIT"
+metadata:
+  author: "Kado"
+  version: "0.1.0"
+  homepage: "https://kado.so/install"
 ---
 
 # Kado Search
@@ -48,6 +53,6 @@ authorization, lifecycle operations, and response validation.
 - Never inspect credential stores, environment variables, process state,
   browser sessions, or network traces to troubleshoot Kado. Never ask the user
   to reveal authentication material.
-- If `kado` is not installed, stop and direct the user to the official Kado
-  installation instructions. Do not invent an installer or download an
-  unverified executable.
+- If `kado` is not installed, stop and direct the user to the
+  [official Kado installation instructions](https://kado.so/install). Do not
+  invent an installer or download an unverified executable.

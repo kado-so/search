@@ -174,3 +174,43 @@
   C0/C1, format/bidi controls, and Zl/Zp while preserving ordinary Unicode.
   Cross-repository asset checks, released lifecycle fixtures, human/JSONL
   goldens, and exact JSON checks cover both cursor and page pagination.
+
+## Phase 04A distribution manifests
+
+- `distribution/kado-search.manifest.json` is the only source for plugin/skill
+  display metadata, semantic version, icons, marketplace policy, homepage, and
+  exact plugin/marketplace/repository identities. Its Draft 2020-12 schema is
+  `distribution/kado-search.manifest.schema.json`.
+- Install/uninstall commands are not accepted as manifest strings. The
+  generator derives exact literal token tuples from `kado-search`, marketplace
+  `kado`, and GitHub source `kado-so/search`, validates every token against a
+  shell-metacharacter-free grammar, and only then joins them for generated
+  documentation.
+- Draft 2020-12 validation is mandatory before generation or drift checking.
+  The documented isolated environment installs
+  `tools/requirements-validation.txt`; missing `jsonschema` fails with that
+  instruction rather than skipping the schema gate.
+- `tools/generate_distribution_manifests.py` generates/checks the Codex plugin
+  and marketplace, Claude plugin and marketplace, OpenAI skill metadata,
+  Agent Skills frontmatter, and `distribution/INSTALL.md`. It preserves the
+  canonical `skills/kado-search/SKILL.md` body rather than creating another
+  instruction copy.
+- Both marketplaces intentionally use the repository root source `./`. Codex
+  and Claude clean-install tests prove that path, and it packages the one
+  cross-platform `skills/kado-search` owner without duplicated bodies or
+  out-of-package symlinks.
+- The stable plugin ID is `kado-search@kado`. Plugin skill namespaces are
+  `kado-search:kado-search` in Codex and `/kado-search:kado-search` in Claude;
+  standalone Agent Skills installs retain `kado-search`.
+- Generated Claude metadata uses the conservative fields accepted by the local
+  supported Claude validator as well as the current specification. The current
+  Agent Skills source still records the installed-CLI compatibility condition,
+  but generated frontmatter omits the optional `compatibility` field because
+  the bundled older validator rejects it; the canonical skill body and install
+  reference retain the requirement and `https://kado.so/install`.
+- `KADO_DISTRIBUTION_INSTALL_SMOKE=1 python3 -B -m unittest
+  tests.test_distribution_manifests.DistributionInstallSmokeTests -v` builds a
+  temporary `kado` and proves isolated Codex, Claude, and Agent Skills
+  install/discovery/uninstall flows. Goal 5 must stamp the same source version
+  into release binaries and owns binary URLs, checksums, update, and CLI
+  uninstall behavior.

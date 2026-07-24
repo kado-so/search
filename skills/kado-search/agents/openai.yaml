@@ -3,6 +3,7 @@ interface:
   short_description: "Find current solutions with the Kado CLI"
   icon_small: "./assets/favicon.svg"
   icon_large: "./assets/icon-512.gen.png"
+  brand_color: "#5B3DF5"
   default_prompt: "Use $kado-search to find current solutions for our slow onboarding and early user drop-off."
 
 policy:

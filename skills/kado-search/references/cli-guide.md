@@ -69,9 +69,10 @@ not guess consequential constraints. Rerun the same query with one
 A normal `kado search` performs autonomous enrollment and obtains short-lived
 authorization without exposing credentials. Run the Search first.
 
-If the executable is missing, stop and direct the user to the official Kado
-installation instructions. Do not invent an install command, download an
-unverified binary, or create a temporary installer.
+If the executable is missing, stop and direct the user to the
+[official Kado installation instructions](https://kado.so/install). Do not
+invent an install command, download an unverified binary, or create a temporary
+installer.
 
 For an authentication failure, inspect only the safe CLI status:
 

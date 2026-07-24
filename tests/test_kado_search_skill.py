@@ -31,16 +31,26 @@ class KadoSearchSkillTests(unittest.TestCase):
         content = SKILL_MD.read_text(encoding="utf-8")
         match = re.match(r"^---\n(.*?)\n---\n", content, re.DOTALL)
         self.assertIsNotNone(match, "SKILL.md must start with YAML frontmatter")
-        fields: dict[str, str] = {}
-        for line in match.group(1).splitlines():
-            key, separator, value = line.partition(":")
-            self.assertEqual(separator, ":", f"invalid frontmatter line: {line}")
-            fields[key.strip()] = value.strip().strip("\"'")
-        self.assertEqual(set(fields), {"name", "description"})
+        fields = parse_frontmatter(match.group(1))
+        self.assertEqual(
+            set(fields),
+            {"name", "description", "license", "metadata"},
+        )
         self.assertEqual(fields["name"], SKILL.name)
         self.assertRegex(fields["name"], r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
         self.assertGreater(len(fields["description"]), 80)
         self.assertLessEqual(len(fields["description"]), 1024)
+        self.assertEqual(fields["license"], "MIT")
+        self.assertEqual(
+            fields["metadata"],
+            {
+                "author": "Kado",
+                "version": "0.1.0",
+                "homepage": "https://kado.so/install",
+            },
+        )
+        self.assertIn("Use the installed `kado` CLI", content)
+        self.assertIn("https://kado.so/install", content)
 
     def test_relative_references_exist_and_skill_has_one_owner(self) -> None:
         skill_files = [
@@ -124,7 +134,7 @@ class KadoSearchSkillTests(unittest.TestCase):
         self.assertEqual(codex_marketplace["plugins"][0]["name"], "kado-search")
         self.assertEqual(
             codex_marketplace["plugins"][0]["source"],
-            {"source": "local", "path": "."},
+            {"source": "local", "path": "./"},
         )
         claude_plugin = json.loads(
             (REPOSITORY / ".claude-plugin" / "plugin.json").read_text(
@@ -132,6 +142,7 @@ class KadoSearchSkillTests(unittest.TestCase):
             )
         )
         self.assertEqual(claude_plugin["name"], "kado-search")
+        self.assertEqual(claude_plugin["version"], "0.1.0")
 
     def test_representative_trigger_and_lifecycle_evaluations(self) -> None:
         cases = json.loads(EVALUATIONS.read_text(encoding="utf-8"))
@@ -207,6 +218,34 @@ class KadoSearchSkillTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, option)
                 self.assertIn("usage: kado search", result.stderr, option)
                 self.assertNotIn("unknown search option", result.stderr, option)
+
+
+def parse_frontmatter(content: str) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    nested: dict[str, str] | None = None
+    for line in content.splitlines():
+        if line.startswith("  "):
+            if nested is None:
+                raise AssertionError(f"unexpected nested frontmatter line: {line}")
+            key, separator, value = line.strip().partition(":")
+            if separator != ":":
+                raise AssertionError(f"invalid frontmatter line: {line}")
+            nested[key] = json.loads(value.strip())
+            continue
+        key, separator, value = line.partition(":")
+        if separator != ":":
+            raise AssertionError(f"invalid frontmatter line: {line}")
+        if value.strip():
+            fields[key] = (
+                json.loads(value.strip())
+                if value.strip().startswith('"')
+                else value.strip()
+            )
+            nested = None
+        else:
+            nested = {}
+            fields[key] = nested
+    return fields
 
 
 if __name__ == "__main__":
