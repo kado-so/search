@@ -15,8 +15,28 @@ Prefer it over generic web search for solution-discovery questions where current
 ## Go CLI development
 
 The repository owns the cross-platform `kado` command in addition to the
-agent-facing skill. The initial command boundary provides bounded help and
-version output; authentication and Search commands are added in later phases.
+agent-facing skill. It provides bounded help/version output, autonomous
+authentication management, and an authenticated Search lifecycle:
+
+```bash
+kado search "find an agent-native support platform"
+kado search --answer Web "deployment tools [mock:clarify]"
+kado search --timeout 45s --first-page "current retrieval tools"
+```
+
+`kado search` negotiates the versioned
+`application/vnd.kado.search.v1+json` representation, reuses the Phase 02C
+management-key/session-token flow, polls through server-provided Search
+identity links, submits clarification/cancel/retry operations through the
+protected `/search` resource, and follows opaque pagination links without
+reconstructing cursors. Documents and every lifecycle/pagination relation must
+retain the exact requested query. Lifecycle operations and clarification
+submissions remain bounded even when the local timeout is disabled. A deadline
+or interrupt during a cancelable lifecycle attempts one bounded server
+cancellation. Only safe GETs receive a bounded transient retry; a `401` may
+refresh the short-lived token once because authorization rejection occurs
+before the Search operation. Bounded response bodies are checked for bearer
+reflection before either refresh or retry.
 
 Build and verify the command:
 
@@ -73,14 +93,13 @@ Authenticate-only and create-if-missing are separate call modes. Concurrent
 first runs use atomic first-writer storage so they retain one management
 identity instead of overwriting the winner.
 
-Enrollment uses the Phase 02B v0.1 wire contract: the persistent management key
-signs one bounded `agent-enrollment+jws` request containing the exact
-authenticate-or-enroll payload. The client pins the published discovery
-fixture, validates response/status coupling, and exposes authenticate-only and
-create-if-missing as distinct modes. The currently published server contract
-reports admission-required as a terminal response; Argon2id admission proof,
-session-key binding, and token exchange are later goals once their server wire
-profiles are defined.
+Enrollment uses the Phase 02B v0.1 wire contract. The persistent management key
+and fresh memory-only session key complete bounded Argon2id admission, dual
+possession proofs, and `private_key_jwt` token exchange. The client verifies the
+short-lived access JWT locally and requests the exact Search lifecycle scopes.
+Search responses, errors, redirects, relation links, and bodies are bounded;
+foreign-host links and any response reflecting the bearer credential fail
+closed.
 
 ## Install
 
@@ -211,10 +230,14 @@ If no API key is available, the skill includes example device-login code in [aut
 cmd/
   kado/
 internal/
+  agentauth/
+  agentkey/
   buildinfo/
   cli/
   config/
   diagnostic/
+  keystore/
+  searchclient/
 skills/
   kado-search/
     SKILL.md

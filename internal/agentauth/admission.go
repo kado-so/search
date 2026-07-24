@@ -31,6 +31,12 @@ const (
 )
 
 var argonDomain = []byte("agent-auth-argon2id-pow-v1\n")
+var autonomousSearchScopes = []string{
+	"search:cancel",
+	"search:create",
+	"search:read",
+	"search:refine",
+}
 
 type admissionStartPayload struct {
 	Audience         string    `json:"audience"`
@@ -177,7 +183,7 @@ func (client *Client) authorizeSession(
 		return sessionAuthorization{}, err
 	}
 	now := client.now().UTC()
-	requestedScopes := []string{"search:read"}
+	requestedScopes := append([]string(nil), autonomousSearchScopes...)
 	payload, err := json.Marshal(admissionStartPayload{
 		Audience:         metadata.Resource,
 		ClientNonce:      clientNonce,

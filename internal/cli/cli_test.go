@@ -6,10 +6,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kado-so/search/internal/agentauth"
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/diagnostic"
+	"github.com/kado-so/search/internal/searchclient"
 )
 
 func TestHelpFormsAreBoundedAndSilentOnStderr(t *testing.T) {
@@ -238,6 +240,157 @@ func TestNonAuthAndInvalidAuthCommandsDoNotInitializeCredentialAccess(t *testing
 	}
 }
 
+func TestSearchRunsLifecycleWithBoundedOptionsAndSafeSummary(t *testing.T) {
+	t.Parallel()
+
+	search := &fakeSearchCommands{
+		result: searchclient.Result{
+			Document: searchclient.Document{
+				SchemaVersion: searchclient.SchemaVersion,
+				SearchID:      "search_safe.1",
+				Status:        searchclient.StatusComplete,
+			},
+			Pages: []searchclient.Document{{Status: searchclient.StatusComplete}},
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{
+			"search",
+			"--timeout",
+			"45s",
+			"--answer",
+			"Web",
+			"--first-page",
+			"--retry",
+			"find",
+			"agent",
+			"tools",
+		},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			newSearch: func() (searchCommands, error) {
+				return search, nil
+			},
+		},
+	)
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if stdout.String() != "status: complete\nsearch: search_safe.1\npages: 1\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if search.query != "find agent tools" ||
+		search.options.Timeout != 45*time.Second ||
+		search.options.FollowPages ||
+		!search.options.RetryFailure ||
+		search.options.Clarify == nil {
+		t.Fatalf("query=%q options=%#v", search.query, search.options)
+	}
+	answer, err := search.options.Clarify(
+		context.Background(),
+		searchclient.Question{ID: "question_1"},
+	)
+	if err != nil || answer != "Web" {
+		t.Fatalf("clarifier answer=%q error=%v", answer, err)
+	}
+}
+
+func TestSearchFailuresAreBoundedAndNeverRenderPrivateCauses(t *testing.T) {
+	t.Parallel()
+
+	secret := "Bearer private-access-token /private/keychain/path"
+	for _, test := range []struct {
+		name     string
+		err      error
+		wantCode string
+		wantText string
+	}{
+		{
+			name:     "clarification",
+			err:      &searchclient.NeedsInputError{},
+			wantCode: "search_needs_input",
+			wantText: "Search requires clarification",
+		},
+		{
+			name: "structured failure",
+			err: &searchclient.FailureError{Failure: searchclient.Failure{
+				Code:      "source_unavailable",
+				Message:   "A source was unavailable.",
+				Retryable: true,
+			}},
+			wantCode: "source_unavailable",
+			wantText: "A source was unavailable.",
+		},
+		{
+			name:     "private cause",
+			err:      errors.New(secret),
+			wantCode: "search_failed",
+			wantText: "Could not complete the Search",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			search := &fakeSearchCommands{err: test.err}
+			var stdout, stderr bytes.Buffer
+			exitCode := runWithDependencies(
+				[]string{"search", "agent tools"},
+				&stdout,
+				&stderr,
+				buildinfo.Info{},
+				dependencies{
+					newSearch: func() (searchCommands, error) {
+						return search, nil
+					},
+				},
+			)
+			if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 ||
+				!strings.Contains(stderr.String(), test.wantCode) ||
+				!strings.Contains(stderr.String(), test.wantText) ||
+				strings.Contains(stderr.String(), secret) {
+				t.Fatalf(
+					"exit=%d stdout=%q stderr=%q",
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+		})
+	}
+}
+
+func TestInvalidSearchUsageDoesNotInitializeAuthentication(t *testing.T) {
+	t.Parallel()
+
+	dependencies := dependencies{
+		newSearch: func() (searchCommands, error) {
+			t.Fatal("Search authentication initialized")
+			return nil, nil
+		},
+	}
+	for _, args := range [][]string{
+		{"search"},
+		{"search", "--unknown", "query"},
+		{"search", "--timeout", "forever", "query"},
+		{"search", "--answer", "one", "--answer", "two", "query"},
+	} {
+		var stdout, stderr bytes.Buffer
+		exitCode := runWithDependencies(
+			args,
+			&stdout,
+			&stderr,
+			buildinfo.Info{},
+			dependencies,
+		)
+		if exitCode != diagnostic.ExitUsage {
+			t.Fatalf("Run(%q) exit=%d stderr=%q", args, exitCode, stderr.String())
+		}
+	}
+}
+
 type fakeAuthCommands struct {
 	status      agentauth.CredentialStatus
 	revoked     agentauth.CredentialStatus
@@ -245,6 +398,23 @@ type fakeAuthCommands struct {
 	revokeErr   error
 	statusCalls int
 	revokeCalls int
+}
+
+type fakeSearchCommands struct {
+	result  searchclient.Result
+	err     error
+	query   string
+	options searchclient.RunOptions
+}
+
+func (search *fakeSearchCommands) Run(
+	_ context.Context,
+	query string,
+	options searchclient.RunOptions,
+) (searchclient.Result, error) {
+	search.query = query
+	search.options = options
+	return search.result, search.err
 }
 
 func (auth *fakeAuthCommands) Status(

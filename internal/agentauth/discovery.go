@@ -191,7 +191,7 @@ func (client *Client) Discover(ctx context.Context) (Metadata, error) {
 	if protected.Resource != client.resourceID ||
 		len(protected.AuthorizationServers) != 1 ||
 		protected.AuthorizationServers[0] != client.issuer.String() ||
-		!contains(protected.ScopesSupported, "search:read") ||
+		!containsAll(protected.ScopesSupported, autonomousSearchScopes) ||
 		!contains(protected.BearerMethodsSupported, "header") {
 		return Metadata{}, newProtocolError(ErrDiscovery, nil)
 	}
@@ -475,6 +475,15 @@ func contains(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func containsAll(values, expected []string) bool {
+	for _, value := range expected {
+		if !contains(values, value) {
+			return false
+		}
+	}
+	return true
 }
 
 func equalStringSets(left, right []string) bool {

@@ -95,3 +95,36 @@
   delete a concurrently installed replacement; it returns
   `ErrCredentialChanged`, leaves the replacement intact, and asks the caller to
   retry if that newer installation should also be revoked.
+
+## Phase 04A Search lifecycle client
+
+- `internal/searchclient` owns the protected `/search` HTTP boundary. It sends
+  only `Accept: application/vnd.kado.search.v1+json`, rejects redirects and
+  foreign issuer/host links, bounds document/error bodies, preserves exact
+  canonical response bytes, and exposes only the minimal lifecycle fields
+  needed before Goal 2 adds full contract validation and output projections.
+- The client derives status/clarify/cancel/retry operations from the
+  server-provided `links.self` identity and follows pagination relation URLs
+  exactly. It never reconstructs a cursor/page relation or follows a relation
+  outside the configured HTTPS resource. Initial documents and every consumed
+  lifecycle/pagination relation must retain the exact requested canonical
+  query; same-origin links for a different query fail before another request.
+- `kado search` reuses Phase 02C management-key enrollment and verified
+  short-lived tokens. Admission now requests the exact sorted Phase 03A scope
+  set: `search:cancel search:create search:read search:refine`.
+- One rejected bearer request can force one token refresh. Only GET operations
+  receive bounded transport/502/503/504 retry; form-encoded lifecycle mutations
+  are not blindly replayed. Every bounded JSON response body is checked for
+  current bearer reflection both as raw bytes and across all decoded nested
+  string tokens before refresh, retry, diagnostics, or document output.
+  Escaped credentials, malformed JSON, invalid/unpaired UTF-16 surrogates, and
+  reflected credentials all fail closed without changing the existing
+  document/error byte ceilings.
+- `searchclient.Run` supports polling, clarification callbacks, one explicit
+  retryable-failure retry, opaque pagination, explicit cancellation, and
+  bounded cancellation after a local deadline or interrupt. Client-level
+  lifecycle-operation and clarification-submission budgets remain enforced
+  when `RunOptions.Timeout` is zero; a blocking clarifier is isolated so
+  cancellation cannot hang `Run`. Goal 2 may replace the current minimal CLI
+  completion summary with canonical/human/JSONL renderers without changing this
+  client boundary.
