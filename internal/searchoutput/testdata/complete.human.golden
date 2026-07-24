@@ -1,0 +1,18 @@
+Query: example query
+Status: complete
+Pages: 1
+Results: 4
+
+Page 1 — cursor pagination, returned 4/4, total unknown, more true
+1. Example application [software_application]
+   A public-safe application result with object data.
+   Data: {"pricing_model":"usage","tags":["AI","検索"]}
+2. Example dataset [dataset]
+   A dataset result with array data.
+   Data: [1,"portable",{"open_source":true}]
+3. Example article [article]
+   An article result with scalar data.
+   Data: "community-maintained"
+4. Example service [service]
+   A service result whose arbitrary data is explicitly null.
+   Data: null

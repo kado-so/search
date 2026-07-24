@@ -17,7 +17,19 @@
       },
       "category": "productivity",
       "source": "./",
-      "homepage": "https://github.com/kado-so/search"
+      "homepage": "https://kado.so/install",
+      "repository": "https://github.com/kado-so/search",
+      "license": "MIT",
+      "keywords": [
+        "kado",
+        "search",
+        "solution-discovery",
+        "recommendations",
+        "vendors",
+        "agents",
+        "saas",
+        "market-research"
+      ]
     }
   ]
 }

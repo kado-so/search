@@ -303,7 +303,7 @@ func TestProtocolObjectsRequireExactCaseSensitiveNonNullFields(t *testing.T) {
 	protected, err := json.Marshal(protectedResourceMetadata{
 		Resource:                  "https://kado.so",
 		AuthorizationServers:      []string{"https://kado.so"},
-		ScopesSupported:           []string{"search:read"},
+		ScopesSupported:           autonomousSearchScopes,
 		BearerMethodsSupported:    []string{"header"},
 		AgentPrincipalMetadataURI: "https://kado.so/.well-known/agent-principal",
 	})

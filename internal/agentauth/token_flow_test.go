@@ -71,7 +71,7 @@ func (fake *goal4Server) handle(response http.ResponseWriter, request *http.Requ
 		fake.sendJSON(response, http.StatusOK, protectedResourceMetadata{
 			Resource:                  fake.issuer(),
 			AuthorizationServers:      []string{fake.issuer()},
-			ScopesSupported:           []string{"search:read"},
+			ScopesSupported:           autonomousSearchScopes,
 			BearerMethodsSupported:    []string{"header"},
 			AgentPrincipalMetadataURI: fake.issuer() + "/.well-known/agent-principal",
 		})
@@ -201,7 +201,7 @@ func (fake *goal4Server) startAdmission(response http.ResponseWriter, request *h
 		payload.Issuer != fake.issuer() ||
 		payload.Audience != fake.issuer() ||
 		!payload.CreateIfMissing ||
-		!equalOrderedStrings(payload.RequestedScopes, []string{"search:read"}) {
+		!equalOrderedStrings(payload.RequestedScopes, autonomousSearchScopes) {
 		fake.sendAgentError(response, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -351,7 +351,7 @@ func (fake *goal4Server) completeAdmission(response http.ResponseWriter, request
 		SessionCredentialID:     "scred_00000000000000000000000000000001",
 		SessionExpiresAt:        time.Now().UTC().Truncate(time.Second).Add(15 * time.Minute).Format(time.RFC3339Nano),
 		Resource:                fake.issuer(),
-		GrantedScopes:           []string{"search:read"},
+		GrantedScopes:           autonomousSearchScopes,
 		TokenEndpoint:           fake.issuer() + "/oauth/token",
 		TokenEndpointAuthMethod: "private_key_jwt",
 	})
@@ -385,7 +385,7 @@ func (fake *goal4Server) exchangeToken(response http.ResponseWriter, request *ht
 		request.PostForm.Get("client_id") != "clt_00000000000000000000000000000001" ||
 		request.PostForm.Get("grant_type") != "client_credentials" ||
 		request.PostForm.Get("resource") != fake.issuer() ||
-		request.PostForm.Get("scope") != "search:read" {
+		request.PostForm.Get("scope") != strings.Join(autonomousSearchScopes, " ") {
 		fake.sendOAuthError(response, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -442,7 +442,7 @@ func (fake *goal4Server) exchangeToken(response http.ResponseWriter, request *ht
 		PrincipalType:  "agent",
 		AgentSessionID: "ses_00000000000000000000000000000001",
 		SessionMode:    "autonomous",
-		Scope:          "search:read",
+		Scope:          strings.Join(autonomousSearchScopes, " "),
 		IssuedAt:       now,
 		ExpiresAt:      now + 300,
 		JTI:            "00000000-0000-4000-8000-000000000001",
@@ -452,7 +452,7 @@ func (fake *goal4Server) exchangeToken(response http.ResponseWriter, request *ht
 		AccessToken: token,
 		TokenType:   "Bearer",
 		ExpiresIn:   300,
-		Scope:       "search:read",
+		Scope:       strings.Join(autonomousSearchScopes, " "),
 	})
 }
 
@@ -541,7 +541,7 @@ func TestAcquireTokenCompletesAdmissionAndVerifiesAccessJWT(t *testing.T) {
 	if token.PrincipalID != "agt_00000000000000000000000000000001" ||
 		token.SessionID != "ses_00000000000000000000000000000001" ||
 		token.AuthorizationHeader() == "" ||
-		!equalOrderedStrings(token.Scopes, []string{"search:read"}) {
+		!equalOrderedStrings(token.Scopes, autonomousSearchScopes) {
 		t.Fatalf("AcquireToken() = %#v", token)
 	}
 	for _, rendered := range []string{

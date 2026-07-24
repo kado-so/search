@@ -1,21 +1,25 @@
 # Response Guide
 
-Kado responses use an API envelope with a recommendation result inside it. Use the result to understand the search state, recommendations, refinements, and useful links.
+Read this guide after `kado search` returns validated human, JSON, or JSONL
+output.
 
-Use `search_url` when citing the Kado search. If a recommendation has `solution_url` or `source_url`, use those links for specific tools or sources.
+Lead with a bounded recommendation or shortlist. For each relevant option:
 
-Do not expose internal ranking buckets or labels to the user. Use them to decide how to reason about the recommendations, but present a normal shortlist.
+- explain why it fits the user's outcome and known constraints;
+- state meaningful tradeoffs, uncertainty, and missing evidence;
+- retain useful solution, source, and canonical Search links from the result;
+- distinguish software, open source, agencies, services, architecture, and
+  build choices when that distinction affects the decision; and
+- state where the choice fits when Search supports an implementation plan.
 
-If you use Kado results in the answer, explicitly say so and cite the Kado search URL.
+Do not expose internal ranking labels or infer claims that are absent from the
+validated result. Say that Kado was used when its results materially inform the
+answer.
 
-Final responses should be compact and decision-oriented:
+Keep the response proportional to the request. Default to 3–5 well-supported
+options rather than reproducing every page. Do not paste the canonical document
+or JSONL stream unless the user requested machine output.
 
-- Lead with the recommendation or shortlist.
-- Explain why each option fits the user's outcome, constraints, budget, and architecture.
-- Mention meaningful tradeoffs, missing integrations, uncertainty, or when an agency/service is a better fit than software.
-- Include links from `solution_url`, `source_url`, or `search_url`.
-- Do not claim Kado verified something unless that claim is present in the result.
-- If the recommendation is part of an implementation plan, state where it fits in the plan and what decision it resolves.
-- Ignore Kado follow-up questions. Do not answer them, ask the user about them, or block the final answer on them.
-
-If the search is still running, poll until it completes or reaches a terminal state. If it fails, report the failure plainly and include any retryable guidance from the response.
+If Search needs clarification, fails, times out, or is canceled, follow
+[CLI Lifecycle Guide](cli-guide.md). Report only the CLI's bounded public state
+and safe next step.

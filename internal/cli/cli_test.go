@@ -3,13 +3,22 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+	"unicode"
 
 	"github.com/kado-so/search/internal/agentauth"
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/diagnostic"
+	"github.com/kado-so/search/internal/releaseclient"
+	"github.com/kado-so/search/internal/searchclient"
+	"github.com/kado-so/search/internal/searchcontract"
+	"github.com/kado-so/search/internal/searchoutput"
 )
 
 func TestHelpFormsAreBoundedAndSilentOnStderr(t *testing.T) {
@@ -48,6 +57,28 @@ func TestVersionFormsAreSingleLineAndBounded(t *testing.T) {
 		if strings.Count(stdout.String(), "\n") != 1 || stdout.Len() > 181 {
 			t.Fatalf("Run(%q) version output = %q", args, stdout.String())
 		}
+	}
+}
+
+func TestVersionJSONIsDeterministicExecutableProvenance(t *testing.T) {
+	t.Parallel()
+
+	info := buildinfo.Info{
+		Version:          "0.1.0",
+		Commit:           "0123456789abcdef",
+		Date:             "2026-07-24T00:00:00Z",
+		Target:           "linux/arm64",
+		ReleaseKeyID:     "sha256:abc",
+		ReleasePublicKey: "public",
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := Run([]string{"version", "--json"}, &stdout, &stderr, info)
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	want := "{\"version\":\"0.1.0\",\"commit\":\"0123456789abcdef\",\"built_at\":\"2026-07-24T00:00:00Z\",\"target\":\"linux/arm64\",\"release_key_id\":\"sha256:abc\",\"release_public_key\":\"public\"}\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}
 }
 
@@ -238,6 +269,578 @@ func TestNonAuthAndInvalidAuthCommandsDoNotInitializeCredentialAccess(t *testing
 	}
 }
 
+func TestSearchRunsLifecycleWithBoundedOptionsAndSafeSummary(t *testing.T) {
+	t.Parallel()
+
+	canonical, err := searchcontract.ReleasedFixture("complete")
+	if err != nil {
+		t.Fatalf("ReleasedFixture(complete) error = %v", err)
+	}
+	search := &fakeSearchCommands{
+		result: searchRunResult{
+			status:    searchclient.StatusComplete,
+			canonical: canonical,
+			pages:     [][]byte{canonical},
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{
+			"search",
+			"--timeout",
+			"45s",
+			"--answer",
+			"Web",
+			"--first-page",
+			"--retry",
+			"find",
+			"agent",
+			"tools",
+		},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			newSearch: func() (searchCommands, error) {
+				return search, nil
+			},
+		},
+	)
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	expected, err := searchoutput.Render(
+		canonical,
+		[][]byte{canonical},
+		searchoutput.Options{Mode: searchoutput.ModeHuman},
+	)
+	if err != nil {
+		t.Fatalf("Render(expected human) error = %v", err)
+	}
+	if !bytes.Equal(stdout.Bytes(), expected) {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if search.query != "find agent tools" ||
+		search.options.Timeout != 45*time.Second ||
+		search.options.FollowPages ||
+		!search.options.RetryFailure ||
+		search.options.Clarify == nil {
+		t.Fatalf("query=%q options=%#v", search.query, search.options)
+	}
+	answer, err := search.options.Clarify(
+		context.Background(),
+		searchclient.Question{ID: "question_1"},
+	)
+	if err != nil || answer != "Web" {
+		t.Fatalf("clarifier answer=%q error=%v", answer, err)
+	}
+}
+
+func TestSearchFailuresAreBoundedAndNeverRenderPrivateCauses(t *testing.T) {
+	t.Parallel()
+
+	secret := "Bearer private-access-token /private/keychain/path"
+	for _, test := range []struct {
+		name     string
+		err      error
+		wantCode string
+		wantText string
+	}{
+		{
+			name:     "clarification",
+			err:      &searchclient.NeedsInputError{},
+			wantCode: "search_needs_input",
+			wantText: "Search requires clarification",
+		},
+		{
+			name: "structured failure",
+			err: &searchclient.FailureError{Failure: searchclient.Failure{
+				Code:      "source_unavailable",
+				Message:   "A source was unavailable.",
+				Retryable: true,
+			}},
+			wantCode: "source_unavailable",
+			wantText: "A source was unavailable.",
+		},
+		{
+			name:     "private cause",
+			err:      errors.New(secret),
+			wantCode: "search_failed",
+			wantText: "Could not complete the Search",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			search := &fakeSearchCommands{err: test.err}
+			var stdout, stderr bytes.Buffer
+			exitCode := runWithDependencies(
+				[]string{"search", "agent tools"},
+				&stdout,
+				&stderr,
+				buildinfo.Info{},
+				dependencies{
+					newSearch: func() (searchCommands, error) {
+						return search, nil
+					},
+				},
+			)
+			if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 ||
+				!strings.Contains(stderr.String(), test.wantCode) ||
+				!strings.Contains(stderr.String(), test.wantText) ||
+				strings.Contains(stderr.String(), secret) {
+				t.Fatalf(
+					"exit=%d stdout=%q stderr=%q",
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+		})
+	}
+}
+
+func TestSearchFailureStderrRemovesTerminalControlsAndPreservesUnicode(t *testing.T) {
+	t.Parallel()
+
+	search := &fakeSearchCommands{
+		err: &searchclient.FailureError{Failure: searchclient.Failure{
+			Code: "source_unavailable",
+			Message: "before\u001b\u0085\u009b\u2028\u2029\u202e\u2066after " +
+				"Café 世界 🧭",
+			Retryable: true,
+		}},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"search", "agent tools"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			newSearch: func() (searchCommands, error) {
+				return search, nil
+			},
+		},
+	)
+	if exitCode != diagnostic.ExitFailure ||
+		stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "before after Café 世界 🧭") ||
+		strings.ContainsFunc(stderr.String(), unsafeTerminalRune) {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestSearchOutputModesUseValidatedCanonicalBytesAndProjections(t *testing.T) {
+	t.Parallel()
+
+	canonical, err := searchcontract.ReleasedFixture("complete")
+	if err != nil {
+		t.Fatalf("ReleasedFixture(complete) error = %v", err)
+	}
+	for _, test := range []struct {
+		name    string
+		args    []string
+		options searchoutput.Options
+	}{
+		{
+			name:    "canonical JSON",
+			args:    []string{"search", "--json", "example query"},
+			options: searchoutput.Options{Mode: searchoutput.ModeJSON},
+		},
+		{
+			name:    "JSONL",
+			args:    []string{"search", "--jsonl", "example query"},
+			options: searchoutput.Options{Mode: searchoutput.ModeJSONL},
+		},
+		{
+			name:    "narrow human",
+			args:    []string{"search", "--width", "52", "example query"},
+			options: searchoutput.Options{Mode: searchoutput.ModeHuman, Width: 52},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			search := &fakeSearchCommands{result: searchRunResult{
+				status:    searchclient.StatusComplete,
+				canonical: canonical,
+				pages:     [][]byte{canonical},
+			}}
+			var stdout, stderr bytes.Buffer
+			exitCode := runWithDependencies(
+				test.args,
+				&stdout,
+				&stderr,
+				buildinfo.Info{},
+				dependencies{newSearch: func() (searchCommands, error) {
+					return search, nil
+				}},
+			)
+			want, err := searchoutput.Render(canonical, [][]byte{canonical}, test.options)
+			if err != nil {
+				t.Fatalf("Render(expected %s) error = %v", test.name, err)
+			}
+			if exitCode != 0 ||
+				stderr.Len() != 0 ||
+				!bytes.Equal(stdout.Bytes(), want) {
+				t.Fatalf(
+					"%s exit=%d stdout=%q stderr=%q",
+					test.name,
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+			if test.options.Mode == searchoutput.ModeJSON && search.options.FollowPages {
+				t.Fatal("--json followed pagination despite emitting one canonical document")
+			}
+		})
+	}
+}
+
+func TestSearchFailureModesEmitValidatedLifecycleDocumentBeforeSafeDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	canonical, err := searchcontract.ReleasedFixture("failed")
+	if err != nil {
+		t.Fatalf("ReleasedFixture(failed) error = %v", err)
+	}
+	search := &fakeSearchCommands{
+		result: searchRunResult{
+			status:    searchclient.StatusFailed,
+			canonical: canonical,
+		},
+		err: &searchclient.FailureError{Failure: searchclient.Failure{
+			Code:      "source_unavailable",
+			Message:   "A required public source was unavailable.",
+			Retryable: true,
+		}},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"search", "--json", "example query"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{newSearch: func() (searchCommands, error) {
+			return search, nil
+		}},
+	)
+	if exitCode != diagnostic.ExitFailure ||
+		!bytes.Equal(stdout.Bytes(), canonical) ||
+		!strings.Contains(stderr.String(), "source_unavailable") {
+		t.Fatalf(
+			"failure exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestSearchBrokenPipeStopsSilently(t *testing.T) {
+	t.Parallel()
+
+	canonical, err := searchcontract.ReleasedFixture("complete")
+	if err != nil {
+		t.Fatalf("ReleasedFixture(complete) error = %v", err)
+	}
+	search := &fakeSearchCommands{result: searchRunResult{
+		status:    searchclient.StatusComplete,
+		canonical: canonical,
+		pages:     [][]byte{canonical},
+	}}
+	var stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"search", "--jsonl", "example query"},
+		closedPipeWriter{},
+		&stderr,
+		buildinfo.Info{},
+		dependencies{newSearch: func() (searchCommands, error) {
+			return search, nil
+		}},
+	)
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("broken pipe exit=%d stderr=%q", exitCode, stderr.String())
+	}
+}
+
+func TestSearchUnsupportedMajorFailsClearlyBeforeOutput(t *testing.T) {
+	t.Parallel()
+
+	var value map[string]any
+	if err := json.Unmarshal(mustReleasedFixture(t, "complete"), &value); err != nil {
+		t.Fatalf("json.Unmarshal(complete) error = %v", err)
+	}
+	value["schema_version"] = "kado.search-document.v8"
+	value["metadata"].(map[string]any)["extensions"] = map[string]any{
+		"private": "Bearer must-not-appear",
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("json.Marshal(v8) error = %v", err)
+	}
+	search := &fakeSearchCommands{result: searchRunResult{
+		status:    searchclient.StatusComplete,
+		canonical: encoded,
+		pages:     [][]byte{encoded},
+	}}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"search", "--json", "example query"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{newSearch: func() (searchCommands, error) {
+			return search, nil
+		}},
+	)
+	if exitCode != diagnostic.ExitFailure ||
+		stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "search_document_version_unsupported") ||
+		!strings.Contains(stderr.String(), "v8") ||
+		strings.Contains(stderr.String(), "Bearer") ||
+		strings.Contains(stderr.String(), "must-not-appear") {
+		t.Fatalf(
+			"unsupported exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestInvalidSearchUsageDoesNotInitializeAuthentication(t *testing.T) {
+	t.Parallel()
+
+	dependencies := dependencies{
+		newSearch: func() (searchCommands, error) {
+			t.Fatal("Search authentication initialized")
+			return nil, nil
+		},
+	}
+	for _, args := range [][]string{
+		{"search"},
+		{"search", "--unknown", "query"},
+		{"search", "--timeout", "forever", "query"},
+		{"search", "--answer", "one", "--answer", "two", "query"},
+		{"search", "--json", "--jsonl", "query"},
+		{"search", "--width", "39", "query"},
+		{"search", "--width", "161", "query"},
+	} {
+		var stdout, stderr bytes.Buffer
+		exitCode := runWithDependencies(
+			args,
+			&stdout,
+			&stderr,
+			buildinfo.Info{},
+			dependencies,
+		)
+		if exitCode != diagnostic.ExitUsage {
+			t.Fatalf("Run(%q) exit=%d stderr=%q", args, exitCode, stderr.String())
+		}
+	}
+}
+
+func TestUpdateUsesVerifiedReleaseBoundaryAndDeterministicOutput(t *testing.T) {
+	t.Parallel()
+
+	releases := &fakeReleaseCommands{result: releaseclient.Result{
+		FromVersion: "0.1.0",
+		ToVersion:   "0.2.0",
+		Target:      "linux/amd64",
+		DryRun:      true,
+	}}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"update", "--dry-run", "--allow-downgrade"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{Version: "0.1.0"},
+		dependencies{newRelease: func(buildinfo.Info) (releaseCommands, error) {
+			return releases, nil
+		}},
+	)
+	if exitCode != 0 || stderr.Len() != 0 ||
+		stdout.String() != "verified kado 0.2.0 for linux/amd64; no files changed\n" {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+	if !releases.options.DryRun || !releases.options.AllowDowngrade ||
+		releases.options.CurrentVersion != "0.1.0" {
+		t.Fatalf("update options = %#v", releases.options)
+	}
+}
+
+func TestUpdateDowngradeFailureIsSafe(t *testing.T) {
+	t.Parallel()
+
+	private := "private-signing-seed /private/release/path"
+	releases := &fakeReleaseCommands{
+		err: errors.Join(releaseclient.ErrDowngrade, errors.New(private)),
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"update"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{Version: "0.2.0"},
+		dependencies{newRelease: func(buildinfo.Info) (releaseCommands, error) {
+			return releases, nil
+		}},
+	)
+	if exitCode != diagnostic.ExitFailure ||
+		stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "release_downgrade_blocked") ||
+		strings.Contains(stderr.String(), private) {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestUninstallPreservesCredentialsUnlessPurgeIsExplicit(t *testing.T) {
+	t.Parallel()
+
+	for _, purge := range []bool{false, true} {
+		purge := purge
+		t.Run(strconv.FormatBool(purge), func(t *testing.T) {
+			t.Parallel()
+			auth := &fakeAuthCommands{revoked: agentauth.CredentialStatus{
+				Status: agentauth.StatusRevoked,
+			}}
+			releases := &fakeReleaseCommands{}
+			args := []string{"uninstall", "--yes"}
+			if purge {
+				args = append(args, "--purge-credentials")
+			}
+			var stdout, stderr bytes.Buffer
+			exitCode := runWithDependencies(
+				args,
+				&stdout,
+				&stderr,
+				buildinfo.Info{},
+				dependencies{
+					newAuth: func() (authCommands, error) {
+						if !purge {
+							t.Fatal("credential access initialized without purge")
+						}
+						return auth, nil
+					},
+					newRelease: func(buildinfo.Info) (releaseCommands, error) {
+						return releases, nil
+					},
+				},
+			)
+			if exitCode != 0 || stderr.Len() != 0 || !releases.uninstalled {
+				t.Fatalf(
+					"exit=%d stdout=%q stderr=%q",
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+			if purge != (auth.revokeCalls == 1) {
+				t.Fatalf("purge=%t revokeCalls=%d", purge, auth.revokeCalls)
+			}
+			if !purge && !strings.Contains(stdout.String(), "credentials were preserved") {
+				t.Fatalf("stdout = %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestUninstallRequiresConfirmationBeforeAccessingAnything(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"uninstall"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			newAuth: func() (authCommands, error) {
+				t.Fatal("credential access initialized")
+				return nil, nil
+			},
+			newRelease: func(buildinfo.Info) (releaseCommands, error) {
+				t.Fatal("release access initialized")
+				return nil, nil
+			},
+		},
+	)
+	if exitCode != diagnostic.ExitUsage || stdout.Len() != 0 {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestReleaseVerifyUsesCandidateBundleBoundary(t *testing.T) {
+	t.Parallel()
+
+	releases := &fakeReleaseCommands{
+		metadata: releaseclient.Metadata{Version: "0.1.0"},
+		target: releaseclient.Target{
+			OS:   "darwin",
+			Arch: "arm64",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"release", "verify", "--directory", "/downloaded/release"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{newRelease: func(buildinfo.Info) (releaseCommands, error) {
+			return releases, nil
+		}},
+	)
+	if exitCode != 0 || stderr.Len() != 0 ||
+		stdout.String() != "verified kado 0.1.0 for darwin/arm64\n" ||
+		releases.directory != "/downloaded/release" {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q directory=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+			releases.directory,
+		)
+	}
+}
+
+type closedPipeWriter struct{}
+
+func (closedPipeWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
+func mustReleasedFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	value, err := searchcontract.ReleasedFixture(name)
+	if err != nil {
+		t.Fatalf("ReleasedFixture(%s) error = %v", name, err)
+	}
+	return value
+}
+
 type fakeAuthCommands struct {
 	status      agentauth.CredentialStatus
 	revoked     agentauth.CredentialStatus
@@ -245,6 +848,55 @@ type fakeAuthCommands struct {
 	revokeErr   error
 	statusCalls int
 	revokeCalls int
+}
+
+type fakeSearchCommands struct {
+	result  searchRunResult
+	err     error
+	query   string
+	options searchclient.RunOptions
+}
+
+type fakeReleaseCommands struct {
+	result       releaseclient.Result
+	err          error
+	options      releaseclient.Options
+	uninstalled  bool
+	uninstallErr error
+	metadata     releaseclient.Metadata
+	target       releaseclient.Target
+	directory    string
+	verifyErr    error
+}
+
+func (releases *fakeReleaseCommands) Update(
+	_ context.Context,
+	options releaseclient.Options,
+) (releaseclient.Result, error) {
+	releases.options = options
+	return releases.result, releases.err
+}
+
+func (releases *fakeReleaseCommands) Uninstall() error {
+	releases.uninstalled = true
+	return releases.uninstallErr
+}
+
+func (releases *fakeReleaseCommands) VerifyBundle(
+	directory string,
+) (releaseclient.Metadata, releaseclient.Target, error) {
+	releases.directory = directory
+	return releases.metadata, releases.target, releases.verifyErr
+}
+
+func (search *fakeSearchCommands) Run(
+	_ context.Context,
+	query string,
+	options searchclient.RunOptions,
+) (searchRunResult, error) {
+	search.query = query
+	search.options = options
+	return search.result, search.err
 }
 
 func (auth *fakeAuthCommands) Status(
@@ -278,6 +930,11 @@ func runTestAuth(
 		}},
 	)
 	return stdoutBuffer.String(), stderrBuffer.String(), exitCode
+}
+
+func unsafeTerminalRune(character rune) bool {
+	return unicode.IsControl(character) && character != '\n' ||
+		unicode.In(character, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 func assertNoCredentialSecrets(t *testing.T, output string) {

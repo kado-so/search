@@ -95,3 +95,175 @@
   delete a concurrently installed replacement; it returns
   `ErrCredentialChanged`, leaves the replacement intact, and asks the caller to
   retry if that newer installation should also be revoked.
+
+## Phase 04A Kado Search skill
+
+- `skills/kado-search/SKILL.md` is the repository's only canonical skill
+  instruction source. It invokes the installed `kado` CLI exclusively; API
+  keys, device login, direct HTTP, browser credentials, copied tokens, and
+  temporary auth scripts have no fallback path.
+- Progressive details live one level below the skill in `query-guide.md`,
+  `cli-guide.md`, and `response-guide.md`. The lifecycle guide owns output-mode
+  selection, clarification, bounded retry, pagination, timeout/cancellation,
+  installation, and safe authentication troubleshooting. Normal agent
+  recommendation/synthesis uses lossless multi-page `--jsonl`; human output is
+  only for quick/operator inspection and `--json` is one exact document.
+- `tests/test_kado_search_skill.py` validates skill/frontmatter/reference
+  structure, single ownership, obsolete-flow absence, OpenAI metadata,
+  representative trigger/lifecycle evaluations, and a built CLI flag smoke.
+  Run it with Python `-B`; repository-scoped ignores cover test bytecode caches.
+  README validation uses a `command -v`-resolved interpreter and disposable
+  venv so both system validators receive PyYAML without a repository dependency.
+
+## Phase 04A Search lifecycle client
+
+- `internal/searchclient` owns the protected `/search` HTTP boundary. It sends
+  only `Accept: application/vnd.kado.search.v1+json`, rejects redirects and
+  foreign issuer/host links, bounds document/error bodies, preserves exact
+  canonical response bytes, and validates every accepted document before it
+  reaches lifecycle handling or output.
+- The client derives status/clarify/cancel/retry operations from the
+  server-provided `links.self` identity and follows pagination relation URLs
+  exactly. It never reconstructs a cursor/page relation or follows a relation
+  outside the configured HTTPS resource. Initial documents and every consumed
+  lifecycle/pagination relation must retain the exact requested canonical
+  query; same-origin links for a different query fail before another request.
+- `kado search` reuses Phase 02C management-key enrollment and verified
+  short-lived tokens. Admission now requests the exact sorted Phase 03A scope
+  set: `search:cancel search:create search:read search:refine`.
+- One rejected bearer request can force one token refresh. Only GET operations
+  receive bounded transport/502/503/504 retry; form-encoded lifecycle mutations
+  are not blindly replayed. Every bounded JSON response body is checked for
+  current bearer reflection both as raw bytes and across all decoded nested
+  string tokens before refresh, retry, diagnostics, or document output.
+  Escaped credentials, malformed JSON, invalid/unpaired UTF-16 surrogates, and
+  reflected credentials all fail closed without changing the existing
+  document/error byte ceilings.
+- `searchclient.Run` supports polling, clarification callbacks, one explicit
+  retryable-failure retry, opaque pagination, explicit cancellation, and
+  bounded cancellation after a local deadline or interrupt. Client-level
+  lifecycle-operation and clarification-submission budgets remain enforced
+  when `RunOptions.Timeout` is zero; a blocking clarifier is isolated so
+  cancellation cannot hang `Run`.
+- `internal/searchcontract` pins the released Search Document v1 manifest hash
+  outside generated code, verifies every manifest artifact checksum, and
+  embeds deterministically generated copies of the authoritative JSON Schema
+  2020-12, JSON-LD 1.1 context, semantic-rule manifest, and all lifecycle
+  fixtures from the sibling `kado-app` repository. `go generate
+  ./internal/searchcontract` fails unless the source release matches that pin.
+- Contract acceptance rejects duplicate JSON members, trailing data, invalid
+  UTF-8, unsupported envelopes, schema drift, all 18 released semantic
+  invariants, and non-canonical JSON-LD expansion/compaction. JSON-LD context
+  loading is local-only. Unsupported majors retain a distinct bounded error
+  containing only the parsed major number.
+- JSON-LD 1.1 compaction has no `@container` for `result_set.items`; the
+  authoritative processor therefore emits an empty array for zero items, the
+  item object directly for one item, and an array for many. Semantic validation
+  normalizes those cardinalities only after canonical expansion checks and
+  preserves arbitrary `data` objects, arrays, scalars, and null.
+- `internal/searchoutput` validates every page before returning any bytes.
+  `--json` returns one isolated byte-for-byte canonical server document and
+  disables pagination following. Human output is deterministic, terminal-safe,
+  display-width-aware, and bounded. JSONL is a deterministic bounded
+  projection with explicit pagination/link records and preserves each
+  arbitrary `data` value as raw object, array, scalar, or null JSON.
+- CLI output is rendered completely before one write. A broken pipe exits
+  silently and successfully; other writes fail with a safe diagnostic.
+  `diagnostic.TerminalSafeText` is the shared bounded sanitizer for terminal
+  projections, Search Document failures, HTTP problems, and stderr; it removes
+  C0/C1, format/bidi controls, and Zl/Zp while preserving ordinary Unicode.
+  Cross-repository asset checks, released lifecycle fixtures, human/JSONL
+  goldens, and exact JSON checks cover both cursor and page pagination.
+
+## Phase 04A distribution manifests
+
+- `distribution/kado-search.manifest.json` is the only source for plugin/skill
+  display metadata, semantic version, icons, marketplace policy, homepage, and
+  exact plugin/marketplace/repository identities. Its Draft 2020-12 schema is
+  `distribution/kado-search.manifest.schema.json`.
+- Install/uninstall commands are not accepted as manifest strings. The
+  generator derives exact literal token tuples from `kado-search`, marketplace
+  `kado`, and GitHub source `kado-so/search`, validates every token against a
+  shell-metacharacter-free grammar, and only then joins them for generated
+  documentation.
+- Draft 2020-12 validation is mandatory before generation or drift checking.
+  The documented isolated environment installs
+  `tools/requirements-validation.txt`; missing `jsonschema` fails with that
+  instruction rather than skipping the schema gate.
+- `tools/generate_distribution_manifests.py` generates/checks the Codex plugin
+  and marketplace, Claude plugin and marketplace, OpenAI skill metadata,
+  Agent Skills frontmatter, and `distribution/INSTALL.md`. It preserves the
+  canonical `skills/kado-search/SKILL.md` body rather than creating another
+  instruction copy.
+- Both marketplaces intentionally use the repository root source `./`. Codex
+  and Claude clean-install tests prove that path, and it packages the one
+  cross-platform `skills/kado-search` owner without duplicated bodies or
+  out-of-package symlinks.
+- The stable plugin ID is `kado-search@kado`. Plugin skill namespaces are
+  `kado-search:kado-search` in Codex and `/kado-search:kado-search` in Claude;
+  standalone Agent Skills installs retain `kado-search`.
+- Generated Claude metadata uses the conservative fields accepted by the local
+  supported Claude validator as well as the current specification. The current
+  Agent Skills source still records the installed-CLI compatibility condition,
+  but generated frontmatter omits the optional `compatibility` field because
+  the bundled older validator rejects it; the canonical skill body and install
+  reference retain the requirement and `https://kado.so/install`.
+- `KADO_DISTRIBUTION_INSTALL_SMOKE=1 python3 -B -m unittest
+  tests.test_distribution_manifests.DistributionInstallSmokeTests -v` builds a
+  temporary `kado` and proves isolated Codex, Claude, and Agent Skills
+  install/discovery/uninstall flows. The release builder stamps the same source
+  version into binaries and owns binary URLs, checksums, update, and CLI
+  uninstall behavior.
+
+## Phase 04A CLI releases
+
+- `.prototools` pins Go 1.26.4. `tools/release` refuses a different toolchain
+  and reads version, repository, executable, and install URL only from
+  `distribution/kado-search.manifest.json`.
+- One deterministic build produces direct versioned binaries and safe
+  `tar.gz`/ZIP archives for Linux, macOS, and Windows on amd64 and arm64.
+  `CGO_ENABLED=0`, fixed source time, `-trimpath`, disabled VCS auto-stamping,
+  an empty Go build ID, canonical JSON, and fixed archive headers make repeat
+  builds byte-identical.
+- Release output includes SHA-256 checksums, per-target SPDX 2.3 SBOMs, one
+  SLSA v1/in-toto provenance statement, canonical `kado.release.v1` metadata,
+  a detached Ed25519 signature, the public verifier, and generated local
+  install/uninstall instructions and scripts. The builder self-verifies every
+  target before atomically exposing the output directory.
+- `KADO_RELEASE_SIGNING_KEY` is the only signing input. It is a base64 Ed25519
+  seed read from the environment, excluded from build subprocess environments,
+  never accepted as an argument or printed, and not present in the repository.
+  CI dry runs generate one ephemeral key at runtime; production signing is a
+  separately documented protected-secret boundary and CI does not publish.
+- Release binaries stamp version, commit, UTC time, target, signing-key ID,
+  signing public key, and stable metadata URL. `kado version --json` exposes
+  deterministic non-secret provenance. The candidate's bundled
+  `kado release verify --directory` validates the downloaded local bundle
+  without requiring OpenSSL or another platform verifier.
+- Release protocol v1 deliberately has no in-band signing-key rotation. The
+  embedded key must match both signed metadata and the candidate binary; a key
+  change requires an out-of-band reinstall from the reviewed official install
+  boundary.
+- `kado update` accepts only same-origin HTTPS metadata/assets, rejects
+  redirects and size overflows, verifies the trusted signature, checksums,
+  SBOM/provenance, archive paths/types/modes, and candidate executable before a
+  same-directory atomic replace. An exclusive per-executable lock serializes
+  replace/uninstall. Failures before commit restore the prior binary and
+  verified candidate; post-commit cleanup failures retain the verified new
+  binary and never expose an empty or corrupt executable. Downgrades require
+  `--allow-downgrade`; `--dry-run` performs the full verification without
+  writes, including when already current.
+- Generated install scripts refuse to overwrite an existing binary so they
+  cannot bypass update/downgrade policy. Generated uninstall scripts and
+  `kado uninstall --yes` remove only the executable. Credentials are preserved
+  unless `--purge-credentials` is explicit, in which case authenticated
+  revocation must succeed before removal.
+- `.github/workflows/cli-release.yml` runs Go test/vet/race on Linux, macOS,
+  and Windows. Every platform builds a generated signed bundle, executes its
+  native installer and uninstaller (including parsed PowerShell), verifies the
+  installed candidate and bundle, preserves a credential sentinel, and updates
+  between real signed native binaries. A separate job validates Goal 4
+  metadata, builds all six targets twice with one ephemeral key, and compares
+  every byte. CI never uploads or publishes output. `docs/RELEASING_CLI.md`
+  owns the signing, reproducibility, verification, rollback, downgrade,
+  uninstall, and publication boundary.

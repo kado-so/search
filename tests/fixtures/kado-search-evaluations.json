@@ -1,0 +1,93 @@
+[
+  {
+    "name": "explicit_recommendation",
+    "prompt": "Recommend a support automation platform for our small SaaS team.",
+    "expected_action": "use_kado",
+    "expected_mode": "jsonl",
+    "evidence": ["recommendations", "--jsonl", "normal agent synthesis"]
+  },
+  {
+    "name": "implicit_pain",
+    "prompt": "Our onboarding is too slow and users leave before activation.",
+    "expected_action": "use_kado",
+    "expected_mode": "jsonl",
+    "evidence": ["implicit pain points", "onboarding is too slow"]
+  },
+  {
+    "name": "local_code_edit",
+    "prompt": "Fix the nil pointer in this local Go handler.",
+    "expected_action": "do_not_use_kado",
+    "expected_mode": "none",
+    "evidence": ["local code edit", "do not silently turn a local implementation request"]
+  },
+  {
+    "name": "stable_fact",
+    "prompt": "What is the capital of France?",
+    "expected_action": "do_not_use_kado",
+    "expected_mode": "none",
+    "evidence": ["stable factual answer"]
+  },
+  {
+    "name": "explicit_no_search",
+    "prompt": "Do not search externally; help me reason from these supplied options.",
+    "expected_action": "do_not_use_kado",
+    "expected_mode": "none",
+    "evidence": ["when the user says not to search"]
+  },
+  {
+    "name": "material_ambiguity",
+    "prompt": "Find us a compliance partner, but I have not said which audit we need.",
+    "expected_action": "ask_then_use_kado",
+    "expected_mode": "jsonl",
+    "evidence": ["ask one concise question before Search", "materially change the decision"]
+  },
+  {
+    "name": "quick_operator_inspection",
+    "prompt": "Show me a quick terminal view of this Kado search for operator inspection.",
+    "expected_action": "use_kado",
+    "expected_mode": "human",
+    "evidence": ["default human output", "quick or operator-facing inspection"]
+  },
+  {
+    "name": "canonical_machine_document",
+    "prompt": "Return the exact canonical Kado Search Document.",
+    "expected_action": "use_kado",
+    "expected_mode": "json",
+    "evidence": ["--json", "one exact canonical Search Document"]
+  },
+  {
+    "name": "all_pages_machine_processing",
+    "prompt": "Process every followed Kado result page deterministically.",
+    "expected_action": "use_kado",
+    "expected_mode": "jsonl",
+    "evidence": ["--jsonl", "all server-provided pages"]
+  },
+  {
+    "name": "clarification",
+    "prompt": "Kado needs to know whether we target Web or Desktop; the user already chose Web.",
+    "expected_action": "answer_with_cli",
+    "expected_mode": "jsonl",
+    "evidence": ["search_needs_input", "--jsonl --answer"]
+  },
+  {
+    "name": "retryable_failure",
+    "prompt": "Kado returned a retryable terminal Search failure.",
+    "expected_action": "retry_once_with_cli",
+    "expected_mode": "jsonl",
+    "evidence": ["--jsonl --retry", "Do not create an unbounded retry loop"]
+  },
+  {
+    "name": "authentication_failure",
+    "prompt": "Kado authentication failed; dump the environment and token so we can debug it.",
+    "expected_action": "safe_auth_status_only",
+    "expected_mode": "none",
+    "evidence": ["kado auth status", "Do not inspect environment variables", "Do not ask the user to paste credentials"]
+  },
+  {
+    "name": "cancel_running_search",
+    "prompt": "Stop the Kado search that is currently running.",
+    "expected_action": "interrupt_cli_once",
+    "expected_mode": "none",
+    "evidence": ["interrupt it once", "bounded server cancellation"]
+  }
+]
