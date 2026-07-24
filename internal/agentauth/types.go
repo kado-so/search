@@ -28,6 +28,7 @@ var (
 	ErrAdmissionRequired  = errors.New("agent enrollment admission proof required")
 	ErrChallengeLimits    = errors.New("agent admission challenge exceeds client limits")
 	ErrChallengeExpired   = errors.New("agent admission challenge expired")
+	ErrTokenRateLimited   = errors.New("agent token issuance rate limited")
 	ErrAuthentication     = errors.New("agent authentication failed")
 )
 
@@ -40,6 +41,7 @@ const (
 
 type Limits struct {
 	MaxResponseBytes       int64
+	MaxResponseHeaderBytes int64
 	MaxClockSkew           time.Duration
 	MaxProofLifetime       time.Duration
 	MaxHTTPTimeout         time.Duration
@@ -56,6 +58,7 @@ type Limits struct {
 func DefaultLimits() Limits {
 	return Limits{
 		MaxResponseBytes:       256 * 1024,
+		MaxResponseHeaderBytes: 32 * 1024,
 		MaxClockSkew:           30 * time.Second,
 		MaxProofLifetime:       60 * time.Second,
 		MaxHTTPTimeout:         30 * time.Second,

@@ -267,3 +267,32 @@
   every byte. CI never uploads or publishes output. `docs/RELEASING_CLI.md`
   owns the signing, reproducibility, verification, rollback, downgrade,
   uninstall, and publication boundary.
+
+## Phase 06A autonomous-agent client hardening
+
+- `Limits` now bounds total response-header bytes in addition to response
+  bodies, HTTP time, proof/challenge/session/token lifetimes, clock skew,
+  Argon2 memory, passes, parallelism, attempts, and elapsed solving time.
+  Standard transports are cloned with `MaxResponseHeaderBytes`; custom
+  transports still receive an application-level aggregate header check.
+- Client limit validation includes the aggregate Argon2 memory-work ceiling.
+  The solver checks cancellation and elapsed time before and after every
+  derivation, clears rejected derived keys, and never accepts server parameters
+  above the configured memory/pass/parallelism maxima.
+- Access-token verification now requires exact `nbf = iat`, applies the same
+  30-second clock-skew rule as the TypeScript verifier, and retains exact
+  issuer/audience/principal/client/session/mode/scope/JTI/lifetime and Ed25519
+  `kid`/`typ` checks. The pinned cross-language token profile records `nbf`, the
+  clock-skew maximum, the trusted previous-key schedule fields, timed JWKS
+  omission, and the 360-second active/previous signing-key overlap rule.
+- OAuth token exhaustion is pinned as the extension error
+  `rate_limited` with HTTP 429 and is exposed to callers as
+  `ErrTokenRateLimited`; a status/code mismatch remains a generic
+  authentication failure.
+- Bounded fuzz targets exercise strict JSON decoding and attacker-controlled
+  challenge parameters. Token flow tests cover not-before tampering and future
+  clock skew; formatting tests continue to prove that bearer/session
+  credentials never appear through `String`, `GoString`, or error rendering.
+- The Search repository remains the sole owner of the `kado-search` skill. Its
+  pinned validator suite proves that API-key, device-flow, copied-token,
+  browser-cookie, and direct-HTTP implementations are absent from the skill.
