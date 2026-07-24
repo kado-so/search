@@ -58,10 +58,21 @@ The repository produces:
 
 - cross-platform Go binaries;
 - checksums and signed release metadata;
+- `distribution/kado-installation.v1.gen.json`, the one versioned installation
+  description for the CLI, skill, plugins, supported targets, approval policy,
+  and public service discovery links;
 - install/update/uninstall instructions;
 - Codex and Claude plugin/marketplace manifests;
 - Agent Skills-compatible `SKILL.md`; and
 - release/version metadata consumed by `kado.so/install`.
+
+The installation description derives product identity and version from
+`distribution/kado-search.manifest.json`, validates against its Draft 2020-12
+schema, and has a deterministic checksum manifest. `kado-app` consumes an exact
+generated copy and must not redefine its commands or release availability.
+Until signed CLI release metadata is actually published, the description stays
+explicitly `unpublished` and contains discovery fields rather than fabricated
+artifact URLs or checksums.
 
 ## Branching
 

@@ -1,21 +1,24 @@
 # Install Kado Search
 
-This file is generated from `distribution/kado-search.manifest.json`.
+This file is generated from
+`distribution/kado-installation.v1.gen.json`, which in turn derives identity
+and version from `distribution/kado-search.manifest.json`.
 Do not edit it directly.
 
 Every supported surface loads the one Agent Skills package at
 `skills/kado-search` and invokes the installed `kado`
-executable. Install the CLI from [https://kado.so/install](https://kado.so/install)
-before using the skill. CLI binary release commands, checksums, updates, and
-removal are published by the release phase and are intentionally not duplicated
-here.
+executable. The CLI is required before the skill can perform Search; discover
+its release availability at
+[https://kado.so/install](https://kado.so/install).
 
-The release builder reads this same canonical source for version, repository,
-install URL, and executable identity. It produces six signed platform bundles,
-checksums, SBOMs, provenance, and local install/uninstall scripts. Download
-release files before running a script; no supported flow pipes a network
-response into a shell. See `docs/RELEASING_CLI.md` for the signing boundary and
-operator dry run.
+CLI release availability is currently `unpublished`.
+Do not claim that a downloadable CLI release exists until the canonical
+metadata and detached signature resolve and verify. Once published, discover
+checksums, provenance, per-platform SBOMs, archives, and generated local
+installers through the signed release metadata at
+[https://kado.so/install/releases/stable/release-metadata.json](https://kado.so/install/releases/stable/release-metadata.json).
+Download the complete release bundle before running its generated installer;
+no supported flow pipes a network response into a shell.
 
 Installed release binaries support:
 
@@ -28,6 +31,10 @@ kado uninstall --yes
 
 Uninstall preserves the autonomous-agent credential by default. Credential
 revocation is separate and happens only when `--purge-credentials` is explicit.
+Every CLI, plugin, skill, update, and uninstall action requires explicit user
+confirmation. The phrase `install kado.so` is a request to explain the
+supported targets and request approval, not authorization to mutate the user's
+environment.
 
 ## Agent Skills
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -10,6 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -17,6 +19,15 @@ SOURCE_PATH = REPOSITORY / "distribution" / "kado-search.manifest.json"
 SCHEMA_PATH = REPOSITORY / "distribution" / "kado-search.manifest.schema.json"
 GENERATE = REPOSITORY / "tools" / "generate_distribution_manifests.py"
 SKILL = REPOSITORY / "skills" / "kado-search"
+INSTALLATION_DESCRIPTION = (
+    REPOSITORY / "distribution" / "kado-installation.v1.gen.json"
+)
+INSTALLATION_SCHEMA = (
+    REPOSITORY / "distribution" / "kado-installation.v1.schema.json"
+)
+INSTALLATION_MANIFEST = (
+    REPOSITORY / "distribution" / "kado-installation.v1.manifest.gen.json"
+)
 sys.path.insert(0, str(REPOSITORY / "tools"))
 import generate_distribution_manifests as generator  # noqa: E402
 
@@ -222,6 +233,229 @@ class DistributionManifestTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_installation_description_schema_identity_and_release_truth(self) -> None:
+        source = generator.load_source()
+        description = load_json(INSTALLATION_DESCRIPTION)
+        generator.validate_installation_description(description)
+
+        self.assertEqual(description["schema_version"], "kado.installation.v1")
+        self.assertEqual(description["product"]["id"], source["plugin"]["id"])
+        self.assertEqual(
+            description["product"]["version"],
+            source["plugin"]["version"],
+        )
+        self.assertEqual(
+            description["product"]["repository_url"],
+            source["plugin"]["repository"],
+        )
+        self.assertEqual(
+            [agent["id"] for agent in description["supported_agents"]],
+            ["agent-skills", "codex", "claude-code"],
+        )
+        self.assertEqual(
+            {
+                (platform["os"], platform["arch"])
+                for platform in description["supported_platforms"]
+            },
+            {
+                ("darwin", "amd64"),
+                ("darwin", "arm64"),
+                ("linux", "amd64"),
+                ("linux", "arm64"),
+                ("windows", "amd64"),
+                ("windows", "arm64"),
+            },
+        )
+        self.assertEqual(description["release"]["availability"], "unpublished")
+        self.assertFalse(description["release"]["installable"])
+        self.assertNotIn("targets", description["release"])
+        self.assertNotIn("sha256", description["release"])
+        self.assertEqual(
+            set(description["release"]["verification_discovery"]),
+            {"public_key", "signature", "checksums", "provenance", "sbom"},
+        )
+        flattened = json.dumps(description).casefold()
+        self.assertNotIn("curl ", flattened)
+        self.assertNotIn("invoke-webrequest", flattened)
+        self.assertNotIn("latest.zip", flattened)
+        self.assertNotIn("latest.tar", flattened)
+
+    def test_installation_description_checksums_are_exact(self) -> None:
+        manifest = load_json(INSTALLATION_MANIFEST)
+        self.assertEqual(
+            manifest["schema_version"],
+            "kado.installation-manifest.v1",
+        )
+        self.assertEqual(
+            manifest["description_version"],
+            "kado.installation.v1",
+        )
+        for artifact in manifest["artifacts"].values():
+            path = REPOSITORY / artifact["path"]
+            contents = path.read_bytes()
+            self.assertEqual(artifact["size"], len(contents))
+            self.assertEqual(
+                artifact["sha256"],
+                hashlib.sha256(contents).hexdigest(),
+            )
+        description = load_json(INSTALLATION_DESCRIPTION)
+        for key, path in (
+            ("distribution_source", SOURCE_PATH),
+            ("schema", INSTALLATION_SCHEMA),
+        ):
+            self.assertEqual(
+                description["source_integrity"][key]["sha256"],
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                description["source_integrity"][key]["size"],
+                len(path.read_bytes()),
+            )
+
+    def test_installation_description_rejects_identity_bound_mutations(
+        self,
+    ) -> None:
+        source = generator.load_source()
+        canonical = load_json(INSTALLATION_DESCRIPTION)
+        mutations = []
+
+        approval = copy.deepcopy(canonical)
+        approval["approval"]["required"] = False
+        mutations.append(("approval required", approval))
+
+        update_approval = copy.deepcopy(canonical)
+        update_approval["cli"]["update"]["approval_required"] = False
+        mutations.append(("update approval", update_approval))
+
+        duplicate_agent = copy.deepcopy(canonical)
+        duplicate_agent["supported_agents"][1] = copy.deepcopy(
+            duplicate_agent["supported_agents"][0]
+        )
+        mutations.append(("duplicate agent", duplicate_agent))
+
+        wrong_command = copy.deepcopy(canonical)
+        wrong_command["supported_agents"][1]["install_steps"][1]["command"][-1] = (
+            "other@marketplace"
+        )
+        mutations.append(("agent command", wrong_command))
+
+        wrong_package = copy.deepcopy(canonical)
+        wrong_package["supported_agents"][2]["package_id"] = "other@kado"
+        mutations.append(("agent package", wrong_package))
+
+        foreign_manifest = copy.deepcopy(canonical)
+        foreign_manifest["supported_agents"][1]["manifest_urls"][0] = (
+            "https://example.test/marketplace.json"
+        )
+        mutations.append(("foreign agent manifest", foreign_manifest))
+
+        foreign_source = copy.deepcopy(canonical)
+        foreign_source["supported_agents"][0]["package_url"] = (
+            "https://example.test/search"
+        )
+        mutations.append(("foreign package source", foreign_source))
+
+        duplicate_platform = copy.deepcopy(canonical)
+        duplicate_platform["supported_platforms"][5] = copy.deepcopy(
+            duplicate_platform["supported_platforms"][0]
+        )
+        mutations.append(("duplicate platform tuple", duplicate_platform))
+
+        incoherent_platform = copy.deepcopy(canonical)
+        incoherent_platform["supported_platforms"][4]["archive_format"] = "tar.gz"
+        mutations.append(("platform archive", incoherent_platform))
+
+        source_digest = copy.deepcopy(canonical)
+        source_digest["source_integrity"]["distribution_source"]["sha256"] = "0" * 64
+        mutations.append(("source checksum", source_digest))
+
+        source_size = copy.deepcopy(canonical)
+        source_size["source_integrity"]["schema"]["size"] += 1
+        mutations.append(("source size", source_size))
+
+        foreign_product_url = copy.deepcopy(canonical)
+        foreign_product_url["product"]["description_url"] = (
+            "https://example.test/install.json"
+        )
+        mutations.append(("foreign product URL", foreign_product_url))
+
+        foreign_release_url = copy.deepcopy(canonical)
+        foreign_release_url["release"]["metadata_url"] = (
+            "https://example.test/release.json"
+        )
+        mutations.append(("foreign release URL", foreign_release_url))
+
+        for label, mutated in mutations:
+            with self.subTest(label=label):
+                with self.assertRaises(generator.ManifestError):
+                    generator.validate_installation_description(mutated, source)
+
+    def test_search_owned_installation_urls_resolve_to_owned_files(self) -> None:
+        description = load_json(INSTALLATION_DESCRIPTION)
+        raw_prefix = (
+            "https://raw.githubusercontent.com/kado-so/search/main/"
+        )
+        urls = {
+            description["$schema"],
+            description["product"]["description_url"],
+            description["product"]["description_manifest_url"],
+        }
+        for agent in description["supported_agents"]:
+            urls.update(agent["manifest_urls"])
+            package_url = agent["package_url"]
+            if package_url.endswith("/tree/main/skills/kado-search"):
+                self.assertTrue(
+                    (REPOSITORY / "skills" / "kado-search").is_dir()
+                )
+            else:
+                self.assertEqual(package_url, "https://github.com/kado-so/search")
+        urls.update(
+            artifact["url"]
+            for artifact in load_json(INSTALLATION_MANIFEST)["artifacts"].values()
+        )
+        for url in sorted(urls):
+            with self.subTest(url=url):
+                parsed = urlparse(url)
+                self.assertEqual(parsed.scheme, "https")
+                self.assertIsNone(parsed.username)
+                self.assertIsNone(parsed.password)
+                self.assertTrue(url.startswith(raw_prefix))
+                relative = url.removeprefix(raw_prefix)
+                self.assertTrue(
+                    (REPOSITORY / relative).is_file(),
+                    f"broken Search-owned installation link: {url}",
+                )
+
+    def test_machine_and_human_install_instructions_share_tokenized_source(
+        self,
+    ) -> None:
+        description = load_json(INSTALLATION_DESCRIPTION)
+        document = (REPOSITORY / "distribution" / "INSTALL.md").read_text(
+            encoding="utf-8"
+        )
+        operations = []
+        for agent in description["supported_agents"]:
+            operations.extend(agent["install_steps"])
+            operations.extend(agent["uninstall_steps"])
+        operations.extend(
+            [
+                description["cli"]["update"],
+                description["cli"]["uninstall"],
+            ]
+        )
+        for operation in operations:
+            command = generator.render_command(tuple(operation["command"]))
+            self.assertIn(command, document)
+        self.assertIn(
+            generator.render_command(
+                tuple(description["cli"]["update"]["dry_run_command"])
+            ),
+            document,
+        )
+        self.assertIn("currently `unpublished`", document)
+        self.assertRegex(document, r"explicit user\s+confirmation")
+        self.assertNotIn("curl ", document.casefold())
 
     def test_ids_versions_metadata_and_capabilities_do_not_drift(self) -> None:
         source = load_json(SOURCE_PATH)

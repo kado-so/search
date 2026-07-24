@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -15,6 +16,15 @@ from urllib.parse import urlparse
 REPOSITORY = Path(__file__).resolve().parents[1]
 SOURCE_PATH = REPOSITORY / "distribution" / "kado-search.manifest.json"
 SCHEMA_PATH = REPOSITORY / "distribution" / "kado-search.manifest.schema.json"
+INSTALLATION_SCHEMA_PATH = (
+    REPOSITORY / "distribution" / "kado-installation.v1.schema.json"
+)
+INSTALLATION_DESCRIPTION_PATH = (
+    REPOSITORY / "distribution" / "kado-installation.v1.gen.json"
+)
+INSTALLATION_MANIFEST_PATH = (
+    REPOSITORY / "distribution" / "kado-installation.v1.manifest.gen.json"
+)
 VALIDATION_REQUIREMENTS_PATH = REPOSITORY / "tools" / "requirements-validation.txt"
 SKILL_PATH = REPOSITORY / "skills" / "kado-search" / "SKILL.md"
 EXPECTED_PLUGIN_ID = "kado-search"
@@ -391,7 +401,12 @@ metadata:
 ---
 """
     skill_body = current_skill_body()
-    install_document = render_install_document(source)
+    installation_description = build_installation_description(source)
+    installation_description_document = json_document(installation_description)
+    installation_manifest = build_installation_manifest(
+        installation_description_document
+    )
+    install_document = render_install_document(source, installation_description)
     return {
         REPOSITORY / ".codex-plugin" / "plugin.json": json_document(codex_plugin),
         REPOSITORY / ".agents" / "plugins" / "marketplace.json": json_document(
@@ -404,64 +419,506 @@ metadata:
         REPOSITORY / skill["path"] / "agents" / "openai.yaml": openai_yaml,
         SKILL_PATH: f"{skill_frontmatter}{skill_body}",
         REPOSITORY / "distribution" / "INSTALL.md": install_document,
+        INSTALLATION_DESCRIPTION_PATH: installation_description_document,
+        INSTALLATION_MANIFEST_PATH: json_document(installation_manifest),
     }
 
 
-def render_install_document(source: dict[str, Any]) -> str:
+def build_installation_description(source: dict[str, Any]) -> dict[str, Any]:
+    description = _installation_description_value(source)
+    validate_installation_description(description, source)
+    return description
+
+
+def _installation_description_value(source: dict[str, Any]) -> dict[str, Any]:
+    plugin = source["plugin"]
+    skill = source["skill"]
+    commands = installation_command_tokens(source)
+    raw_base = "https://raw.githubusercontent.com/kado-so/search/main"
+    repository_base = "https://github.com/kado-so/search"
+
+    def command_steps(
+        operations: dict[str, tuple[str, ...]],
+    ) -> list[dict[str, object]]:
+        return [
+            {"operation": operation, "command": list(tokens)}
+            for operation, tokens in operations.items()
+        ]
+
+    description: dict[str, Any] = {
+        "$schema": (
+            f"{raw_base}/distribution/kado-installation.v1.schema.json"
+        ),
+        "schema_version": "kado.installation.v1",
+        "product": {
+            "id": plugin["id"],
+            "name": plugin["display_name"],
+            "version": plugin["version"],
+            "executable": source["installation"]["cli_executable"],
+            "website_url": plugin["website"],
+            "install_url": source["installation"]["cli_install_url"],
+            "repository_url": plugin["repository"],
+            "description_url": (
+                f"{raw_base}/distribution/kado-installation.v1.gen.json"
+            ),
+            "description_manifest_url": (
+                f"{raw_base}/distribution/"
+                "kado-installation.v1.manifest.gen.json"
+            ),
+        },
+        "approval": {
+            "required": True,
+            "kind": "explicit-user-confirmation",
+            "applies_to": [
+                "cli-install",
+                "plugin-or-skill-install",
+                "update-or-uninstall",
+            ],
+            "agent_behavior": [
+                "Explain the exact target, source, filesystem changes, and network access before requesting approval.",
+                "Do not install, update, uninstall, or revoke credentials from the phrase install kado.so alone.",
+                "After approval, execute only the literal tokenized operation for the selected supported agent.",
+            ],
+        },
+        "capabilities": [
+            "Authenticated current-market solution search",
+            "Autonomous-agent enrollment with local non-exportable credential storage",
+            "Canonical Search Document JSON and JSONL output",
+            "Interactive clarification and bounded lifecycle handling",
+            "Opaque pagination with deterministic multi-page output",
+            "Verified signed self-update and credential-preserving uninstall",
+        ],
+        "supported_agents": [
+            {
+                "id": "agent-skills",
+                "display_name": "Agent Skills",
+                "package_kind": "agent-skill",
+                "package_id": plugin["id"],
+                "package_url": f"{repository_base}/tree/main/{skill['path']}",
+                "manifest_urls": [
+                    f"{raw_base}/{skill['path']}/SKILL.md",
+                ],
+                "install_steps": command_steps(
+                    {"install": commands["agent_skills"]["install"]}
+                ),
+                "uninstall_steps": command_steps(
+                    {"uninstall": commands["agent_skills"]["uninstall"]}
+                ),
+                "skill_invocation": plugin["id"],
+            },
+            {
+                "id": "codex",
+                "display_name": "Codex",
+                "package_kind": "plugin",
+                "package_id": (
+                    f"{plugin['id']}@{source['marketplaces']['codex']['name']}"
+                ),
+                "package_url": repository_base,
+                "manifest_urls": [
+                    f"{raw_base}/.agents/plugins/marketplace.json",
+                    f"{raw_base}/.codex-plugin/plugin.json",
+                    f"{raw_base}/{skill['path']}/SKILL.md",
+                ],
+                "install_steps": command_steps(
+                    {
+                        "marketplace_add": commands["codex"]["marketplace_add"],
+                        "install": commands["codex"]["install"],
+                    }
+                ),
+                "uninstall_steps": command_steps(
+                    {
+                        "uninstall": commands["codex"]["uninstall"],
+                        "marketplace_remove": commands["codex"][
+                            "marketplace_remove"
+                        ],
+                    }
+                ),
+                "skill_invocation": f"{plugin['id']}:{plugin['id']}",
+            },
+            {
+                "id": "claude-code",
+                "display_name": "Claude Code",
+                "package_kind": "plugin",
+                "package_id": (
+                    f"{plugin['id']}@{source['marketplaces']['claude']['name']}"
+                ),
+                "package_url": repository_base,
+                "manifest_urls": [
+                    f"{raw_base}/.claude-plugin/marketplace.json",
+                    f"{raw_base}/.claude-plugin/plugin.json",
+                    f"{raw_base}/{skill['path']}/SKILL.md",
+                ],
+                "install_steps": command_steps(
+                    {
+                        "marketplace_add": commands["claude"]["marketplace_add"],
+                        "install": commands["claude"]["install"],
+                    }
+                ),
+                "uninstall_steps": command_steps(
+                    {
+                        "uninstall": commands["claude"]["uninstall"],
+                        "marketplace_remove": commands["claude"][
+                            "marketplace_remove"
+                        ],
+                    }
+                ),
+                "skill_invocation": f"/{plugin['id']}:{plugin['id']}",
+            },
+        ],
+        "supported_platforms": [
+            {
+                "os": goos,
+                "arch": arch,
+                "archive_format": "zip" if goos == "windows" else "tar.gz",
+                "executable": "kado.exe" if goos == "windows" else "kado",
+            }
+            for goos in ("darwin", "linux", "windows")
+            for arch in ("amd64", "arm64")
+        ],
+        "release": {
+            "availability": "unpublished",
+            "installable": False,
+            "metadata_schema_version": "kado.release.v1",
+            "metadata_url": (
+                "https://kado.so/install/releases/stable/"
+                "release-metadata.json"
+            ),
+            "signature_url": (
+                "https://kado.so/install/releases/stable/"
+                "release-metadata.json.sig"
+            ),
+            "publication_requirement": (
+                "Do not claim that the CLI is downloadable or installable until "
+                "canonical metadata and its detached signature are published "
+                "and verify under reviewed release trust."
+            ),
+            "asset_discovery": {
+                "binary": "targets[].binary",
+                "archive": "targets[].archive",
+                "install_guide": "install_guide",
+                "install_unix": "install_unix",
+                "install_powershell": "install_powershell",
+                "uninstall_unix": "uninstall_unix",
+                "uninstall_powershell": "uninstall_powershell",
+            },
+            "verification_discovery": {
+                "public_key": {
+                    "locator": (
+                        "reviewed-release-bundle.release-public-key.pem"
+                    ),
+                    "format": "PEM SubjectPublicKeyInfo",
+                },
+                "signature": {
+                    "locator": "release.signature_url",
+                    "format": "Ed25519 detached signature",
+                },
+                "checksums": {
+                    "locator": "release-metadata.checksums",
+                    "format": "SHA-256 checksums",
+                },
+                "provenance": {
+                    "locator": "release-metadata.provenance",
+                    "format": "SLSA v1 in-toto statement",
+                },
+                "sbom": {
+                    "locator": "release-metadata.targets[].sbom",
+                    "format": "SPDX 2.3 JSON",
+                },
+            },
+        },
+        "cli": {
+            "install": {
+                "mode": "verified-local-release-bundle",
+                "available_when": "signed-release-metadata-is-published",
+                "steps": [
+                    "Fetch canonical metadata and detached signature from the exact release discovery URLs.",
+                    "Verify trusted Ed25519 metadata before following any artifact URL.",
+                    "Download the selected platform archive and its checksums, provenance, SBOM, and generated installer into one local directory.",
+                    "Verify every digest, provenance subject, SBOM identity, archive path, and candidate executable before installation.",
+                    "Run only the downloaded generated installer after explicit user confirmation.",
+                ],
+                "forbidden": [
+                    "curl-pipe-shell",
+                    "unverified-binary",
+                    "overwrite-existing-binary",
+                ],
+            },
+            "update": {
+                "command": ["kado", "update"],
+                "dry_run_command": ["kado", "update", "--dry-run"],
+                "approval_required": True,
+                "behavior": (
+                    "Verify signed same-origin release metadata and the complete "
+                    "candidate supply chain before atomic replacement; reject "
+                    "downgrades unless separately authorized."
+                ),
+            },
+            "uninstall": {
+                "command": ["kado", "uninstall", "--yes"],
+                "approval_required": True,
+                "behavior": (
+                    "Remove only the executable and preserve autonomous-agent "
+                    "credentials unless explicit purge and successful revocation "
+                    "are separately requested."
+                ),
+            },
+        },
+        "service": {
+            "protected_search": {
+                "url": "https://kado.so/search",
+                "method": "GET",
+                "query_parameter": "q",
+                "authentication_required": True,
+                "media_type": "application/vnd.kado.search.v1+json",
+            },
+            "search_document": {
+                "schema_version": "kado.search-document.v1",
+                "manifest_url": (
+                    "https://kado.so/contracts/search-document/v1/manifest.json"
+                ),
+                "schema_url": (
+                    "https://kado.so/schemas/search-document/v1.json"
+                ),
+                "context_url": (
+                    "https://kado.so/contexts/search-document/v1.jsonld"
+                ),
+                "openapi_url": (
+                    "https://kado.so/openapi/search-document/v1.json"
+                ),
+            },
+            "authentication": {
+                "authorization_server_metadata_url": (
+                    "https://kado.so/.well-known/oauth-authorization-server"
+                ),
+                "protected_resource_metadata_url": (
+                    "https://kado.so/.well-known/oauth-protected-resource"
+                ),
+                "agent_principal_metadata_url": (
+                    "https://kado.so/.well-known/agent-principal"
+                ),
+                "jwks_url": "https://kado.so/.well-known/jwks.json",
+            },
+        },
+        "source_integrity": {
+            "algorithm": "sha256",
+            "distribution_source": source_artifact(
+                "distribution/kado-search.manifest.json"
+            ),
+            "schema": source_artifact(
+                "distribution/kado-installation.v1.schema.json"
+            ),
+        },
+    }
+    return description
+
+
+def validate_installation_description(
+    description: dict[str, Any],
+    source: dict[str, Any] | None = None,
+) -> None:
+    jsonschema = require_jsonschema()
+    try:
+        schema = json.loads(
+            INSTALLATION_SCHEMA_PATH.read_text(encoding="utf-8")
+        )
+        jsonschema.Draft202012Validator.check_schema(schema)
+        validator = jsonschema.Draft202012Validator(
+            schema,
+            format_checker=jsonschema.FormatChecker(),
+        )
+        errors = sorted(
+            validator.iter_errors(description),
+            key=lambda error: [str(part) for part in error.absolute_path],
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise ManifestError(
+            "distribution/kado-installation.v1.schema.json is invalid"
+        ) from error
+    except jsonschema.exceptions.SchemaError as error:
+        raise ManifestError(
+            "installation description schema is invalid"
+        ) from error
+    if errors:
+        first = errors[0]
+        location = ".".join(str(part) for part in first.absolute_path) or "<root>"
+        raise ManifestError(
+            "installation description fails Draft 2020-12 validation at "
+            f"{location}: {first.message}"
+        )
+    canonical_source = source if source is not None else load_source()
+    expected = _installation_description_value(canonical_source)
+    difference = first_difference(expected, description)
+    if difference is not None:
+        raise ManifestError(
+            "installation description semantic identity differs at "
+            f"{difference}"
+        )
+
+
+def first_difference(expected: Any, actual: Any, path: str = "<root>") -> str | None:
+    if type(expected) is not type(actual):
+        return path
+    if isinstance(expected, dict):
+        if set(expected) != set(actual):
+            return path
+        for key in expected:
+            difference = first_difference(
+                expected[key],
+                actual[key],
+                f"{path}.{key}",
+            )
+            if difference is not None:
+                return difference
+        return None
+    if isinstance(expected, list):
+        if len(expected) != len(actual):
+            return path
+        for index, value in enumerate(expected):
+            difference = first_difference(
+                value,
+                actual[index],
+                f"{path}[{index}]",
+            )
+            if difference is not None:
+                return difference
+        return None
+    return None if expected == actual else path
+
+
+def build_installation_manifest(
+    description_document: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "kado.installation-manifest.v1",
+        "description_version": "kado.installation.v1",
+        "artifacts": {
+            "description": generated_artifact(
+                "distribution/kado-installation.v1.gen.json",
+                (
+                    "https://raw.githubusercontent.com/kado-so/search/main/"
+                    "distribution/kado-installation.v1.gen.json"
+                ),
+                description_document,
+            ),
+            "schema": generated_artifact(
+                "distribution/kado-installation.v1.schema.json",
+                (
+                    "https://raw.githubusercontent.com/kado-so/search/main/"
+                    "distribution/kado-installation.v1.schema.json"
+                ),
+                INSTALLATION_SCHEMA_PATH.read_text(encoding="utf-8"),
+            ),
+            "distribution_source": generated_artifact(
+                "distribution/kado-search.manifest.json",
+                (
+                    "https://raw.githubusercontent.com/kado-so/search/main/"
+                    "distribution/kado-search.manifest.json"
+                ),
+                SOURCE_PATH.read_text(encoding="utf-8"),
+            ),
+        },
+    }
+
+
+def generated_artifact(
+    path: str,
+    url: str,
+    contents: str,
+) -> dict[str, Any]:
+    encoded = contents.encode("utf-8")
+    return {
+        "path": path,
+        "url": url,
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "size": len(encoded),
+    }
+
+
+def source_artifact(relative: str) -> dict[str, Any]:
+    path = REPOSITORY / relative
+    contents = path.read_bytes()
+    return {
+        "url": (
+            "https://raw.githubusercontent.com/kado-so/search/main/"
+            f"{relative}"
+        ),
+        "sha256": hashlib.sha256(contents).hexdigest(),
+        "size": len(contents),
+    }
+
+
+def render_install_document(
+    source: dict[str, Any],
+    description: dict[str, Any],
+) -> str:
     plugin = source["plugin"]
     installation = source["installation"]
     codex_marketplace = source["marketplaces"]["codex"]["name"]
     claude_marketplace = source["marketplaces"]["claude"]["name"]
-    commands = {
-        surface: {
-            operation: render_command(tokens)
-            for operation, tokens in operations.items()
-        }
-        for surface, operations in installation_command_tokens(source).items()
+    agents = {
+        agent["id"]: agent
+        for agent in description["supported_agents"]
     }
+
+    def command(agent: str, operation: str) -> str:
+        for group in ("install_steps", "uninstall_steps"):
+            for step in agents[agent][group]:
+                if step["operation"] == operation:
+                    return render_command(tuple(step["command"]))
+        raise ManifestError(
+            f"installation description is missing {agent}.{operation}"
+        )
+
     return f"""# Install Kado Search
 
-This file is generated from `distribution/kado-search.manifest.json`.
+This file is generated from
+`distribution/kado-installation.v1.gen.json`, which in turn derives identity
+and version from `distribution/kado-search.manifest.json`.
 Do not edit it directly.
 
 Every supported surface loads the one Agent Skills package at
 `skills/{plugin["id"]}` and invokes the installed `{installation["cli_executable"]}`
-executable. Install the CLI from [{installation["cli_install_url"]}]({installation["cli_install_url"]})
-before using the skill. CLI binary release commands, checksums, updates, and
-removal are published by the release phase and are intentionally not duplicated
-here.
+executable. The CLI is required before the skill can perform Search; discover
+its release availability at
+[{installation["cli_install_url"]}]({installation["cli_install_url"]}).
 
-The release builder reads this same canonical source for version, repository,
-install URL, and executable identity. It produces six signed platform bundles,
-checksums, SBOMs, provenance, and local install/uninstall scripts. Download
-release files before running a script; no supported flow pipes a network
-response into a shell. See `docs/RELEASING_CLI.md` for the signing boundary and
-operator dry run.
+CLI release availability is currently `{description["release"]["availability"]}`.
+Do not claim that a downloadable CLI release exists until the canonical
+metadata and detached signature resolve and verify. Once published, discover
+checksums, provenance, per-platform SBOMs, archives, and generated local
+installers through the signed release metadata at
+[{description["release"]["metadata_url"]}]({description["release"]["metadata_url"]}).
+Download the complete release bundle before running its generated installer;
+no supported flow pipes a network response into a shell.
 
 Installed release binaries support:
 
 ```bash
 kado version --json
-kado update --dry-run
-kado update
-kado uninstall --yes
+{render_command(tuple(description["cli"]["update"]["dry_run_command"]))}
+{render_command(tuple(description["cli"]["update"]["command"]))}
+{render_command(tuple(description["cli"]["uninstall"]["command"]))}
 ```
 
 Uninstall preserves the autonomous-agent credential by default. Credential
 revocation is separate and happens only when `--purge-credentials` is explicit.
+Every CLI, plugin, skill, update, and uninstall action requires explicit user
+confirmation. The phrase `install kado.so` is a request to explain the
+supported targets and request approval, not authorization to mutate the user's
+environment.
 
 ## Agent Skills
 
 Install:
 
 ```bash
-{commands["agent_skills"]["install"]}
+{command("agent-skills", "install")}
 ```
 
 Uninstall:
 
 ```bash
-{commands["agent_skills"]["uninstall"]}
+{command("agent-skills", "uninstall")}
 ```
 
 The standalone skill invocation name is `{plugin["id"]}`.
@@ -471,15 +928,15 @@ The standalone skill invocation name is `{plugin["id"]}`.
 Install:
 
 ```bash
-{commands["codex"]["marketplace_add"]}
-{commands["codex"]["install"]}
+{command("codex", "marketplace_add")}
+{command("codex", "install")}
 ```
 
 Uninstall:
 
 ```bash
-{commands["codex"]["uninstall"]}
-{commands["codex"]["marketplace_remove"]}
+{command("codex", "uninstall")}
+{command("codex", "marketplace_remove")}
 ```
 
 The plugin ID is `{plugin["id"]}@{codex_marketplace}`. Codex presents its
@@ -490,15 +947,15 @@ skill under the plugin namespace `{plugin["id"]}:{plugin["id"]}`.
 Install:
 
 ```bash
-{commands["claude"]["marketplace_add"]}
-{commands["claude"]["install"]}
+{command("claude-code", "marketplace_add")}
+{command("claude-code", "install")}
 ```
 
 Uninstall:
 
 ```bash
-{commands["claude"]["uninstall"]}
-{commands["claude"]["marketplace_remove"]}
+{command("claude-code", "uninstall")}
+{command("claude-code", "marketplace_remove")}
 ```
 
 The plugin ID is `{plugin["id"]}@{claude_marketplace}` and the Claude skill
