@@ -184,18 +184,29 @@ Restart Codex after installing new skills.
 
 ### Validation
 
-Validate the plugin manifest with:
+Use an isolated virtual environment for the system validators. This avoids
+depending on whichever `python3` happens to be installed at a fixed operating
+system path and keeps PyYAML out of the repository:
 
 ```bash
-python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py .
-```
+validation_python="$(command -v python3)" || {
+  printf '%s\n' 'python3 is required for validation' >&2
+  exit 1
+}
+validation_venv="$(mktemp -d "${TMPDIR:-/tmp}/kado-validation.XXXXXX")"
+"$validation_python" -m venv "$validation_venv"
+"$validation_venv/bin/python" -m pip install --disable-pip-version-check PyYAML
 
-If your Python environment is missing PyYAML, install it in a temporary target and run:
+"$validation_venv/bin/python" -B \
+  ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
+  skills/kado-search
+"$validation_venv/bin/python" -B \
+  ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py .
+"$validation_venv/bin/python" -B -m unittest discover -s tests
 
-```bash
-python3 -m pip install --target /tmp/codex-plugin-validator-deps PyYAML
-PYTHONPATH=/tmp/codex-plugin-validator-deps \
-  python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py .
+"$validation_python" -c \
+  'import shutil, sys; shutil.rmtree(sys.argv[1])' \
+  "$validation_venv"
 ```
 
 ### Manual Install For Other Agents
@@ -233,15 +244,17 @@ Avoid maintaining parallel, divergent instructions for each agent. The source of
 
 ## Authentication
 
-The `kado-search` skill uses `https://kado.so`.
-
-It prefers an API key when the user already provides one:
+The `kado-search` skill invokes the installed `kado` CLI only. A normal
+`kado search` performs autonomous enrollment and short-lived authorization
+without exposing credentials to the invoking agent. Safe installation state can
+be inspected with:
 
 ```bash
-export KADO_API_KEY="sk-kado-..."
+kado auth status
 ```
 
-If no API key is available, the skill includes example device-login code in [auth-api.md](skills/kado-search/references/auth-api.md). Agents can adapt or run it from a temporary location; it is not a required bundled script.
+The skill never implements authentication with API keys, device flows, browser
+cookies, copied tokens, direct HTTP, or temporary scripts.
 
 ## Repository Layout
 
@@ -263,6 +276,9 @@ skills/
     agents/openai.yaml
     assets/
     references/
+      cli-guide.md
+      query-guide.md
+      response-guide.md
 .agents/
   plugins/
     marketplace.json
@@ -275,7 +291,9 @@ skills/
 
 ## Safety
 
-Agents should not print, commit, or log API keys, bearer tokens, device codes, cookies, or full authorization headers.
+Agents should not inspect, print, commit, or log credentials, private keys,
+assertions, bearer values, cookies, or authorization headers. The canonical
+skill delegates all credential handling to the installed CLI.
 
 ## License
 

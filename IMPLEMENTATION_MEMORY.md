@@ -96,6 +96,25 @@
   `ErrCredentialChanged`, leaves the replacement intact, and asks the caller to
   retry if that newer installation should also be revoked.
 
+## Phase 04A Kado Search skill
+
+- `skills/kado-search/SKILL.md` is the repository's only canonical skill
+  instruction source. It invokes the installed `kado` CLI exclusively; API
+  keys, device login, direct HTTP, browser credentials, copied tokens, and
+  temporary auth scripts have no fallback path.
+- Progressive details live one level below the skill in `query-guide.md`,
+  `cli-guide.md`, and `response-guide.md`. The lifecycle guide owns output-mode
+  selection, clarification, bounded retry, pagination, timeout/cancellation,
+  installation, and safe authentication troubleshooting. Normal agent
+  recommendation/synthesis uses lossless multi-page `--jsonl`; human output is
+  only for quick/operator inspection and `--json` is one exact document.
+- `tests/test_kado_search_skill.py` validates skill/frontmatter/reference
+  structure, single ownership, obsolete-flow absence, OpenAI metadata,
+  representative trigger/lifecycle evaluations, and a built CLI flag smoke.
+  Run it with Python `-B`; repository-scoped ignores cover test bytecode caches.
+  README validation uses a `command -v`-resolved interpreter and disposable
+  venv so both system validators receive PyYAML without a repository dependency.
+
 ## Phase 04A Search lifecycle client
 
 - `internal/searchclient` owns the protected `/search` HTTP boundary. It sends
