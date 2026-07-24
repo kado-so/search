@@ -74,6 +74,23 @@ If the executable is missing, stop and direct the user to the
 invent an install command, download an unverified binary, or create a temporary
 installer.
 
+If the user asks to inspect an available CLI update, use the full signed dry
+run:
+
+```bash
+kado update --dry-run
+```
+
+Run `kado update` only when the user authorizes changing the installed
+executable. Do not pass `--allow-downgrade` unless the user explicitly requests
+that downgrade. The CLI verifies signed metadata, checksums, SBOM/provenance,
+the platform archive, and candidate executable before atomic replacement.
+
+Use `kado uninstall --yes` only when the user explicitly asks to remove the
+CLI. It preserves the autonomous-agent credential. Add
+`--purge-credentials` only when the user separately asks to revoke that
+installation identity as part of removal.
+
 For an authentication failure, inspect only the safe CLI status:
 
 ```bash

@@ -10,6 +10,25 @@ before using the skill. CLI binary release commands, checksums, updates, and
 removal are published by the release phase and are intentionally not duplicated
 here.
 
+The release builder reads this same canonical source for version, repository,
+install URL, and executable identity. It produces six signed platform bundles,
+checksums, SBOMs, provenance, and local install/uninstall scripts. Download
+release files before running a script; no supported flow pipes a network
+response into a shell. See `docs/RELEASING_CLI.md` for the signing boundary and
+operator dry run.
+
+Installed release binaries support:
+
+```bash
+kado version --json
+kado update --dry-run
+kado update
+kado uninstall --yes
+```
+
+Uninstall preserves the autonomous-agent credential by default. Credential
+revocation is separate and happens only when `--purge-credentials` is explicit.
+
 ## Agent Skills
 
 Install:

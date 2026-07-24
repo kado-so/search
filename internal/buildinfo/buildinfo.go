@@ -2,7 +2,9 @@
 package buildinfo
 
 import (
+	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 )
 
@@ -10,24 +12,36 @@ const maxMetadataRunes = 48
 
 // These values are overridden at build time with -ldflags -X.
 var (
-	Version = "dev"
-	Commit  = "unknown"
-	Date    = "unknown"
+	Version            = "dev"
+	Commit             = "unknown"
+	Date               = "unknown"
+	Target             = "unknown"
+	ReleasePublicKey   = ""
+	ReleaseKeyID       = "unknown"
+	ReleaseMetadataURL = ""
 )
 
 // Info is the safe, bounded build metadata exposed by the CLI.
 type Info struct {
-	Version string
-	Commit  string
-	Date    string
+	Version            string `json:"version"`
+	Commit             string `json:"commit"`
+	Date               string `json:"built_at"`
+	Target             string `json:"target"`
+	ReleaseKeyID       string `json:"release_key_id"`
+	ReleasePublicKey   string `json:"-"`
+	ReleaseMetadataURL string `json:"-"`
 }
 
 // Current returns the metadata attached to this binary.
 func Current() Info {
 	return Info{
-		Version: boundedToken(Version),
-		Commit:  boundedToken(Commit),
-		Date:    boundedToken(Date),
+		Version:            boundedToken(Version),
+		Commit:             boundedToken(Commit),
+		Date:               boundedToken(Date),
+		Target:             targetValue(Target),
+		ReleaseKeyID:       boundedTokenLength(ReleaseKeyID, 80),
+		ReleasePublicKey:   strings.TrimSpace(ReleasePublicKey),
+		ReleaseMetadataURL: strings.TrimSpace(ReleaseMetadataURL),
 	}
 }
 
@@ -41,15 +55,51 @@ func (info Info) Line() string {
 	)
 }
 
+// JSON returns deterministic, non-secret executable provenance.
+func (info Info) JSON() ([]byte, error) {
+	value := struct {
+		Version      string `json:"version"`
+		Commit       string `json:"commit"`
+		BuiltAt      string `json:"built_at"`
+		Target       string `json:"target"`
+		ReleaseKeyID string `json:"release_key_id"`
+		PublicKey    string `json:"release_public_key"`
+	}{
+		Version:      boundedToken(info.Version),
+		Commit:       boundedToken(info.Commit),
+		BuiltAt:      boundedToken(info.Date),
+		Target:       targetValue(info.Target),
+		ReleaseKeyID: boundedTokenLength(info.ReleaseKeyID, 80),
+		PublicKey:    boundedTokenLength(info.ReleasePublicKey, 64),
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
+}
+
+func targetValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "unknown" {
+		return runtime.GOOS + "/" + runtime.GOARCH
+	}
+	return boundedToken(value)
+}
+
 func boundedToken(value string) string {
+	return boundedTokenLength(value, maxMetadataRunes)
+}
+
+func boundedTokenLength(value string, limit int) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "unknown"
 	}
 
-	output := make([]rune, 0, min(len([]rune(value)), maxMetadataRunes))
+	output := make([]rune, 0, min(len([]rune(value)), limit))
 	for _, character := range value {
-		if len(output) == maxMetadataRunes {
+		if len(output) == limit {
 			break
 		}
 		if character < '!' || character > '~' {

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/kado-so/search/internal/config"
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/keystore"
+	"github.com/kado-so/search/internal/releaseclient"
 	"github.com/kado-so/search/internal/searchclient"
 	"github.com/kado-so/search/internal/searchcontract"
 	"github.com/kado-so/search/internal/searchoutput"
@@ -35,6 +37,9 @@ Commands:
   search <query>  Run an authenticated Search to completion
   auth status    Show safe current-installation identity state
   auth revoke    Revoke the current installation
+  update         Install a verified signed CLI release
+  uninstall      Remove the CLI; preserve credentials by default
+  release verify Verify a downloaded release bundle
   help           Show this help
   version        Show bounded build information
 
@@ -44,6 +49,7 @@ Options:
   --width columns   Human output width from 40 to 160 (default 96)
   -h, --help        Show this help
   -v, --version     Show bounded build information
+  version --json    Show deterministic executable provenance
 `
 
 type authCommands interface {
@@ -55,6 +61,12 @@ type searchCommands interface {
 	Run(context.Context, string, searchclient.RunOptions) (searchRunResult, error)
 }
 
+type releaseCommands interface {
+	Update(context.Context, releaseclient.Options) (releaseclient.Result, error)
+	Uninstall() error
+	VerifyBundle(string) (releaseclient.Metadata, releaseclient.Target, error)
+}
+
 type searchRunResult struct {
 	status    string
 	canonical []byte
@@ -62,8 +74,9 @@ type searchRunResult struct {
 }
 
 type dependencies struct {
-	newAuth   func() (authCommands, error)
-	newSearch func() (searchCommands, error)
+	newAuth    func() (authCommands, error)
+	newSearch  func() (searchCommands, error)
+	newRelease func(buildinfo.Info) (releaseCommands, error)
 }
 
 type defaultAuthCommands struct {
@@ -73,6 +86,12 @@ type defaultAuthCommands struct {
 
 type defaultSearchCommands struct {
 	client *searchclient.Client
+}
+
+type defaultReleaseCommands struct {
+	manager    releaseclient.Manager
+	executable string
+	info       buildinfo.Info
 }
 
 type phase02CAuthorizationSource struct {
@@ -87,8 +106,9 @@ var errBrokenPipe = errors.New("CLI output pipe closed")
 // Run executes one CLI invocation and returns a process exit status.
 func Run(args []string, stdout, stderr io.Writer, info buildinfo.Info) int {
 	return runWithDependencies(args, stdout, stderr, info, dependencies{
-		newAuth:   newDefaultAuthCommands,
-		newSearch: newDefaultSearchCommands,
+		newAuth:    newDefaultAuthCommands,
+		newSearch:  newDefaultSearchCommands,
+		newRelease: newDefaultReleaseCommands,
 	})
 }
 
@@ -130,6 +150,19 @@ func run(
 		_, _ = io.WriteString(stdout, helpText)
 		return nil
 	case "version", "-v", "--version":
+		if len(args) == 2 && args[0] == "version" && args[1] == "--json" {
+			encoded, err := info.JSON()
+			if err != nil {
+				return diagnostic.New(
+					"version_failed",
+					"could not render executable provenance",
+					diagnostic.ExitFailure,
+					err,
+				)
+			}
+			_, _ = stdout.Write(encoded)
+			return nil
+		}
 		if len(args) != 1 {
 			return usageError("version does not accept arguments")
 		}
@@ -139,9 +172,172 @@ func run(
 		return runAuth(args[1:], stdout, dependencies)
 	case "search":
 		return runSearch(args[1:], stdout, dependencies)
+	case "update":
+		return runUpdate(args[1:], stdout, info, dependencies)
+	case "uninstall":
+		return runUninstall(args[1:], stdout, info, dependencies)
+	case "release":
+		return runRelease(args[1:], stdout, info, dependencies)
 	default:
 		return usageError("unknown command; run 'kado help' for usage")
 	}
+}
+
+func runRelease(
+	args []string,
+	stdout io.Writer,
+	info buildinfo.Info,
+	dependencies dependencies,
+) error {
+	if len(args) != 3 || args[0] != "verify" || args[1] != "--directory" {
+		return usageError("usage: kado release verify --directory <path>")
+	}
+	if dependencies.newRelease == nil {
+		return releaseDiagnostic(errors.New("release support unavailable"))
+	}
+	releases, err := dependencies.newRelease(info)
+	if err != nil {
+		return releaseDiagnostic(err)
+	}
+	metadata, target, err := releases.VerifyBundle(args[2])
+	if err != nil {
+		return releaseDiagnostic(err)
+	}
+	_, _ = fmt.Fprintf(
+		stdout,
+		"verified kado %s for %s/%s\n",
+		metadata.Version,
+		target.OS,
+		target.Arch,
+	)
+	return nil
+}
+
+func runUpdate(
+	args []string,
+	stdout io.Writer,
+	info buildinfo.Info,
+	dependencies dependencies,
+) error {
+	options := releaseclient.Options{CurrentVersion: info.Version}
+	for _, argument := range args {
+		switch argument {
+		case "--dry-run":
+			options.DryRun = true
+		case "--allow-downgrade":
+			options.AllowDowngrade = true
+		default:
+			return usageError("usage: kado update [--dry-run] [--allow-downgrade]")
+		}
+	}
+	if dependencies.newRelease == nil {
+		return releaseDiagnostic(errors.New("release support unavailable"))
+	}
+	releases, err := dependencies.newRelease(info)
+	if err != nil {
+		return releaseDiagnostic(err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	result, err := releases.Update(ctx, options)
+	if err != nil {
+		return releaseDiagnostic(err)
+	}
+	switch {
+	case result.DryRun:
+		_, _ = fmt.Fprintf(
+			stdout,
+			"verified kado %s for %s; no files changed\n",
+			result.ToVersion,
+			result.Target,
+		)
+	case result.Changed:
+		_, _ = fmt.Fprintf(
+			stdout,
+			"updated kado %s to %s for %s\n",
+			result.FromVersion,
+			result.ToVersion,
+			result.Target,
+		)
+	default:
+		_, _ = fmt.Fprintf(stdout, "kado %s is already current\n", result.ToVersion)
+	}
+	return nil
+}
+
+func runUninstall(
+	args []string,
+	stdout io.Writer,
+	info buildinfo.Info,
+	dependencies dependencies,
+) error {
+	confirmed := false
+	purgeCredentials := false
+	for _, argument := range args {
+		switch argument {
+		case "--yes":
+			confirmed = true
+		case "--purge-credentials":
+			purgeCredentials = true
+		default:
+			return usageError(
+				"usage: kado uninstall --yes [--purge-credentials]",
+			)
+		}
+	}
+	if !confirmed {
+		return usageError(
+			"uninstall requires --yes; credentials are preserved unless --purge-credentials is explicit",
+		)
+	}
+	if purgeCredentials {
+		if dependencies.newAuth == nil {
+			return authDiagnostic("revoke", errors.New("authentication unavailable"))
+		}
+		auth, err := dependencies.newAuth()
+		if err != nil {
+			return authDiagnostic("revoke", err)
+		}
+		if _, err := auth.Revoke(context.Background()); err != nil {
+			return authDiagnostic("revoke", err)
+		}
+	}
+	if dependencies.newRelease == nil {
+		return releaseDiagnostic(errors.New("release support unavailable"))
+	}
+	releases, err := dependencies.newRelease(info)
+	if err != nil {
+		return releaseDiagnostic(err)
+	}
+	if err := releases.Uninstall(); err != nil {
+		return releaseDiagnostic(err)
+	}
+	if purgeCredentials {
+		_, _ = fmt.Fprintln(
+			stdout,
+			"removed kado after explicit credential revocation",
+		)
+	} else {
+		_, _ = fmt.Fprintln(stdout, "removed kado; credentials were preserved")
+	}
+	return nil
+}
+
+func releaseDiagnostic(cause error) error {
+	code := "release_failed"
+	message := "could not verify or install the Kado release"
+	switch {
+	case errors.Is(cause, releaseclient.ErrDowngrade):
+		code = "release_downgrade_blocked"
+		message = "a downgrade requires --allow-downgrade"
+	case errors.Is(cause, releaseclient.ErrPlatform):
+		code = "release_platform_unsupported"
+		message = "this release does not support the current platform"
+	case errors.Is(cause, releaseclient.ErrUninstall):
+		code = "uninstall_failed"
+		message = "could not remove the Kado executable; credentials were unchanged"
+	}
+	return diagnostic.New(code, message, diagnostic.ExitFailure, cause)
 }
 
 func runSearch(args []string, stdout io.Writer, dependencies dependencies) error {
@@ -514,6 +710,34 @@ func newDefaultSearchCommands() (searchCommands, error) {
 	return &defaultSearchCommands{client: search}, nil
 }
 
+func newDefaultReleaseCommands(info buildinfo.Info) (releaseCommands, error) {
+	if info.ReleasePublicKey == "" ||
+		info.ReleaseMetadataURL == "" ||
+		info.Version == "" ||
+		info.Version == "dev" {
+		return nil, releaseclient.ErrInvalidMetadata
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, releaseclient.ErrInstall
+	}
+	executable, err = filepath.Abs(executable)
+	if err != nil {
+		return nil, releaseclient.ErrInstall
+	}
+	return &defaultReleaseCommands{
+		manager: releaseclient.Manager{
+			MetadataURL: info.ReleaseMetadataURL,
+			PublicKey:   info.ReleasePublicKey,
+			Fetcher: releaseclient.HTTPFetcher{
+				Client: &http.Client{Timeout: 45 * time.Second},
+			},
+		},
+		executable: executable,
+		info:       info,
+	}, nil
+}
+
 func (commands *defaultAuthCommands) Status(
 	ctx context.Context,
 ) (agentauth.CredentialStatus, error) {
@@ -541,6 +765,25 @@ func (commands *defaultSearchCommands) Run(
 		output.pages = append(output.pages, page.Bytes())
 	}
 	return output, err
+}
+
+func (commands *defaultReleaseCommands) Update(
+	ctx context.Context,
+	options releaseclient.Options,
+) (releaseclient.Result, error) {
+	options.TargetPath = commands.executable
+	options.CurrentVersion = commands.info.Version
+	return commands.manager.Update(ctx, options)
+}
+
+func (commands *defaultReleaseCommands) Uninstall() error {
+	return releaseclient.Uninstall(commands.executable)
+}
+
+func (commands *defaultReleaseCommands) VerifyBundle(
+	directory string,
+) (releaseclient.Metadata, releaseclient.Target, error) {
+	return releaseclient.VerifyLocalBundle(directory, commands.info)
 }
 
 func (source *phase02CAuthorizationSource) Authorization(

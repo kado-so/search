@@ -96,7 +96,10 @@ class KadoSearchSkillTests(unittest.TestCase):
             for line in block.splitlines():
                 command = line.strip()
                 if command and not command.startswith("#"):
-                    self.assertRegex(command, r"^kado (?:search|auth status)\b")
+                    self.assertRegex(
+                        command,
+                        r"^kado (?:search|auth status|update --dry-run)\b",
+                    )
 
     def test_openai_metadata_matches_skill(self) -> None:
         metadata = (SKILL / "agents" / "openai.yaml").read_text(encoding="utf-8")

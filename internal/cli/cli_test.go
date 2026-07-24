@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/kado-so/search/internal/agentauth"
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/diagnostic"
+	"github.com/kado-so/search/internal/releaseclient"
 	"github.com/kado-so/search/internal/searchclient"
 	"github.com/kado-so/search/internal/searchcontract"
 	"github.com/kado-so/search/internal/searchoutput"
@@ -55,6 +57,28 @@ func TestVersionFormsAreSingleLineAndBounded(t *testing.T) {
 		if strings.Count(stdout.String(), "\n") != 1 || stdout.Len() > 181 {
 			t.Fatalf("Run(%q) version output = %q", args, stdout.String())
 		}
+	}
+}
+
+func TestVersionJSONIsDeterministicExecutableProvenance(t *testing.T) {
+	t.Parallel()
+
+	info := buildinfo.Info{
+		Version:          "0.1.0",
+		Commit:           "0123456789abcdef",
+		Date:             "2026-07-24T00:00:00Z",
+		Target:           "linux/arm64",
+		ReleaseKeyID:     "sha256:abc",
+		ReleasePublicKey: "public",
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := Run([]string{"version", "--json"}, &stdout, &stderr, info)
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	want := "{\"version\":\"0.1.0\",\"commit\":\"0123456789abcdef\",\"built_at\":\"2026-07-24T00:00:00Z\",\"target\":\"linux/arm64\",\"release_key_id\":\"sha256:abc\",\"release_public_key\":\"public\"}\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}
 }
 
@@ -624,6 +648,184 @@ func TestInvalidSearchUsageDoesNotInitializeAuthentication(t *testing.T) {
 	}
 }
 
+func TestUpdateUsesVerifiedReleaseBoundaryAndDeterministicOutput(t *testing.T) {
+	t.Parallel()
+
+	releases := &fakeReleaseCommands{result: releaseclient.Result{
+		FromVersion: "0.1.0",
+		ToVersion:   "0.2.0",
+		Target:      "linux/amd64",
+		DryRun:      true,
+	}}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"update", "--dry-run", "--allow-downgrade"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{Version: "0.1.0"},
+		dependencies{newRelease: func(buildinfo.Info) (releaseCommands, error) {
+			return releases, nil
+		}},
+	)
+	if exitCode != 0 || stderr.Len() != 0 ||
+		stdout.String() != "verified kado 0.2.0 for linux/amd64; no files changed\n" {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+	if !releases.options.DryRun || !releases.options.AllowDowngrade ||
+		releases.options.CurrentVersion != "0.1.0" {
+		t.Fatalf("update options = %#v", releases.options)
+	}
+}
+
+func TestUpdateDowngradeFailureIsSafe(t *testing.T) {
+	t.Parallel()
+
+	private := "private-signing-seed /private/release/path"
+	releases := &fakeReleaseCommands{
+		err: errors.Join(releaseclient.ErrDowngrade, errors.New(private)),
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"update"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{Version: "0.2.0"},
+		dependencies{newRelease: func(buildinfo.Info) (releaseCommands, error) {
+			return releases, nil
+		}},
+	)
+	if exitCode != diagnostic.ExitFailure ||
+		stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "release_downgrade_blocked") ||
+		strings.Contains(stderr.String(), private) {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestUninstallPreservesCredentialsUnlessPurgeIsExplicit(t *testing.T) {
+	t.Parallel()
+
+	for _, purge := range []bool{false, true} {
+		purge := purge
+		t.Run(strconv.FormatBool(purge), func(t *testing.T) {
+			t.Parallel()
+			auth := &fakeAuthCommands{revoked: agentauth.CredentialStatus{
+				Status: agentauth.StatusRevoked,
+			}}
+			releases := &fakeReleaseCommands{}
+			args := []string{"uninstall", "--yes"}
+			if purge {
+				args = append(args, "--purge-credentials")
+			}
+			var stdout, stderr bytes.Buffer
+			exitCode := runWithDependencies(
+				args,
+				&stdout,
+				&stderr,
+				buildinfo.Info{},
+				dependencies{
+					newAuth: func() (authCommands, error) {
+						if !purge {
+							t.Fatal("credential access initialized without purge")
+						}
+						return auth, nil
+					},
+					newRelease: func(buildinfo.Info) (releaseCommands, error) {
+						return releases, nil
+					},
+				},
+			)
+			if exitCode != 0 || stderr.Len() != 0 || !releases.uninstalled {
+				t.Fatalf(
+					"exit=%d stdout=%q stderr=%q",
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+			if purge != (auth.revokeCalls == 1) {
+				t.Fatalf("purge=%t revokeCalls=%d", purge, auth.revokeCalls)
+			}
+			if !purge && !strings.Contains(stdout.String(), "credentials were preserved") {
+				t.Fatalf("stdout = %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestUninstallRequiresConfirmationBeforeAccessingAnything(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"uninstall"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			newAuth: func() (authCommands, error) {
+				t.Fatal("credential access initialized")
+				return nil, nil
+			},
+			newRelease: func(buildinfo.Info) (releaseCommands, error) {
+				t.Fatal("release access initialized")
+				return nil, nil
+			},
+		},
+	)
+	if exitCode != diagnostic.ExitUsage || stdout.Len() != 0 {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestReleaseVerifyUsesCandidateBundleBoundary(t *testing.T) {
+	t.Parallel()
+
+	releases := &fakeReleaseCommands{
+		metadata: releaseclient.Metadata{Version: "0.1.0"},
+		target: releaseclient.Target{
+			OS:   "darwin",
+			Arch: "arm64",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"release", "verify", "--directory", "/downloaded/release"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{newRelease: func(buildinfo.Info) (releaseCommands, error) {
+			return releases, nil
+		}},
+	)
+	if exitCode != 0 || stderr.Len() != 0 ||
+		stdout.String() != "verified kado 0.1.0 for darwin/arm64\n" ||
+		releases.directory != "/downloaded/release" {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q directory=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+			releases.directory,
+		)
+	}
+}
+
 type closedPipeWriter struct{}
 
 func (closedPipeWriter) Write([]byte) (int, error) {
@@ -653,6 +855,38 @@ type fakeSearchCommands struct {
 	err     error
 	query   string
 	options searchclient.RunOptions
+}
+
+type fakeReleaseCommands struct {
+	result       releaseclient.Result
+	err          error
+	options      releaseclient.Options
+	uninstalled  bool
+	uninstallErr error
+	metadata     releaseclient.Metadata
+	target       releaseclient.Target
+	directory    string
+	verifyErr    error
+}
+
+func (releases *fakeReleaseCommands) Update(
+	_ context.Context,
+	options releaseclient.Options,
+) (releaseclient.Result, error) {
+	releases.options = options
+	return releases.result, releases.err
+}
+
+func (releases *fakeReleaseCommands) Uninstall() error {
+	releases.uninstalled = true
+	return releases.uninstallErr
+}
+
+func (releases *fakeReleaseCommands) VerifyBundle(
+	directory string,
+) (releaseclient.Metadata, releaseclient.Target, error) {
+	releases.directory = directory
+	return releases.metadata, releases.target, releases.verifyErr
 }
 
 func (search *fakeSearchCommands) Run(

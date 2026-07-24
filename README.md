@@ -65,15 +65,47 @@ go test ./...
 go vet ./...
 ```
 
-Release builds stamp bounded metadata without changing source:
+For a local provenance smoke, version/commit/time can be stamped without
+changing source:
 
 ```bash
 go build -ldflags "\
-  -X github.com/kado-so/search/internal/buildinfo.Version=v0.1.0 \
+  -X github.com/kado-so/search/internal/buildinfo.Version=0.1.0 \
   -X github.com/kado-so/search/internal/buildinfo.Commit=<commit> \
   -X github.com/kado-so/search/internal/buildinfo.Date=<RFC3339-time>" \
   ./cmd/kado
 ```
+
+That command is not a distributable release: it does not stamp the release
+trust key, target, or stable metadata endpoint. Use the release builder below
+for every installable binary.
+
+The reproducible six-target release builder reads version and distribution
+identity from `distribution/kado-search.manifest.json`, requires the Go version
+pinned in `.prototools`, and takes signing material only from the
+`KADO_RELEASE_SIGNING_KEY` environment boundary. It produces direct binaries,
+safe deterministic archives, SHA-256 checksums, detached signed canonical
+metadata, SPDX SBOMs, SLSA/in-toto provenance, and local install/uninstall
+scripts for Linux, macOS, and Windows. It never publishes artifacts.
+Release protocol v1 does not support in-band signing-key rotation; a key change
+requires an out-of-band reinstall from the reviewed official install boundary.
+
+See [the CLI release boundary](docs/RELEASING_CLI.md) for the reproducible
+double-build command, signing-key handling, verification steps, rollback and
+downgrade policy, and publication gate.
+
+Installed release binaries expose deterministic provenance and verified
+self-update:
+
+```bash
+kado version --json
+kado update --dry-run
+kado update
+kado uninstall --yes
+```
+
+Downgrades require `kado update --allow-downgrade`. Uninstall preserves the
+agent credential unless `--purge-credentials` is explicitly requested.
 
 Safe non-secret configuration currently consists of:
 
@@ -192,6 +224,7 @@ internal/
   config/
   diagnostic/
   keystore/
+  releaseclient/
   searchclient/
 distribution/
   INSTALL.md
@@ -216,7 +249,10 @@ skills/
   plugin.json
 tools/
   generate_distribution_manifests.py
+  release/
   requirements-validation.txt
+.github/workflows/
+  cli-release.yml
 ```
 
 ## Safety

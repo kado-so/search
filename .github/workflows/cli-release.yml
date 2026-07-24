@@ -1,0 +1,196 @@
+name: CLI release validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "vaishnav/f/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  platform:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: go test -count=1 ./...
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - run: go build -trimpath -buildvcs=false ./cmd/kado
+      - name: Create ephemeral native-smoke release inputs
+        shell: python
+        run: |
+          import base64
+          import os
+          import secrets
+          import subprocess
+
+          commit = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"],
+              text=True,
+          ).strip()
+          epoch = subprocess.check_output(
+              ["git", "show", "-s", "--format=%ct", "HEAD"],
+              text=True,
+          ).strip()
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(
+                  "KADO_RELEASE_SIGNING_KEY="
+                  + base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+                  + "\n"
+              )
+              output.write("KADO_RELEASE_COMMIT=" + commit + "\n")
+              output.write("KADO_RELEASE_EPOCH=" + epoch + "\n")
+      - name: Build generated native release bundle
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./tools/release \
+            --commit "$KADO_RELEASE_COMMIT" \
+            --source-date-epoch "$KADO_RELEASE_EPOCH" \
+            --out dist/native-release
+      - name: Build generated native release bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          go run ./tools/release `
+            --commit $env:KADO_RELEASE_COMMIT `
+            --source-date-epoch $env:KADO_RELEASE_EPOCH `
+            --out dist/native-release
+          if ($LASTEXITCODE -ne 0) { throw "release build failed" }
+      - name: Execute generated Unix install and uninstall
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_root="$(mktemp -d "${RUNNER_TEMP}/kado-native-smoke.XXXXXX")"
+          destination="$install_root/bin/kado"
+          credential="$install_root/credentials/agent-key"
+          mkdir -p "$(dirname "$credential")"
+          printf 'preserve-native-credential\n' >"$credential"
+          sh -n dist/native-release/install.sh
+          sh -n dist/native-release/uninstall.sh
+          sh dist/native-release/install.sh \
+            "$GITHUB_WORKSPACE/dist/native-release" \
+            "$destination"
+          "$destination" version --json |
+            python -c 'import json,sys; value=json.load(sys.stdin); assert value["version"] == "0.1.0"; assert value["target"] in {"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}'
+          "$destination" release verify \
+            --directory "$GITHUB_WORKSPACE/dist/native-release"
+          KADO_INSTALL_PATH="$destination" \
+            sh dist/native-release/uninstall.sh --yes
+          test ! -e "$destination"
+          test "$(cat "$credential")" = "preserve-native-credential"
+      - name: Parse and execute generated PowerShell install and uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $InstallRoot = Join-Path $env:RUNNER_TEMP ("kado-native-smoke-" + [guid]::NewGuid().ToString("N"))
+          $Destination = Join-Path $InstallRoot "bin\kado.exe"
+          $Credential = Join-Path $InstallRoot "credentials\agent-key"
+          New-Item -ItemType Directory -Path (Split-Path -Parent $Credential) -Force | Out-Null
+          Set-Content -LiteralPath $Credential -Value "preserve-native-credential" -NoNewline
+          [scriptblock]::Create((Get-Content -LiteralPath dist/native-release/install.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content -LiteralPath dist/native-release/uninstall.ps1 -Raw)) | Out-Null
+          & dist/native-release/install.ps1 `
+            -ReleaseDirectory (Join-Path $env:GITHUB_WORKSPACE "dist\native-release") `
+            -Destination $Destination
+          if ($LASTEXITCODE -ne 0) { throw "generated installer failed" }
+          $Version = (& $Destination version --json) | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $Version.version -ne "0.1.0" -or $Version.target -notmatch "^windows/(amd64|arm64)$") {
+            throw "installed candidate identity is invalid"
+          }
+          & $Destination release verify `
+            --directory (Join-Path $env:GITHUB_WORKSPACE "dist\native-release")
+          if ($LASTEXITCODE -ne 0) { throw "installed bundle verification failed" }
+          & dist/native-release/uninstall.ps1 -Yes -Destination $Destination
+          if (Test-Path -LiteralPath $Destination) { throw "generated uninstaller retained the executable" }
+          if ((Get-Content -LiteralPath $Credential -Raw) -ne "preserve-native-credential") {
+            throw "generated uninstaller changed credentials"
+          }
+      - name: Exercise signed native updater
+        env:
+          KADO_NATIVE_RELEASE_SMOKE: "1"
+        run: go test -count=1 -run "^TestNativeSignedUpdateSmoke$" ./internal/releaseclient
+
+  reproducible-release:
+    name: reproducible six-target dry run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Validate canonical distribution source
+        run: |
+          python -m pip install --disable-pip-version-check --requirement tools/requirements-validation.txt
+          python -B tools/generate_distribution_manifests.py --check
+      - name: Create ephemeral dry-run signing key
+        shell: python
+        run: |
+          import base64
+          import os
+          import secrets
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(
+                  "KADO_RELEASE_SIGNING_KEY="
+                  + base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+                  + "\n"
+              )
+      - name: Build twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          epoch="$(git show -s --format=%ct HEAD)"
+          go run ./tools/release \
+            --commit "$commit" \
+            --source-date-epoch "$epoch" \
+            --out dist/release-a
+          go run ./tools/release \
+            --commit "$commit" \
+            --source-date-epoch "$epoch" \
+            --out dist/release-b
+          diff -qr dist/release-a dist/release-b
+          sh -n dist/release-a/install.sh
+          sh -n dist/release-a/uninstall.sh
+      - name: Verify artifact inventory
+        shell: python
+        run: |
+          import json
+          import pathlib
+          metadata = json.loads(
+              pathlib.Path("dist/release-a/release-metadata.json").read_text()
+          )
+          expected = {
+              ("linux", "amd64"),
+              ("linux", "arm64"),
+              ("darwin", "amd64"),
+              ("darwin", "arm64"),
+              ("windows", "amd64"),
+              ("windows", "arm64"),
+          }
+          assert {(item["os"], item["arch"]) for item in metadata["targets"]} == expected

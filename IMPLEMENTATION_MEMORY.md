@@ -211,6 +211,59 @@
 - `KADO_DISTRIBUTION_INSTALL_SMOKE=1 python3 -B -m unittest
   tests.test_distribution_manifests.DistributionInstallSmokeTests -v` builds a
   temporary `kado` and proves isolated Codex, Claude, and Agent Skills
-  install/discovery/uninstall flows. Goal 5 must stamp the same source version
-  into release binaries and owns binary URLs, checksums, update, and CLI
+  install/discovery/uninstall flows. The release builder stamps the same source
+  version into binaries and owns binary URLs, checksums, update, and CLI
   uninstall behavior.
+
+## Phase 04A CLI releases
+
+- `.prototools` pins Go 1.26.4. `tools/release` refuses a different toolchain
+  and reads version, repository, executable, and install URL only from
+  `distribution/kado-search.manifest.json`.
+- One deterministic build produces direct versioned binaries and safe
+  `tar.gz`/ZIP archives for Linux, macOS, and Windows on amd64 and arm64.
+  `CGO_ENABLED=0`, fixed source time, `-trimpath`, disabled VCS auto-stamping,
+  an empty Go build ID, canonical JSON, and fixed archive headers make repeat
+  builds byte-identical.
+- Release output includes SHA-256 checksums, per-target SPDX 2.3 SBOMs, one
+  SLSA v1/in-toto provenance statement, canonical `kado.release.v1` metadata,
+  a detached Ed25519 signature, the public verifier, and generated local
+  install/uninstall instructions and scripts. The builder self-verifies every
+  target before atomically exposing the output directory.
+- `KADO_RELEASE_SIGNING_KEY` is the only signing input. It is a base64 Ed25519
+  seed read from the environment, excluded from build subprocess environments,
+  never accepted as an argument or printed, and not present in the repository.
+  CI dry runs generate one ephemeral key at runtime; production signing is a
+  separately documented protected-secret boundary and CI does not publish.
+- Release binaries stamp version, commit, UTC time, target, signing-key ID,
+  signing public key, and stable metadata URL. `kado version --json` exposes
+  deterministic non-secret provenance. The candidate's bundled
+  `kado release verify --directory` validates the downloaded local bundle
+  without requiring OpenSSL or another platform verifier.
+- Release protocol v1 deliberately has no in-band signing-key rotation. The
+  embedded key must match both signed metadata and the candidate binary; a key
+  change requires an out-of-band reinstall from the reviewed official install
+  boundary.
+- `kado update` accepts only same-origin HTTPS metadata/assets, rejects
+  redirects and size overflows, verifies the trusted signature, checksums,
+  SBOM/provenance, archive paths/types/modes, and candidate executable before a
+  same-directory atomic replace. An exclusive per-executable lock serializes
+  replace/uninstall. Failures before commit restore the prior binary and
+  verified candidate; post-commit cleanup failures retain the verified new
+  binary and never expose an empty or corrupt executable. Downgrades require
+  `--allow-downgrade`; `--dry-run` performs the full verification without
+  writes, including when already current.
+- Generated install scripts refuse to overwrite an existing binary so they
+  cannot bypass update/downgrade policy. Generated uninstall scripts and
+  `kado uninstall --yes` remove only the executable. Credentials are preserved
+  unless `--purge-credentials` is explicit, in which case authenticated
+  revocation must succeed before removal.
+- `.github/workflows/cli-release.yml` runs Go test/vet/race on Linux, macOS,
+  and Windows. Every platform builds a generated signed bundle, executes its
+  native installer and uninstaller (including parsed PowerShell), verifies the
+  installed candidate and bundle, preserves a credential sentinel, and updates
+  between real signed native binaries. A separate job validates Goal 4
+  metadata, builds all six targets twice with one ephemeral key, and compares
+  every byte. CI never uploads or publishes output. `docs/RELEASING_CLI.md`
+  owns the signing, reproducibility, verification, rollback, downgrade,
+  uninstall, and publication boundary.
