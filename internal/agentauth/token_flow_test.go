@@ -40,6 +40,8 @@ type goal4Server struct {
 	transaction     *goal4Transaction
 	tokenPrivate    ed25519.PrivateKey
 	tamperAudience  bool
+	tamperNotBefore bool
+	futureToken     bool
 	excessiveMemory bool
 	assertionJTIs   map[string]bool
 }
@@ -444,8 +446,17 @@ func (fake *goal4Server) exchangeToken(response http.ResponseWriter, request *ht
 		SessionMode:    "autonomous",
 		Scope:          strings.Join(autonomousSearchScopes, " "),
 		IssuedAt:       now,
+		NotBefore:      now,
 		ExpiresAt:      now + 300,
 		JTI:            "00000000-0000-4000-8000-000000000001",
+	}
+	if fake.tamperNotBefore {
+		accessClaims.NotBefore++
+	}
+	if fake.futureToken {
+		accessClaims.IssuedAt += 31
+		accessClaims.NotBefore += 31
+		accessClaims.ExpiresAt += 31
 	}
 	token := fake.signAccessToken(accessClaims)
 	fake.sendJSON(response, http.StatusOK, tokenResponse{
@@ -555,6 +566,26 @@ func TestAcquireTokenCompletesAdmissionAndVerifiesAccessJWT(t *testing.T) {
 	}
 }
 
+func TestClassifyTokenRateLimitRequiresPinnedOAuthCodeAndStatus(t *testing.T) {
+	t.Parallel()
+
+	encoded := []byte(
+		`{"error":"rate_limited","error_description":"Token issuance rate limit exceeded."}`,
+	)
+	if err := classifyTokenFailure(http.StatusTooManyRequests, encoded); !errors.Is(
+		err,
+		ErrTokenRateLimited,
+	) {
+		t.Fatalf("classifyTokenFailure(rate limit) error = %v, want ErrTokenRateLimited", err)
+	}
+	if err := classifyTokenFailure(http.StatusServiceUnavailable, encoded); errors.Is(
+		err,
+		ErrTokenRateLimited,
+	) {
+		t.Fatalf("classifyTokenFailure(wrong status) error = %v, unexpectedly rate limited", err)
+	}
+}
+
 func TestAcquireTokenRejectsExcessiveChallengeAndTamperedAccessAudience(t *testing.T) {
 	t.Parallel()
 
@@ -583,6 +614,34 @@ func TestAcquireTokenRejectsExcessiveChallengeAndTamperedAccessAudience(t *testi
 			Request{Mode: CreateIfMissing},
 		); !errors.Is(err, ErrProtocol) {
 			t.Fatalf("AcquireToken(tampered audience) error = %v", err)
+		}
+	})
+
+	t.Run("access not-before binding", func(t *testing.T) {
+		server := newGoal4Server()
+		defer server.close()
+		server.tamperNotBefore = true
+		client := newGoal4Client(t, server)
+		if _, err := client.AcquireToken(
+			context.Background(),
+			&memoryKeyStore{},
+			Request{Mode: CreateIfMissing},
+		); !errors.Is(err, ErrProtocol) {
+			t.Fatalf("AcquireToken(tampered nbf) error = %v", err)
+		}
+	})
+
+	t.Run("access future clock skew", func(t *testing.T) {
+		server := newGoal4Server()
+		defer server.close()
+		server.futureToken = true
+		client := newGoal4Client(t, server)
+		if _, err := client.AcquireToken(
+			context.Background(),
+			&memoryKeyStore{},
+			Request{Mode: CreateIfMissing},
+		); !errors.Is(err, ErrProtocol) {
+			t.Fatalf("AcquireToken(future token) error = %v", err)
 		}
 	})
 }

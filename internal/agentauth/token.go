@@ -68,6 +68,7 @@ type accessTokenClaims struct {
 	SessionMode    string `json:"session_mode"`
 	Scope          string `json:"scope"`
 	IssuedAt       int64  `json:"iat"`
+	NotBefore      int64  `json:"nbf"`
 	ExpiresAt      int64  `json:"exp"`
 	JTI            string `json:"jti"`
 }
@@ -86,6 +87,7 @@ var accessTokenClaimFields = []string{
 	"session_mode",
 	"scope",
 	"iat",
+	"nbf",
 	"exp",
 	"jti",
 }
@@ -307,9 +309,11 @@ func (client *Client) verifyAccessToken(
 		claims.AgentSessionID != authorization.SessionID ||
 		claims.SessionMode != "autonomous" ||
 		claims.Scope != response.Scope ||
+		claims.NotBefore != claims.IssuedAt ||
 		claims.ExpiresAt <= claims.IssuedAt ||
 		claims.ExpiresAt-claims.IssuedAt != response.ExpiresIn ||
 		claims.IssuedAt > now.Add(client.limits.MaxClockSkew).Unix() ||
+		claims.NotBefore > now.Add(client.limits.MaxClockSkew).Unix() ||
 		claims.ExpiresAt <= now.Add(-client.limits.MaxClockSkew).Unix() ||
 		claims.ExpiresAt > sessionExpiresAt.Unix() ||
 		claims.ExpiresAt-claims.IssuedAt >
@@ -391,6 +395,10 @@ func classifyTokenFailure(status int, encoded []byte) error {
 		return newProtocolError(ErrAuthentication, nil)
 	}
 	switch response.Error {
+	case "rate_limited":
+		if status == http.StatusTooManyRequests {
+			return newProtocolError(ErrTokenRateLimited, nil)
+		}
 	case "invalid_client":
 		if status == http.StatusUnauthorized {
 			return newProtocolError(ErrAuthentication, nil)

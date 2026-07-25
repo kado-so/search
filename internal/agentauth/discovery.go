@@ -133,6 +133,19 @@ func NewClient(
 	if cloned.Timeout <= 0 || cloned.Timeout > limits.MaxHTTPTimeout {
 		cloned.Timeout = limits.MaxHTTPTimeout
 	}
+	switch transport := cloned.Transport.(type) {
+	case nil:
+		bounded := http.DefaultTransport.(*http.Transport).Clone()
+		bounded.MaxResponseHeaderBytes = limits.MaxResponseHeaderBytes
+		cloned.Transport = bounded
+	case *http.Transport:
+		bounded := transport.Clone()
+		if bounded.MaxResponseHeaderBytes <= 0 ||
+			bounded.MaxResponseHeaderBytes > limits.MaxResponseHeaderBytes {
+			bounded.MaxResponseHeaderBytes = limits.MaxResponseHeaderBytes
+		}
+		cloned.Transport = bounded
+	}
 	cloned.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return ErrRedirect
 	}
@@ -151,6 +164,8 @@ func NewClient(
 func validateLimits(limits Limits) error {
 	if limits.MaxResponseBytes < 1024 ||
 		limits.MaxResponseBytes > 1024*1024 ||
+		limits.MaxResponseHeaderBytes < 1024 ||
+		limits.MaxResponseHeaderBytes > 64*1024 ||
 		limits.MaxClockSkew < 0 ||
 		limits.MaxClockSkew > 5*time.Minute ||
 		limits.MaxProofLifetime <= 0 ||
@@ -163,6 +178,7 @@ func validateLimits(limits Limits) error {
 		limits.MaxArgonMemoryKiB > 128*1024 ||
 		limits.MaxArgonPasses < 1 ||
 		limits.MaxArgonPasses > 4 ||
+		uint64(limits.MaxArgonMemoryKiB)*uint64(limits.MaxArgonPasses) > 512*1024 ||
 		limits.MaxArgonParallelism < 1 ||
 		limits.MaxArgonParallelism > 4 ||
 		limits.MaxArgonAttempts < 1 ||
@@ -310,6 +326,9 @@ func (client *Client) fetchNonce(ctx context.Context, endpoint string) (string, 
 		return "", newProtocolError(ErrProtocol, err)
 	}
 	defer func() { _ = response.Body.Close() }()
+	if !boundedResponseHeaders(response.Header, client.limits.MaxResponseHeaderBytes) {
+		return "", newProtocolError(ErrProtocol, nil)
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return "", newProtocolError(ErrProtocol, nil)
 	}
@@ -362,6 +381,9 @@ func (client *Client) doJSON(
 		return 0, nil, newProtocolError(ErrProtocol, err)
 	}
 	defer func() { _ = response.Body.Close() }()
+	if !boundedResponseHeaders(response.Header, client.limits.MaxResponseHeaderBytes) {
+		return 0, nil, newProtocolError(ErrProtocol, nil)
+	}
 	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		return 0, nil, newProtocolError(ErrProtocol, err)
@@ -371,6 +393,20 @@ func (client *Client) doJSON(
 		return 0, nil, newProtocolError(ErrProtocol, err)
 	}
 	return response.StatusCode, encoded, nil
+}
+
+func boundedResponseHeaders(headers http.Header, maximum int64) bool {
+	var total int64
+	for name, values := range headers {
+		total += int64(len(name))
+		for _, value := range values {
+			total += int64(len(value))
+			if total > maximum {
+				return false
+			}
+		}
+	}
+	return total <= maximum
 }
 
 func validateServiceBase(input *url.URL) (*url.URL, error) {

@@ -81,6 +81,7 @@
       "session_mode",
       "scope",
       "iat",
+      "nbf",
       "exp",
       "jti"
     ],
@@ -90,7 +91,9 @@
       "principal_type": "agent",
       "session_mode": "autonomous"
     },
-    "maximum_lifetime_seconds": 300
+    "maximum_lifetime_seconds": 300,
+    "maximum_clock_skew_seconds": 30,
+    "not_before_rule": "nbf equals iat"
   },
   "jwks": {
     "endpoint": "https://kado.so/.well-known/jwks.json",
@@ -102,7 +105,12 @@
       "kty": "OKP",
       "use": "sig"
     },
-    "ordering": "active signing key first, then configured previous public keys",
+    "ordering": "active signing key first, then scheduled previous public keys whose not_after has not passed",
+    "previous_key_schedule_fields": ["activated_at", "jwk", "not_after", "retired_at"],
+    "previous_key_schedule_ordering": "newest first; each retired_at equals the next key activated_at",
+    "schedule_metadata_exposed_in_jwks": false,
+    "expired_previous_keys_omitted": true,
+    "minimum_previous_key_overlap_seconds": 360,
     "private_members_permitted": false
   }
 }
