@@ -435,3 +435,30 @@
   configuration/recovery drills remain deferred to Goal 3 and production
   observation drills to Goal 5. No Goal 2 acceptance, publication, release,
   deployment, reset, or agent-to-user linking work was performed.
+
+## Phase 07 Goal 2 live-acceptance blocker
+
+- Goal 2 cannot be satisfied by the existing Go `httptest` suites, injected
+  app tests, or visual fixtures. The required evidence must run the actual CLI
+  against the production/default app and private-admin listeners on
+  migration-zero disposable PostgreSQL over trusted ephemeral TLS, then
+  recompute auth, provider, cache, history, publication, and audit deltas.
+- The actual command currently has no safe isolated credential boundary:
+  `newDefaultAuthCommands` and `newDefaultSearchCommands` always construct
+  `keystore.NewOSKeychainStore()`. That store uses the fixed global service
+  `kado.so` and account `agent-management-key.v1`; `KADO_CONFIG_DIR` does not
+  affect it and no supported flag or environment selects the explicit
+  permission-restricted file store or a test-specific keychain identity.
+  Running acceptance would therefore mutate the user's production credential
+  namespace, with no guaranteed cleanup after interruption. Dependency
+  injection would not be actual-CLI evidence.
+- A read-only macOS Keychain lookup found no current record at that exact
+  identity. No record was created or deleted. The paired frozen app also
+  retains its previously recorded missing root TypeScript config and
+  `react-dom/server` production-build rejection, so it cannot currently supply
+  the required production listener.
+- A product-owned, safe credential-store selection and the app production-build
+  fixes are prerequisites to the live harness. No static selector matrix was
+  retained or represented as acceptance, and no database container, listener,
+  release, publication, deployment, shared reset, or Goal 3 work was started.
+  Goal 2 remains in progress.
