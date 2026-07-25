@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
 )
 
 const temporaryFileAttempts = 100
@@ -18,7 +19,9 @@ const temporaryFileAttempts = 100
 // FileStore is an explicit fallback for systems where an OS keychain cannot be
 // used. It is never selected automatically.
 type FileStore struct {
-	path string
+	path                  string
+	processLockParent     string
+	requireExistingParent bool
 }
 
 // NewFileStore creates an explicit permission-restricted fallback. Windows
@@ -28,10 +31,52 @@ func NewFileStore(path string) (*FileStore, error) {
 	if runtime.GOOS == "windows" {
 		return nil, storageError("configure file fallback", ErrUnsupported, nil)
 	}
-	if path == "" || !filepath.IsAbs(path) {
+	if path == "" ||
+		path != strings.TrimSpace(path) ||
+		strings.ContainsFunc(path, unicode.IsControl) ||
+		!filepath.IsAbs(path) ||
+		path != filepath.Clean(path) {
 		return nil, storageError("configure file fallback", ErrInvalid, nil)
 	}
-	return &FileStore{path: filepath.Clean(path)}, nil
+	return &FileStore{path: path}, nil
+}
+
+// NewIsolatedFileStore selects a FileStore only when its caller has already
+// provisioned a private, non-symlink parent directory. It is intended for
+// explicit isolated executable boundaries; unlike NewFileStore, it never
+// creates the configured directory while selecting the store.
+func NewIsolatedFileStore(path string) (*FileStore, error) {
+	store, err := NewFileStore(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.ValidateLocation(); err != nil {
+		return nil, err
+	}
+	store.processLockParent = filepath.Dir(store.path)
+	store.requireExistingParent = true
+	if err := validateProcessLockLocation(
+		store.processLockParent,
+		store.lockIdentifier(),
+	); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// ValidateLocation verifies that the configured parent is an existing exact
+// 0700 directory with no symlink components and that an existing destination
+// is a regular exact 0600 file. A missing destination is valid.
+func (store *FileStore) ValidateLocation() error {
+	if store == nil {
+		return storageError("validate file fallback", ErrInvalid, nil)
+	}
+	parent, err := openPrivateDirectory(filepath.Dir(store.path), false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = parent.Close() }()
+	return ensureSafeDestination(parent, filepath.Base(store.path))
 }
 
 func (store *FileStore) Load() ([]byte, error) {
@@ -64,7 +109,7 @@ func (store *FileStore) Load() ([]byte, error) {
 func (store *FileStore) Create(keyMaterial []byte) ([]byte, bool, error) {
 	var winning []byte
 	var created bool
-	err := withProcessLock(store.lockIdentifier(), func() error {
+	err := store.withProcessLock(func() error {
 		existing, err := store.Load()
 		if err == nil {
 			winning = existing
@@ -84,7 +129,7 @@ func (store *FileStore) Create(keyMaterial []byte) ([]byte, bool, error) {
 }
 
 func (store *FileStore) Save(keyMaterial []byte) error {
-	return withProcessLock(store.lockIdentifier(), func() error {
+	return store.withProcessLock(func() error {
 		return store.saveUnlocked(keyMaterial)
 	})
 }
@@ -95,7 +140,7 @@ func (store *FileStore) saveUnlocked(keyMaterial []byte) error {
 		return err
 	}
 	parent := filepath.Dir(store.path)
-	parentRoot, err := openPrivateDirectory(parent, true)
+	parentRoot, err := openPrivateDirectory(parent, !store.requireExistingParent)
 	if err != nil {
 		return err
 	}
@@ -104,7 +149,7 @@ func (store *FileStore) saveUnlocked(keyMaterial []byte) error {
 }
 
 func (store *FileStore) Delete() error {
-	return withProcessLock(store.lockIdentifier(), store.deleteUnlocked)
+	return store.withProcessLock(store.deleteUnlocked)
 }
 
 func (store *FileStore) deleteUnlocked() error {
@@ -135,7 +180,7 @@ func (store *FileStore) DeleteIfMatches(expected []byte) (bool, error) {
 		return false, storageError("conditionally delete file fallback", ErrInvalid, nil)
 	}
 	deleted := false
-	err := withProcessLock(store.lockIdentifier(), func() error {
+	err := store.withProcessLock(func() error {
 		current, err := store.Load()
 		if errors.Is(err, ErrNotFound) {
 			return nil
@@ -158,6 +203,17 @@ func (store *FileStore) DeleteIfMatches(expected []byte) (bool, error) {
 
 func (store *FileStore) lockIdentifier() string {
 	return "file:" + store.path
+}
+
+func (store *FileStore) withProcessLock(action func() error) error {
+	if store.processLockParent != "" {
+		return withProcessLockInDirectory(
+			store.processLockParent,
+			store.lockIdentifier(),
+			action,
+		)
+	}
+	return withProcessLock(store.lockIdentifier(), action)
 }
 
 // openPrivateDirectory walks from the filesystem root one component at a time,

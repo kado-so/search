@@ -33,6 +33,21 @@ The CLI:
 - emits the canonical Search Document for `--json`; and
 - provides a concise human renderer over the same document.
 
+Ordinary CLI composition always uses the platform OS keychain. For isolated
+executable acceptance only, the product-owned
+`KADO_ACCEPTANCE_CREDENTIAL_FILE` environment boundary selects the existing
+permission-restricted file-store adapter for both `auth` and `search`. Its
+caller must provide one canonical absolute path under an existing non-symlink
+`0700` directory; the selector rejects unsafe or ambiguous locations before
+network activity. The caller owns the directory lifecycle, while the CLI owns
+the credential record and deletes it solely through confirmed revocation or
+explicit credential-purging uninstall. Isolated operations serialize on one
+non-secret dot-prefixed `0600` lock retained in the same caller-owned
+directory. The acceptance runner waits for every CLI process to stop before
+removing that entire directory; per-operation lock deletion is forbidden
+because it could split exclusion between a current waiter and a newly created
+lock. Isolated operations never recreate a directory removed after selection.
+
 ## Contract Consumption
 
 The Search Document JSON Schema and JSON-LD context are owned and published by

@@ -462,3 +462,60 @@
   retained or represented as acceptance, and no database container, listener,
   release, publication, deployment, shared reset, or Goal 3 work was started.
   Goal 2 remains in progress.
+
+## Phase 07 Goal 2 Search CLI isolation prerequisite
+
+- The actual CLI now recognizes one purpose-specific environment boundary,
+  `KADO_ACCEPTANCE_CREDENTIAL_FILE`. When it is unset, both default command
+  factories retain the existing OS-keychain behavior unchanged. When set,
+  both `newDefaultAuthCommands` and `newDefaultSearchCommands` select the same
+  existing `FileStore` format at the configured path; no public flag, generic
+  fallback, alternative credential identity, or configuration-package secret
+  field was added.
+- The isolated selector requires one canonical absolute path with no
+  leading/trailing whitespace or control characters beneath an already
+  existing exact-`0700` directory. It validates all parent components without
+  following symlinks and accepts only a missing destination or an exact-`0600`
+  regular file. Empty, relative, unclean, missing-parent, symlinked,
+  directory-permission-unsafe, and file-permission-unsafe inputs fail before
+  network activity. Once selected, every isolated operation requires that
+  parent to continue existing; `Save` and `Create` fail without recreating a
+  removed directory. Windows remains keychain-only. Selection and storage
+  errors retain bounded redacted diagnostics and never render the configured
+  path or credential material.
+- The acceptance runner owns creation and removal of the surrounding private
+  directory. The credential record persists across ordinary process exits and
+  interruptions so later `auth` and `search` processes reuse one management
+  identity. Only confirmed `auth revoke`, or uninstall with explicit
+  credential purge, removes the exact current record. Each isolated store
+  serializes through one non-secret dot-prefixed exact-`0600` lock retained
+  beside the credential; it never uses the ordinary user-cache lock namespace.
+  The lock is intentionally not deleted per operation because doing so could
+  split exclusion between existing waiters and a newly created inode. After
+  all CLI processes stop, the runner removes the entire caller-owned directory.
+  Existing atomic temporary-file cleanup and conditional-delete behavior
+  remain the storage implementation. Ordinary `FileStore` and OS-keychain
+  operations retain their legacy global `<sha256>.lock` namespace unchanged;
+  only acceptance-isolated stores use the local dot-prefixed name.
+- Focused unit and subprocess coverage proves the OS-keychain default, explicit
+  empty/invalid rejection, symlink and unsafe-mode rejection during selection,
+  auth/search resolution to one file record, two-process public-identity reuse,
+  record-only cleanup, safe local-lock retention, caller-directory cleanup
+  after every process stops, and actual built `cmd/kado` selection without
+  touching the keychain. Subprocess `HOME` and cache roots are separately
+  isolated and proven empty, so no lock or credential residue escapes the
+  caller-owned acceptance directory. The actual-binary probe uses only local
+  invalid/missing records and performs no network request. Focused packages
+  and subprocess reruns pass.
+- Full `go test -count=1 ./...`, `go vet ./...`,
+  `go test -race -count=1 ./...`, a temporary-output `go build ./cmd/kado`,
+  Windows/amd64 test-binary compilation for `internal/keystore`,
+  `internal/cli`, and `cmd/kado`, and `git diff --check` pass. No app source,
+  contract, Search pipeline, publication state, database, listener, release,
+  deployment, external credential store, or acceptance topology was touched.
+- This is a product-code change relative to Goal 1's frozen Search input
+  `cfc6b7d6d77e9222e5bdcde61051358abc4959c8`. Goal 1 qualification is
+  therefore invalidated and must be rerun against the eventual committed
+  Search product tree before Goal 2 evidence can be accepted. This prerequisite
+  alone is not Goal 2 acceptance; the paired app production-build prerequisite
+  remains outside this Search-only change.

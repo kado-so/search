@@ -33,3 +33,15 @@ func withProcessLock(identifier string, action func() error) error {
 	defer func() { _ = windows.ReleaseMutex(handle) }()
 	return action()
 }
+
+func withProcessLockInDirectory(
+	_,
+	_ string,
+	_ func() error,
+) error {
+	return storageError("acquire creation lock", ErrUnsupported, nil)
+}
+
+func validateProcessLockLocation(_, _ string) error {
+	return storageError("validate creation lock", ErrUnsupported, nil)
+}
