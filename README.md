@@ -94,6 +94,10 @@ See [the CLI release boundary](docs/RELEASING_CLI.md) for the reproducible
 double-build command, signing-key handling, verification steps, rollback and
 downgrade policy, and publication gate.
 
+See [literal install prompt evaluation](docs/INSTALL_PROMPT_EVALUATION.md) for
+the reproducible Codex, Claude Code, and Agent Skills matrix, quantitative
+thresholds, redacted evidence contract, and isolated clean-host smoke command.
+
 Installed release binaries expose deterministic provenance and verified
 self-update:
 
