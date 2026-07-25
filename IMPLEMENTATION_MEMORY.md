@@ -393,3 +393,45 @@
   release install/update/downgrade/tamper/rollback/uninstall coverage, the
   skill validator, Codex plugin validator, and both Claude manifest validators.
   The three opt-in clean-host package smokes also passed separately.
+
+## Phase 07 Goal 1 cutover qualification
+
+- Search commit `cfc6b7d6d77e9222e5bdcde61051358abc4959c8`, tree
+  `ec29b9b4b392777d2bb33acb1c0977bc09b2fb2e`, is the exact frozen client,
+  skill, plugin, and distribution source paired with app product commit
+  `440369b309d2bab37dc4e27f14e5eb40613cd63e`, tree
+  `28a51a715614cd0f68dac37379af07dbd20bf82d`. The app's Phase 07 kickoff
+  commit is evidence-only and not a source input.
+- The app-owned generated qualification inventory binds Search Document v1,
+  all five byte-identical agent-auth profile pairs, every Search-owned
+  distribution/plugin/skill metadata artifact, all phase evidence, and the
+  Search-to-app installation copies. The qualified module is
+  `github.com/kado-so/search`, CLI `0.1.0`, with the exact Go `1.26.4`
+  toolchain. Installation remains truthfully `unpublished` and
+  `installable: false`.
+- Serial `go test -count=1 ./...`, `go vet ./...`,
+  `go test -race -count=1 ./...`, and a temporary-output CLI build pass.
+  `KADO_NATIVE_RELEASE_SMOKE=1` also passes. One release-client provenance case
+  failed only while the ordinary and race suites were run concurrently; its
+  targeted rerun and the complete serial suite passed immediately.
+- Distribution generation, the canonical skill validator, plugin validator,
+  44 Python tests, and 3 separately enabled clean-host Codex/Claude/Agent
+  Skills installation smokes pass. The ordinary Python run intentionally skips
+  those 3 opt-in smokes. Regenerating the Go Search Document assets from the
+  paired app contract produces no diff.
+- Two release builds from the frozen commit and its committed source epoch used
+  one ephemeral Ed25519 seed and produced byte-identical artifacts for all six
+  Darwin/Linux/Windows amd64/arm64 targets. Both bundles verified as CLI
+  `0.1.0`; temporary keys, binaries, and release directories were removed.
+  Nothing was published, pushed, installed globally, or deployed.
+- App-side qualification passed the final transformed Search suite with 624
+  tests and 60 intentional integration skips, Search admin with 117 tests and
+  25 database-gated skips plus 2 telemetry tests, and the twice-run visual
+  matrix with 62 passes and 46 intentional viewport/project skips per run.
+  The sparse app baseline still lacks its root TypeScript config and retains
+  previously recorded typecheck/build failures; those are explicitly not
+  described as full-CI success.
+- Phase 05 live installation remains pending for Phase 07 Goal 4. External
+  configuration/recovery drills remain deferred to Goal 3 and production
+  observation drills to Goal 5. No Goal 2 acceptance, publication, release,
+  deployment, reset, or agent-to-user linking work was performed.
