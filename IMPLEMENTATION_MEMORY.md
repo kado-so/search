@@ -394,7 +394,12 @@
   skill validator, Codex plugin validator, and both Claude manifest validators.
   The three opt-in clean-host package smokes also passed separately.
 
-## Phase 07 Goal 1 cutover qualification
+## Phase 07 Goal 1 historical cutover qualification (superseded)
+
+- This section records the original `cfc6b7d`/`440369b` qualification only.
+  It is retained as historical evidence and is not the current cutover
+  qualification. Phase 07 Goal 1R supersedes its source inputs, app baseline
+  failures, and current-gate conclusions.
 
 - Search commit `cfc6b7d6d77e9222e5bdcde61051358abc4959c8`, tree
   `ec29b9b4b392777d2bb33acb1c0977bc09b2fb2e`, is the exact frozen client,
@@ -436,7 +441,12 @@
   observation drills to Goal 5. No Goal 2 acceptance, publication, release,
   deployment, reset, or agent-to-user linking work was performed.
 
-## Phase 07 Goal 2 live-acceptance blocker
+## Phase 07 Goal 2 historical live-acceptance blocker (superseded)
+
+- This blocker record explains why Goal 2 could not start from the original
+  Goal 1 inputs. Both named product prerequisites were subsequently fixed and
+  qualified by Goal 1R. The record is historical, not a statement of current
+  source readiness; Goal 2 remains pending and has not started.
 
 - Goal 2 cannot be satisfied by the existing Go `httptest` suites, injected
   app tests, or visual fixtures. The required evidence must run the actual CLI
@@ -461,9 +471,10 @@
   fixes are prerequisites to the live harness. No static selector matrix was
   retained or represented as acceptance, and no database container, listener,
   release, publication, deployment, shared reset, or Goal 3 work was started.
-  Goal 2 remains in progress.
+  After the later prerequisite fixes and Goal 1R requalification, Goal 2 is
+  pending and has not started.
 
-## Phase 07 Goal 2 Search CLI isolation prerequisite
+## Phase 07 Goal 2 Search CLI isolation prerequisite (completed; requalified)
 
 - The actual CLI now recognizes one purpose-specific environment boundary,
   `KADO_ACCEPTANCE_CREDENTIAL_FILE`. When it is unset, both default command
@@ -513,9 +524,65 @@
   `internal/cli`, and `cmd/kado`, and `git diff --check` pass. No app source,
   contract, Search pipeline, publication state, database, listener, release,
   deployment, external credential store, or acceptance topology was touched.
-- This is a product-code change relative to Goal 1's frozen Search input
-  `cfc6b7d6d77e9222e5bdcde61051358abc4959c8`. Goal 1 qualification is
-  therefore invalidated and must be rerun against the eventual committed
-  Search product tree before Goal 2 evidence can be accepted. This prerequisite
-  alone is not Goal 2 acceptance; the paired app production-build prerequisite
-  remains outside this Search-only change.
+- This product-code change invalidated the original Goal 1 Search
+  qualification. The prerequisite itself did not include the paired app
+  production-build fix and was not Goal 2 acceptance. Goal 1R now qualifies
+  both committed prerequisites together. Goal 2 remains pending and has not
+  started.
+
+## Phase 07 Goal 1R remediated cutover qualification
+
+- The current frozen Search product input is commit
+  `c718cba1f596d7c69192a7f9b14cfe05896aad98`, tree
+  `c27fc022ff117d36cbf179fdb209b831a20e80f4`. It is paired with frozen app
+  product commit `f8430331673682cc81124097fe4e39e05fbeab20`, tree
+  `257302a41a3444bb80d60bc3663622f628777d81`. App commit
+  `6cc55ac871d6eab225593e705e89d3f0201e26fd`, tree
+  `49098cbffebc748bdf2731b3cdd51365e9cefa61`, is the direct evidence-only
+  kickoff child of the app source and is not a product input.
+- The app-owned `phase07-goal1r` qualification inventory binds exact SHA-256
+  and size for all 18 app production-remediation artifacts, including the new
+  root pnpm workspace, lockfile, and TypeScript build configuration, and all 11
+  Search credential-isolation artifacts. The only Search post-freeze evidence
+  path is this memory. Search's default credential store remains OS keychain;
+  only `KADO_ACCEPTANCE_CREDENTIAL_FILE` selects the acceptance-isolated file
+  store, and temporary app overlays are forbidden.
+- Search Document v1, its Go pin, the installation copies, and all five
+  agent-auth profiles remain byte-identical across the frozen repositories.
+  The contract manifest remains
+  `5a7dd8708e5b6eb7767cdea27703a2c2b8e6e4b7cc68311a660d71f3a08b0ddb`.
+  Regenerating Go contract assets from the paired app source produced no diff.
+- Focused unit, subprocess, and actual built-CLI tests prove the unset selector
+  still resolves to OS keychain, while explicit-empty, invalid, symlinked, and
+  unsafe-permission selectors fail before network access with path and
+  credential redaction. The isolated record persists across processes, only
+  its credential record is cleaned, caller-owned `HOME` and cache roots remain
+  empty, and its local process lock never changes the ordinary global lock
+  namespace.
+- Serial `go test -count=1 ./...`, `go vet ./...`,
+  `go test -race -count=1 ./...`, a temporary-output CLI build, Windows/amd64
+  test compilation for `internal/keystore`, `internal/cli`, and `cmd/kado`, a
+  Windows CLI build, and the native signed-update smoke pass. Distribution
+  generation, canonical skill/plugin validators, 44 Python tests with 3
+  ordinary opt-in skips, and all 3 separately enabled clean-client
+  Codex/Claude/Agent Skills install/discovery/uninstall smokes pass.
+- Two signed release builds from exact Search commit `c718cba` and its
+  committed epoch used one ephemeral Ed25519 seed and were byte-identical.
+  Metadata bound exactly Darwin/Linux/Windows amd64/arm64, the native
+  Darwin/arm64 candidate verified the release directory, Unix install and
+  uninstall scripts passed syntax checks, and temporary signing/release output
+  was removed.
+- The paired app now passes its frozen install without an overlay, 640 Search
+  tests with 60 intentional integration skips, ordinary typecheck, production
+  Next build, standalone production start and public contract/discovery probes,
+  contract/install generators, OpenAPI lint, an uncached 18-stage Docker build,
+  11 visual-fixture tests, and the 62-pass/46-intentional-skip
+  visual/accessibility matrix. Search admin passes 117 tests with 25
+  database-gated skips plus 2 telemetry tests, Node 24 typecheck/build, and Cin
+  drift generation. The original sparse-workspace/typecheck/build baseline
+  failures are historical and not current.
+- Qualification generation and tamper/source-policy tests pass
+  deterministically and retain no secret, local path, release output, or build
+  binary. Goal 1R did not start Goal 2, publish, deploy, mutate external
+  credentials/data, or perform agent-to-user linking. The older qualification
+  and blocker sections remain above solely as superseded historical evidence.
