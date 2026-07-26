@@ -23,6 +23,7 @@ import (
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/keystore"
 	"github.com/kado-so/search/internal/releaseclient"
+	"github.com/kado-so/search/internal/requestmeta"
 	"github.com/kado-so/search/internal/searchclient"
 	"github.com/kado-so/search/internal/searchcontract"
 	"github.com/kado-so/search/internal/searchoutput"
@@ -670,9 +671,10 @@ func newDefaultAuthCommands() (authCommands, error) {
 	if err != nil {
 		return nil, err
 	}
+	httpClient := metadataHTTPClient(30*time.Second, agentauth.DefaultLimits().MaxResponseHeaderBytes)
 	client, err := agentauth.NewClient(
 		safeConfig.BaseURL,
-		&http.Client{Timeout: 30 * time.Second},
+		httpClient,
 		agentauth.DefaultLimits(),
 		rand.Reader,
 	)
@@ -694,7 +696,7 @@ func newDefaultSearchCommands() (searchCommands, error) {
 	if err != nil {
 		return nil, err
 	}
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := metadataHTTPClient(30*time.Second, agentauth.DefaultLimits().MaxResponseHeaderBytes)
 	authClient, err := agentauth.NewClient(
 		safeConfig.BaseURL,
 		httpClient,
@@ -754,12 +756,21 @@ func newDefaultReleaseCommands(info buildinfo.Info) (releaseCommands, error) {
 			MetadataURL: info.ReleaseMetadataURL,
 			PublicKey:   info.ReleasePublicKey,
 			Fetcher: releaseclient.HTTPFetcher{
-				Client: &http.Client{Timeout: 45 * time.Second},
+				Client: metadataHTTPClient(45*time.Second, 64*1024),
 			},
 		},
 		executable: executable,
 		info:       info,
 	}, nil
+}
+
+func metadataHTTPClient(timeout time.Duration, maxResponseHeaderBytes int64) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxResponseHeaderBytes = maxResponseHeaderBytes
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: requestmeta.NewTransport(transport, buildinfo.Current()),
+	}
 }
 
 func (commands *defaultAuthCommands) Status(

@@ -48,6 +48,14 @@ removing that entire directory; per-operation lock deletion is forbidden
 because it could split exclusion between a current waiter and a newly created
 lock. Isolated operations never recreate a directory removed after selection.
 
+Every Kado HTTP request also carries bounded, unverified client name/version,
+platform, and best-effort agent-runtime metadata. Runtime detection uses
+inherited environment markers and then the local process tree without prompting
+the calling agent. Enrollment additionally carries a bounded hostname, local
+operating-system username, and global Git email when available. These values
+never participate in credential identity, authentication, authorization, or
+future agent-to-user linking.
+
 ## Contract Consumption
 
 The Search Document JSON Schema and JSON-LD context are owned and published by
