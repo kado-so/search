@@ -1,0 +1,336 @@
+{
+  "$schema": "https://raw.githubusercontent.com/kado-so/search/main/distribution/kado-installation.v1.schema.json",
+  "schema_version": "kado.installation.v1",
+  "product": {
+    "id": "kado-search",
+    "name": "Kado Search",
+    "version": "0.1.0",
+    "executable": "kado",
+    "website_url": "https://kado.so",
+    "install_url": "https://kado.so/install",
+    "repository_url": "https://github.com/kado-so/search",
+    "description_url": "https://raw.githubusercontent.com/kado-so/search/main/distribution/kado-installation.v1.gen.json",
+    "description_manifest_url": "https://raw.githubusercontent.com/kado-so/search/main/distribution/kado-installation.v1.manifest.gen.json"
+  },
+  "approval": {
+    "required": true,
+    "kind": "explicit-user-confirmation",
+    "applies_to": [
+      "cli-install",
+      "plugin-or-skill-install",
+      "update-or-uninstall"
+    ],
+    "agent_behavior": [
+      "Treat the exact user-authored phrase install kado.so as explicit confirmation to install Kado for the current supported agent.",
+      "Before execution, state the exact target, source, filesystem changes, and network access; ask only when the target is ambiguous or no supported operation can be chosen safely.",
+      "Updates, uninstall, and credential revocation require their own explicit user instructions."
+    ]
+  },
+  "capabilities": [
+    "Authenticated current-market solution search",
+    "Autonomous-agent enrollment with local non-exportable credential storage",
+    "Canonical Search Document JSON and JSONL output",
+    "Interactive clarification and bounded lifecycle handling",
+    "Opaque pagination with deterministic multi-page output",
+    "Verified signed self-update and credential-preserving uninstall"
+  ],
+  "supported_agents": [
+    {
+      "id": "agent-skills",
+      "display_name": "Agent Skills",
+      "package_kind": "agent-skill",
+      "package_id": "kado-search",
+      "package_url": "https://github.com/kado-so/search/tree/main/skills/kado-search",
+      "manifest_urls": [
+        "https://raw.githubusercontent.com/kado-so/search/main/skills/kado-search/SKILL.md"
+      ],
+      "install_steps": [
+        {
+          "operation": "install",
+          "command": [
+            "npx",
+            "skills",
+            "add",
+            "kado-so/search",
+            "--skill",
+            "kado-search"
+          ]
+        }
+      ],
+      "uninstall_steps": [
+        {
+          "operation": "uninstall",
+          "command": [
+            "npx",
+            "skills",
+            "remove",
+            "kado-search"
+          ]
+        }
+      ],
+      "skill_invocation": "kado-search"
+    },
+    {
+      "id": "codex",
+      "display_name": "Codex",
+      "package_kind": "plugin",
+      "package_id": "kado-search@kado",
+      "package_url": "https://github.com/kado-so/search",
+      "manifest_urls": [
+        "https://raw.githubusercontent.com/kado-so/search/main/.agents/plugins/marketplace.json",
+        "https://raw.githubusercontent.com/kado-so/search/main/.codex-plugin/plugin.json",
+        "https://raw.githubusercontent.com/kado-so/search/main/skills/kado-search/SKILL.md"
+      ],
+      "install_steps": [
+        {
+          "operation": "marketplace_add",
+          "command": [
+            "codex",
+            "plugin",
+            "marketplace",
+            "add",
+            "kado-so/search"
+          ]
+        },
+        {
+          "operation": "install",
+          "command": [
+            "codex",
+            "plugin",
+            "add",
+            "kado-search@kado"
+          ]
+        }
+      ],
+      "uninstall_steps": [
+        {
+          "operation": "uninstall",
+          "command": [
+            "codex",
+            "plugin",
+            "remove",
+            "kado-search@kado"
+          ]
+        },
+        {
+          "operation": "marketplace_remove",
+          "command": [
+            "codex",
+            "plugin",
+            "marketplace",
+            "remove",
+            "kado"
+          ]
+        }
+      ],
+      "skill_invocation": "kado-search:kado-search"
+    },
+    {
+      "id": "claude-code",
+      "display_name": "Claude Code",
+      "package_kind": "plugin",
+      "package_id": "kado-search@kado",
+      "package_url": "https://github.com/kado-so/search",
+      "manifest_urls": [
+        "https://raw.githubusercontent.com/kado-so/search/main/.claude-plugin/marketplace.json",
+        "https://raw.githubusercontent.com/kado-so/search/main/.claude-plugin/plugin.json",
+        "https://raw.githubusercontent.com/kado-so/search/main/skills/kado-search/SKILL.md"
+      ],
+      "install_steps": [
+        {
+          "operation": "marketplace_add",
+          "command": [
+            "claude",
+            "plugin",
+            "marketplace",
+            "add",
+            "kado-so/search"
+          ]
+        },
+        {
+          "operation": "install",
+          "command": [
+            "claude",
+            "plugin",
+            "install",
+            "kado-search@kado"
+          ]
+        }
+      ],
+      "uninstall_steps": [
+        {
+          "operation": "uninstall",
+          "command": [
+            "claude",
+            "plugin",
+            "uninstall",
+            "kado-search@kado"
+          ]
+        },
+        {
+          "operation": "marketplace_remove",
+          "command": [
+            "claude",
+            "plugin",
+            "marketplace",
+            "remove",
+            "kado"
+          ]
+        }
+      ],
+      "skill_invocation": "/kado-search:kado-search"
+    }
+  ],
+  "supported_platforms": [
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "archive_format": "tar.gz",
+      "executable": "kado"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "archive_format": "tar.gz",
+      "executable": "kado"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "archive_format": "tar.gz",
+      "executable": "kado"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "archive_format": "tar.gz",
+      "executable": "kado"
+    },
+    {
+      "os": "windows",
+      "arch": "amd64",
+      "archive_format": "zip",
+      "executable": "kado.exe"
+    },
+    {
+      "os": "windows",
+      "arch": "arm64",
+      "archive_format": "zip",
+      "executable": "kado.exe"
+    }
+  ],
+  "release": {
+    "availability": "unpublished",
+    "installable": false,
+    "metadata_schema_version": "kado.release.v1",
+    "metadata_url": "https://kado.so/install/releases/stable/release-metadata.json",
+    "signature_url": "https://kado.so/install/releases/stable/release-metadata.json.sig",
+    "publication_requirement": "Do not claim that the CLI is downloadable or installable until canonical metadata and its detached signature are published and verify under reviewed release trust.",
+    "asset_discovery": {
+      "binary": "targets[].binary",
+      "archive": "targets[].archive",
+      "install_guide": "install_guide",
+      "install_unix": "install_unix",
+      "install_powershell": "install_powershell",
+      "uninstall_unix": "uninstall_unix",
+      "uninstall_powershell": "uninstall_powershell"
+    },
+    "verification_discovery": {
+      "public_key": {
+        "locator": "reviewed-release-bundle.release-public-key.pem",
+        "format": "PEM SubjectPublicKeyInfo"
+      },
+      "signature": {
+        "locator": "release.signature_url",
+        "format": "Ed25519 detached signature"
+      },
+      "checksums": {
+        "locator": "release-metadata.checksums",
+        "format": "SHA-256 checksums"
+      },
+      "provenance": {
+        "locator": "release-metadata.provenance",
+        "format": "SLSA v1 in-toto statement"
+      },
+      "sbom": {
+        "locator": "release-metadata.targets[].sbom",
+        "format": "SPDX 2.3 JSON"
+      }
+    }
+  },
+  "cli": {
+    "install": {
+      "mode": "verified-local-release-bundle",
+      "available_when": "signed-release-metadata-is-published",
+      "steps": [
+        "Fetch canonical metadata and detached signature from the exact release discovery URLs.",
+        "Verify trusted Ed25519 metadata before following any artifact URL.",
+        "Download the selected platform archive and its checksums, provenance, SBOM, and generated installer into one local directory.",
+        "Verify every digest, provenance subject, SBOM identity, archive path, and candidate executable before installation.",
+        "Run only the downloaded generated installer after explicit user confirmation."
+      ],
+      "forbidden": [
+        "curl-pipe-shell",
+        "unverified-binary",
+        "overwrite-existing-binary"
+      ]
+    },
+    "update": {
+      "command": [
+        "kado",
+        "update"
+      ],
+      "dry_run_command": [
+        "kado",
+        "update",
+        "--dry-run"
+      ],
+      "approval_required": true,
+      "behavior": "Verify signed same-origin release metadata and the complete candidate supply chain before atomic replacement; reject downgrades unless separately authorized."
+    },
+    "uninstall": {
+      "command": [
+        "kado",
+        "uninstall",
+        "--yes"
+      ],
+      "approval_required": true,
+      "behavior": "Remove only the executable and preserve autonomous-agent credentials unless explicit purge and successful revocation are separately requested."
+    }
+  },
+  "service": {
+    "protected_search": {
+      "url": "https://kado.so/search",
+      "method": "GET",
+      "query_parameter": "q",
+      "authentication_required": true,
+      "media_type": "application/vnd.kado.search.v1+json"
+    },
+    "search_document": {
+      "schema_version": "kado.search-document.v1",
+      "manifest_url": "https://kado.so/contracts/search-document/v1/manifest.json",
+      "schema_url": "https://kado.so/schemas/search-document/v1.json",
+      "context_url": "https://kado.so/contexts/search-document/v1.jsonld",
+      "openapi_url": "https://kado.so/openapi/search-document/v1.json"
+    },
+    "authentication": {
+      "authorization_server_metadata_url": "https://kado.so/.well-known/oauth-authorization-server",
+      "protected_resource_metadata_url": "https://kado.so/.well-known/oauth-protected-resource",
+      "agent_principal_metadata_url": "https://kado.so/.well-known/agent-principal",
+      "jwks_url": "https://kado.so/.well-known/jwks.json"
+    }
+  },
+  "source_integrity": {
+    "algorithm": "sha256",
+    "distribution_source": {
+      "url": "https://raw.githubusercontent.com/kado-so/search/main/distribution/kado-search.manifest.json",
+      "sha256": "1ccfceb11c11f93df40bf50d5e09f6152942a6abc789f93b1313bfde682e77f2",
+      "size": 2363
+    },
+    "schema": {
+      "url": "https://raw.githubusercontent.com/kado-so/search/main/distribution/kado-installation.v1.schema.json",
+      "sha256": "8016aef93ba1342bf431230e108cd19c10b7ffebffb7356ea44252b3c74131ad",
+      "size": 24177
+    }
+  }
+}

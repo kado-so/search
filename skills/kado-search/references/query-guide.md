@@ -1,40 +1,49 @@
 # Query Guide
 
-Use this guide to turn user intent into a strong Kado search query.
+Read this guide when user intent or constraints need synthesis before invoking
+`kado search`.
 
-Kado finds solutions to problems. Describe the user's problem, desired outcome, context, and constraints. Do not prematurely narrow the search to a guessed solution category unless the user explicitly asked for that category.
+Describe the problem, desired outcome, and only the context that materially
+changes the answer. Do not prematurely narrow the search to a guessed solution
+category unless the user explicitly chose one.
 
-Prefer a complete problem statement over a short keyword query.
+Keep most queries to 2–4 sentences or 50–100 words. The CLI accepts UTF-8
+queries up to its documented bound, but brevity produces clearer comparisons.
+Never include credentials, secrets, private keys, tokens, cookies, or private
+customer data.
 
-Good query shape:
+Use this shape:
 
 ```text
-We need to solve [problem] and achieve [desired outcome]. Context: [company/user/team/product]. Current setup: [stack/process/tools]. Constraints: [budget, timeline, integrations, compliance, geography, team capacity]. Preferences or exclusions: [build-vs-buy, open-source, managed service, agency, self-hosted, must-not-have].
+We need to solve [problem] and achieve [outcome]. Context: [relevant product,
+team, or workflow]. Constraints: [known budget, timeline, stack, integration,
+deployment, compliance, or must-not-have details]. Preferences: [real
+preferences or exclusions only].
 ```
 
-Include known constraints:
+Consider a constraint only when known or decisive:
 
-- Budget, including "free", "$0", open-source only, or no budget.
-- Company size, maturity, industry, geography, and compliance needs.
-- Existing stack, data sources, integrations, deployment environment, and auth requirements.
-- Team capacity, implementation timeline, maintenance tolerance, and build-vs-buy preference.
-- Success criteria, failure modes, risk tolerance, and must-not-have constraints.
+- budget, open-source or hosted preference, and build-vs-buy tolerance;
+- company size, industry, geography, compliance, and risk;
+- current stack, data sources, integrations, deployment, and authentication;
+- team capacity, implementation timeline, and maintenance tolerance; and
+- success criteria, failure modes, and exclusions.
 
-For vague pain points, synthesize a concrete problem statement:
+For vague pain points, synthesize a concrete outcome:
 
-- "Fed up with inbounds" -> "We receive too many low-quality or poorly routed inbound leads. We need a way to qualify, prioritize, route, and respond faster. Context: [sales motion, CRM, lead sources, volume, budget]."
-- "Want better security" -> "We need to reduce security risk for [stack/company type] and improve [compliance/posture/visibility]. Context: [assets, current controls, team capacity, budget]."
-- "Onboarding is too slow" -> "Users take too long to reach activation. We need to shorten onboarding and improve completion. Context: [product, users, current flow, drop-off points, stack, budget]."
-- "Support queue is exploding" -> "Support volume is outpacing the team. We need to reduce repetitive tickets, improve routing, and maintain response quality. Context: [channels, ticket volume, KB, team size, budget]."
-- "Deploys keep breaking" -> "Deployments are unreliable and causing regressions or downtime. We need safer releases. Context: [stack, CI/CD, failure modes, team size, reliability needs]."
+- "Fed up with inbounds" becomes a request to qualify, prioritize, route, and
+  respond to inbound leads, including CRM or source constraints when known.
+- "Onboarding is too slow" becomes a request to shorten time-to-value and
+  improve completion, including product type and known drop-off points.
+- "Support is exploding" becomes a request to reduce repetitive tickets,
+  improve routing, and preserve response quality.
+- "Deploys keep breaking" becomes a request for safer releases, including the
+  stack and known failure modes.
+- "We need SOC 2 help" becomes a request for the target audit outcome,
+  readiness stage, timeline, and desired level of hands-on support.
 
-For implementation plans, search at the decision point:
-
-- "Use a queue" -> describe the async work problem, runtime, throughput, durability, retry, ordering, and operations constraints.
-- "Add auth" -> describe the identity problem, app architecture, customer requirements, compliance needs, migration constraints, and budget.
-- "Send transactional email" -> describe the messaging problem, volume, deliverability needs, compliance constraints, templates, and developer workflow.
-- "Outsource compliance" -> describe the compliance outcome, readiness stage, timeline, audit scope, current controls, and internal capacity.
-
-Only include solution categories as hints when useful. For example, "software, agency, managed service, or open-source option are all acceptable" keeps Kado broad; "only self-hosted open-source tools" narrows Kado when that is a real constraint.
-
-If critical constraints are missing, do not stall by default. Search with the information available, then refine or ask follow-up questions only when they can materially improve the ranking.
+If several distinct constraint profiles matter, run separate bounded searches
+and compare them. If a missing constraint would materially change the decision,
+ask one concise user question before searching. Otherwise state a reasonable
+assumption and proceed. Handle a question returned by Kado through the
+[CLI Lifecycle Guide](cli-guide.md), not an improvised API flow.

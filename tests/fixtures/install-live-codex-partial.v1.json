@@ -1,0 +1,47 @@
+{
+  "adapter_id": "codex.subagent-live.v1",
+  "approval_decision": "granted",
+  "capture_kind": "live-captured",
+  "capture_sha256": "1317ffe81e090028806be422ef8df73cc8bbd93605f791d72ea363653b0a1be6",
+  "events": [
+    {
+      "id": "literal-install",
+      "status": "submitted",
+      "type": "prompt"
+    },
+    {
+      "id": "install",
+      "status": "granted",
+      "type": "approval"
+    },
+    {
+      "id": "package.install",
+      "status": "succeeded",
+      "type": "operation"
+    },
+    {
+      "id": "availability",
+      "status": "unpublished",
+      "type": "release"
+    },
+    {
+      "id": "cli.status-version",
+      "status": "failed",
+      "type": "check"
+    },
+    {
+      "id": "package.remove",
+      "status": "completed",
+      "type": "cleanup"
+    },
+    {
+      "id": "package.absent",
+      "status": "verified",
+      "type": "cleanup"
+    }
+  ],
+  "host_id": "codex",
+  "prompt_sha256": "11b9875f42e9254d1d91b03fa983536ddaef735c4f7ae3e07e68dec1fd1c1d24",
+  "protocol_version": "kado.install-host-transcript.v1",
+  "publication_sha256": "b5a17bd8b7b3100416a9e0b3cf47b5ace0a0b92e85ca657f42b17c6a3c18ce47"
+}
