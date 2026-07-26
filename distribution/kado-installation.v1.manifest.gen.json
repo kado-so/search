@@ -5,8 +5,8 @@
     "description": {
       "path": "distribution/kado-installation.v1.gen.json",
       "url": "https://raw.githubusercontent.com/kado-so/search/main/distribution/kado-installation.v1.gen.json",
-      "sha256": "955539a3615468f0d5acfec21596809b0114016ff86f9d21a2a57aa038122e38",
-      "size": 10729
+      "sha256": "c5fd17c8c92a60c9956147a5200e1cd645b2420a9a9b0397e773a66ba0442fc4",
+      "size": 10832
     },
     "schema": {
       "path": "distribution/kado-installation.v1.schema.json",

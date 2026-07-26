@@ -134,6 +134,23 @@ so an ancestor replacement cannot redirect key access. Windows callers must
 use Credential Manager because portable file modes do not provide an
 equivalent ACL guarantee.
 
+Executable acceptance may explicitly set `KADO_ACCEPTANCE_CREDENTIAL_FILE` to
+one canonical absolute file path under a pre-created, non-symlink `0700`
+directory on a Unix-like host. The actual `auth` and `search` command
+composition then uses that isolated file instead of the OS keychain. An unset
+variable leaves the keychain default unchanged; an empty, relative, unclean,
+missing-parent, symlinked, or permission-unsafe location fails closed. The
+acceptance runner owns creation and removal of the surrounding directory. Each
+isolated store retains one non-secret dot-prefixed `0600` lock file in that
+directory so old, current, and waiting CLI processes cannot split their
+credential lock. The CLI preserves the credential across commands and
+interruptions, and removes only the exact credential record after confirmed
+`auth revoke` or explicit uninstall with `--purge-credentials`. After all CLI
+processes stop, the acceptance runner removes the entire directory, including
+the retained lock; the CLI never races waiters by deleting the lock itself.
+If the runner removes the directory while a selected store still exists,
+later operations fail without recreating it.
+
 Both stores use the same versioned, bounded record. There is no legacy
 credential format to migrate, and unknown versions fail closed. Management
 keys can be persisted only through the credential-store boundary. Session

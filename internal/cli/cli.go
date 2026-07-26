@@ -52,6 +52,8 @@ Options:
   version --json    Show deterministic executable provenance
 `
 
+const acceptanceCredentialFileEnvironment = "KADO_ACCEPTANCE_CREDENTIAL_FILE"
+
 type authCommands interface {
 	Status(context.Context) (agentauth.CredentialStatus, error)
 	Revoke(context.Context) (agentauth.CredentialStatus, error)
@@ -664,6 +666,10 @@ func newDefaultAuthCommands() (authCommands, error) {
 	if err != nil {
 		return nil, err
 	}
+	store, err := newDefaultCredentialStore()
+	if err != nil {
+		return nil, err
+	}
 	client, err := agentauth.NewClient(
 		safeConfig.BaseURL,
 		&http.Client{Timeout: 30 * time.Second},
@@ -675,12 +681,16 @@ func newDefaultAuthCommands() (authCommands, error) {
 	}
 	return &defaultAuthCommands{
 		client: client,
-		store:  keystore.NewOSKeychainStore(),
+		store:  store,
 	}, nil
 }
 
 func newDefaultSearchCommands() (searchCommands, error) {
 	safeConfig, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	store, err := newDefaultCredentialStore()
 	if err != nil {
 		return nil, err
 	}
@@ -696,7 +706,7 @@ func newDefaultSearchCommands() (searchCommands, error) {
 	}
 	authorization := &phase02CAuthorizationSource{
 		client: authClient,
-		store:  keystore.NewOSKeychainStore(),
+		store:  store,
 	}
 	search, err := searchclient.New(
 		safeConfig.BaseURL,
@@ -708,6 +718,20 @@ func newDefaultSearchCommands() (searchCommands, error) {
 		return nil, err
 	}
 	return &defaultSearchCommands{client: search}, nil
+}
+
+func newDefaultCredentialStore() (keystore.Store, error) {
+	return selectDefaultCredentialStore(os.LookupEnv)
+}
+
+func selectDefaultCredentialStore(
+	environment func(string) (string, bool),
+) (keystore.Store, error) {
+	path, configured := environment(acceptanceCredentialFileEnvironment)
+	if !configured {
+		return keystore.NewOSKeychainStore(), nil
+	}
+	return keystore.NewIsolatedFileStore(path)
 }
 
 func newDefaultReleaseCommands(info buildinfo.Info) (releaseCommands, error) {

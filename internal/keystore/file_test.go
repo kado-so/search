@@ -72,6 +72,168 @@ func TestFileStoreIsExplicitAndPermissionRestricted(t *testing.T) {
 	}
 }
 
+func TestIsolatedFileStoreRequiresPreprovisionedSafeLocation(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		if _, err := NewIsolatedFileStore(`C:\kado\management-key`); !errors.Is(
+			err,
+			ErrUnsupported,
+		) {
+			t.Fatalf("NewIsolatedFileStore() error = %v, want ErrUnsupported", err)
+		}
+		return
+	}
+
+	root := resolvedTempDir(t)
+	privateDirectory := filepath.Join(root, "private")
+	if err := os.Mkdir(privateDirectory, 0o700); err != nil {
+		t.Fatalf("Mkdir(private) error = %v", err)
+	}
+	storePath := filepath.Join(privateDirectory, "management-key.json")
+	store, err := NewIsolatedFileStore(storePath)
+	if err != nil {
+		t.Fatalf("NewIsolatedFileStore() error = %v", err)
+	}
+	if err := store.Save([]byte("isolated-management-key")); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := NewIsolatedFileStore(storePath); err != nil {
+		t.Fatalf("NewIsolatedFileStore(existing) error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name string
+		path string
+		kind error
+	}{
+		{
+			name: "empty",
+			path: "",
+			kind: ErrInvalid,
+		},
+		{
+			name: "relative",
+			path: filepath.Join("relative", "management-key.json"),
+			kind: ErrInvalid,
+		},
+		{
+			name: "unclean",
+			path: privateDirectory + string(filepath.Separator) +
+				".." + string(filepath.Separator) +
+				filepath.Base(privateDirectory) + string(filepath.Separator) +
+				"other.json",
+			kind: ErrInvalid,
+		},
+		{
+			name: "control",
+			path: filepath.Join(privateDirectory, "other\n.json"),
+			kind: ErrInvalid,
+		},
+		{
+			name: "missing parent",
+			path: filepath.Join(root, "missing", "management-key.json"),
+			kind: ErrNotFound,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := NewIsolatedFileStore(test.path); !errors.Is(err, test.kind) {
+				t.Fatalf(
+					"NewIsolatedFileStore() error = %v, want %v",
+					err,
+					test.kind,
+				)
+			}
+		})
+	}
+}
+
+func TestIsolatedFileStoreRejectsSymlinksAndUnsafePermissionsAtSelection(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("file fallback is intentionally unsupported on Windows")
+	}
+
+	root := resolvedTempDir(t)
+	privateDirectory := filepath.Join(root, "private")
+	if err := os.Mkdir(privateDirectory, 0o700); err != nil {
+		t.Fatalf("Mkdir(private) error = %v", err)
+	}
+	storePath := filepath.Join(privateDirectory, "management-key.json")
+	if err := os.WriteFile(storePath, []byte("opaque"), 0o600); err != nil {
+		t.Fatalf("WriteFile(store) error = %v", err)
+	}
+	if err := os.Chmod(storePath, 0o644); err != nil {
+		t.Fatalf("Chmod(store) error = %v", err)
+	}
+	if _, err := NewIsolatedFileStore(storePath); !errors.Is(err, ErrPermissions) {
+		t.Fatalf("unsafe file error = %v, want ErrPermissions", err)
+	}
+	if err := os.Remove(storePath); err != nil {
+		t.Fatalf("Remove(store) error = %v", err)
+	}
+	if err := os.Chmod(privateDirectory, 0o755); err != nil {
+		t.Fatalf("Chmod(private) error = %v", err)
+	}
+	if _, err := NewIsolatedFileStore(storePath); !errors.Is(err, ErrPermissions) {
+		t.Fatalf("unsafe directory error = %v, want ErrPermissions", err)
+	}
+	if err := os.Chmod(privateDirectory, 0o700); err != nil {
+		t.Fatalf("Chmod(private restore) error = %v", err)
+	}
+
+	realDirectory := filepath.Join(root, "real")
+	if err := os.Mkdir(realDirectory, 0o700); err != nil {
+		t.Fatalf("Mkdir(real) error = %v", err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(realDirectory, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := NewIsolatedFileStore(
+		filepath.Join(alias, "management-key.json"),
+	); !errors.Is(err, ErrPermissions) {
+		t.Fatalf("symlink parent error = %v, want ErrPermissions", err)
+	}
+}
+
+func TestIsolatedFileStoreNeverRecreatesRemovedParent(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("file fallback is intentionally unsupported on Windows")
+	}
+
+	root := resolvedTempDir(t)
+	privateDirectory := filepath.Join(root, "private")
+	if err := os.Mkdir(privateDirectory, 0o700); err != nil {
+		t.Fatalf("Mkdir(private) error = %v", err)
+	}
+	storePath := filepath.Join(privateDirectory, "management-key.json")
+	store, err := NewIsolatedFileStore(storePath)
+	if err != nil {
+		t.Fatalf("NewIsolatedFileStore() error = %v", err)
+	}
+	if err := os.Remove(privateDirectory); err != nil {
+		t.Fatalf("Remove(private) error = %v", err)
+	}
+
+	if err := store.Save([]byte("must-not-be-written")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Save() error = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(privateDirectory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Save() recreated isolated parent: %v", err)
+	}
+	if _, _, err := store.Create(
+		[]byte("must-not-be-created"),
+	); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Create() error = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(privateDirectory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Create() recreated isolated parent: %v", err)
+	}
+}
+
 func TestFileStoreConditionalDeleteRetainsReplacement(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
