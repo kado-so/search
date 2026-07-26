@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,6 +27,11 @@ func TestLoadDefaults(t *testing.T) {
 	if got.ConfigDir != wantDir {
 		t.Fatalf("ConfigDir = %q, want %q", got.ConfigDir, wantDir)
 	}
+	if got.ConfigPath != filepath.Join(wantDir, "config.json") ||
+		got.CredentialBackend != CredentialBackendOS ||
+		got.SecretsDir != filepath.Join(wantDir, "secrets") {
+		t.Fatalf("default config = %#v", got)
+	}
 }
 
 func TestLoadOverridesSafeValues(t *testing.T) {
@@ -44,6 +50,55 @@ func TestLoadOverridesSafeValues(t *testing.T) {
 	}
 	if got.ConfigDir != environment[EnvironmentConfigDir] {
 		t.Fatalf("ConfigDir = %q", got.ConfigDir)
+	}
+}
+
+func TestLoadReadsFileCredentialConfiguration(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "kado")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, "config.json"),
+		[]byte(`{"base_url":"https://search.example.test","credentials":{"backend":"file","directory":"./private-secrets"}}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, err := load(
+		mapEnvironment(map[string]string{EnvironmentConfigDir: root}),
+		unavailableConfigDir,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BaseURL.String() != "https://search.example.test/" ||
+		got.CredentialBackend != CredentialBackendFile ||
+		got.SecretsDir != filepath.Join(root, "private-secrets") {
+		t.Fatalf("file config = %#v", got)
+	}
+}
+
+func TestLoadRejectsUnknownOrTrailingConfig(t *testing.T) {
+	for _, encoded := range []string{
+		`{"credentials":{"backend":"memory"}}`,
+		`{"unknown":true}`,
+		`{"credentials":{}} trailing`,
+		`{"credentials":{"directory":"."}}`,
+	} {
+		root := filepath.Join(t.TempDir(), "kado")
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "config.json"), []byte(encoded), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := load(
+			mapEnvironment(map[string]string{EnvironmentConfigDir: root}),
+			unavailableConfigDir,
+		); err == nil {
+			t.Fatalf("load accepted %q", encoded)
+		}
 	}
 }
 

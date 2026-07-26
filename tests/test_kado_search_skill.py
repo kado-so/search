@@ -32,10 +32,10 @@ class KadoSearchSkillTests(unittest.TestCase):
             },
         )
         self.assertIn("This skill covers\nSearch only.", content)
-        self.assertIn("kado search --jsonl", content)
 
         lowered = content.casefold()
         for forbidden in (
+            "kado search --",
             "kado auth",
             "kado update",
             "kado uninstall",

@@ -25,7 +25,13 @@ func (capture *captureTransport) RoundTrip(request *http.Request) (*http.Respons
 
 func TestEnrollmentIncludesOnlyHostnameAndUsername(t *testing.T) {
 	capture := &captureTransport{}
-	transport := newTransport(capture, "workstation", "local-user")
+	transport := newTransport(
+		capture,
+		"codex",
+		"host_0123456789012345678901",
+		"workstation",
+		"local-user",
+	)
 	request, err := http.NewRequest(
 		http.MethodPost,
 		"https://kado.so/api/auth/agent/enroll",
@@ -47,8 +53,10 @@ func TestEnrollmentIncludesOnlyHostnameAndUsername(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
+		"host_id":        "host_0123456789012345678901",
 		"hostname":       "workstation",
 		"local_username": "local-user",
+		"agent":          "codex",
 	}
 	if len(metadata) != len(want) {
 		t.Fatalf("metadata = %#v", metadata)
@@ -58,11 +66,20 @@ func TestEnrollmentIncludesOnlyHostnameAndUsername(t *testing.T) {
 			t.Fatalf("metadata[%q] = %q, want %q", key, metadata[key], value)
 		}
 	}
+	if value := capture.request.Header.Get(HeaderAgent); value != "codex" {
+		t.Fatalf("agent header = %q", value)
+	}
 }
 
 func TestMetadataIsRemovedFromOtherRequests(t *testing.T) {
 	capture := &captureTransport{}
-	transport := newTransport(capture, "workstation", "local-user")
+	transport := newTransport(
+		capture,
+		"claude-code",
+		"host_0123456789012345678901",
+		"workstation",
+		"local-user",
+	)
 	request, err := http.NewRequest(http.MethodGet, "https://kado.so/search", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +90,9 @@ func TestMetadataIsRemovedFromOtherRequests(t *testing.T) {
 	}
 	if value := capture.request.Header.Get(HeaderInstallation); value != "" {
 		t.Fatalf("installation metadata leaked into Search: %q", value)
+	}
+	if value := capture.request.Header.Get(HeaderAgent); value != "claude-code" {
+		t.Fatalf("agent header = %q", value)
 	}
 }
 

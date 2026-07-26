@@ -1,3 +1,5 @@
+//go:build !windows
+
 package keystore
 
 import (
@@ -9,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"unicode"
 )
@@ -24,13 +25,8 @@ type FileStore struct {
 	requireExistingParent bool
 }
 
-// NewFileStore creates an explicit permission-restricted fallback. Windows
-// callers must use Credential Manager because portable os.FileMode checks do
-// not establish an equivalent ACL boundary there.
+// NewFileStore creates an explicit permission-restricted file store.
 func NewFileStore(path string) (*FileStore, error) {
-	if runtime.GOOS == "windows" {
-		return nil, storageError("configure file fallback", ErrUnsupported, nil)
-	}
 	if path == "" ||
 		path != strings.TrimSpace(path) ||
 		strings.ContainsFunc(path, unicode.IsControl) ||
@@ -39,6 +35,30 @@ func NewFileStore(path string) (*FileStore, error) {
 		return nil, storageError("configure file fallback", ErrInvalid, nil)
 	}
 	return &FileStore{path: path}, nil
+}
+
+// NewAgentFileStore creates private per-agent directories beneath root.
+func NewAgentFileStore(root, agent string) (*FileStore, error) {
+	if !validAgentNamespace(agent) ||
+		root == "" ||
+		!filepath.IsAbs(root) ||
+		root != filepath.Clean(root) {
+		return nil, storageError("configure file fallback", ErrInvalid, nil)
+	}
+	privateRoot, err := openPrivateDirectory(root, true)
+	if err != nil {
+		return nil, err
+	}
+	_ = privateRoot.Close()
+	agentDirectory := filepath.Join(root, agent)
+	privateAgent, err := openPrivateDirectory(agentDirectory, true)
+	if err != nil {
+		return nil, err
+	}
+	_ = privateAgent.Close()
+	return NewIsolatedFileStore(
+		filepath.Join(agentDirectory, "management-key.json"),
+	)
 }
 
 // NewIsolatedFileStore selects a FileStore only when its caller has already

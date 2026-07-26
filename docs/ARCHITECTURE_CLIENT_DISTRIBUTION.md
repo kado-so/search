@@ -25,13 +25,16 @@ The CLI calls only public canonical `kado.so` resources. It:
 - validates every Search Document; and
 - emits canonical JSON, paginated JSONL, or bounded human output.
 
-Ordinary CLI use stores the management key in the operating-system credential
-store. A permission-restricted file-store adapter exists only for explicitly
-isolated Unix-like acceptance environments.
+Each canonical calling agent has an independent management key. Ordinary CLI
+use stores it in the operating-system credential store. A configurable,
+permission-restricted file backend is available on macOS, Windows, and Linux;
+Windows file records are also protected with DPAPI.
 
-Enrollment sends a bounded hostname and local operating-system username. No
-Git identity, process tree, environment-based runtime detection, or browser
-state is collected.
+The CLI maintains a random non-secret host ID beside its configuration.
+Enrollment sends that ID, a bounded hostname and local username, and the
+canonical calling-agent name. Agent detection examines process ancestry and
+recognized environment markers locally. Only the resulting name is sent; raw
+process and environment data, Git identity, and browser state are never sent.
 
 ## Contract consumption
 

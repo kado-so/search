@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/kado-so/search/internal/agentauth"
+	"github.com/kado-so/search/internal/agentidentity"
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/releaseclient"
@@ -120,6 +121,119 @@ func TestAuthStatusPrintsOnlyBoundedNonSecretIdentityState(t *testing.T) {
 		t.Fatalf("status stdout = %q", stdout)
 	}
 	assertNoCredentialSecrets(t, stdout+stderr)
+}
+
+func TestAgentOverrideSelectsNamespacedAuthFactory(t *testing.T) {
+	t.Parallel()
+
+	selected := ""
+	auth := &fakeAuthCommands{
+		status: agentauth.CredentialStatus{Status: agentauth.StatusNotConfigured},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"--agent", "claude-code", "auth", "status"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			detectAgent: func(override string) (agentidentity.Detection, error) {
+				if override != "claude-code" {
+					t.Fatalf("override = %q", override)
+				}
+				return agentidentity.Detection{
+					Agent:  override,
+					Source: "override",
+				}, nil
+			},
+			newAuthForAgent: func(agent string) (authCommands, error) {
+				selected = agent
+				return auth, nil
+			},
+		},
+	)
+	if exitCode != 0 || stderr.Len() != 0 ||
+		stdout.String() != "status: not-configured\n" ||
+		selected != "claude-code" {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q selected=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+			selected,
+		)
+	}
+}
+
+func TestAgentAndIdentityListsAreDeterministic(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		args []string
+		deps dependencies
+		want string
+	}{
+		{
+			args: []string{"agent", "list"},
+			want: strings.Join(agentidentity.Known(), "\n") + "\n",
+		},
+		{
+			args: []string{"auth", "identities"},
+			deps: dependencies{
+				listIdentities: func() ([]string, error) {
+					return []string{"claude-code", "codex"}, nil
+				},
+			},
+			want: "claude-code\ncodex\n",
+		},
+	} {
+		var stdout, stderr bytes.Buffer
+		exitCode := runWithDependencies(
+			test.args,
+			&stdout,
+			&stderr,
+			buildinfo.Info{},
+			test.deps,
+		)
+		if exitCode != 0 || stderr.Len() != 0 || stdout.String() != test.want {
+			t.Fatalf(
+				"Run(%q) exit=%d stdout=%q stderr=%q",
+				test.args,
+				exitCode,
+				stdout.String(),
+				stderr.String(),
+			)
+		}
+	}
+}
+
+func TestAuthCreateUsesExplicitCreationOperation(t *testing.T) {
+	t.Parallel()
+
+	auth := &fakeCreateAuthCommands{
+		fakeAuthCommands: &fakeAuthCommands{},
+		created: agentauth.CredentialStatus{
+			Status:       agentauth.StatusActive,
+			PrincipalID:  "agt_created",
+			CredentialID: "acred_created",
+			ClientID:     "clt_created",
+		},
+	}
+	stdout, stderr, exitCode := runTestAuth(
+		t,
+		[]string{"auth", "create"},
+		auth,
+	)
+	if exitCode != 0 || stderr != "" || auth.createCalls != 1 ||
+		!strings.Contains(stdout, "principal: agt_created\n") {
+		t.Fatalf(
+			"create exit=%d stdout=%q stderr=%q calls=%d",
+			exitCode,
+			stdout,
+			stderr,
+			auth.createCalls,
+		)
+	}
 }
 
 func TestAuthStatusWithoutLocalCredentialIsUsefulAndDoesNotEnroll(t *testing.T) {
@@ -848,6 +962,13 @@ type fakeAuthCommands struct {
 	revokeCalls int
 }
 
+type fakeCreateAuthCommands struct {
+	*fakeAuthCommands
+	created     agentauth.CredentialStatus
+	createErr   error
+	createCalls int
+}
+
 type fakeSearchCommands struct {
 	result  searchRunResult
 	err     error
@@ -909,6 +1030,13 @@ func (auth *fakeAuthCommands) Revoke(
 ) (agentauth.CredentialStatus, error) {
 	auth.revokeCalls++
 	return auth.revoked, auth.revokeErr
+}
+
+func (auth *fakeCreateAuthCommands) Create(
+	context.Context,
+) (agentauth.CredentialStatus, error) {
+	auth.createCalls++
+	return auth.created, auth.createErr
 }
 
 func runTestAuth(

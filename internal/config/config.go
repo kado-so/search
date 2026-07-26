@@ -3,6 +3,9 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +20,14 @@ const (
 	EnvironmentBaseURL   = "KADO_BASE_URL"
 	EnvironmentConfigDir = "KADO_CONFIG_DIR"
 	defaultBaseURL       = "https://kado.so"
+	configFileName       = "config.json"
+)
+
+type CredentialBackend string
+
+const (
+	CredentialBackendOS   CredentialBackend = "os"
+	CredentialBackendFile CredentialBackend = "file"
 )
 
 // Config contains safe client configuration. It must never grow fields that
@@ -26,8 +37,11 @@ type Config struct {
 	// canonical, unescaped ASCII path prefix without a trailing slash.
 	// Callers may safely append endpoint path segments without first cleaning
 	// or decoding attacker-controlled path data.
-	BaseURL   *url.URL
-	ConfigDir string
+	BaseURL           *url.URL
+	ConfigDir         string
+	ConfigPath        string
+	CredentialBackend CredentialBackend
+	SecretsDir        string
 }
 
 // Load reads safe process configuration and platform configuration defaults.
@@ -39,15 +53,6 @@ type environmentLookup func(string) (string, bool)
 type userConfigDirLookup func() (string, error)
 
 func load(environment environmentLookup, userConfigDir userConfigDirLookup) (Config, error) {
-	rawBaseURL := defaultBaseURL
-	if configured, exists := environment(EnvironmentBaseURL); exists {
-		rawBaseURL = configured
-	}
-	baseURL, err := parseBaseURL(rawBaseURL)
-	if err != nil {
-		return Config{}, err
-	}
-
 	configDir, exists := environment(EnvironmentConfigDir)
 	if !exists {
 		root, lookupErr := userConfigDir()
@@ -70,8 +75,92 @@ func load(environment environmentLookup, userConfigDir userConfigDirLookup) (Con
 			nil,
 		)
 	}
+	configDir = filepath.Clean(configDir)
+	configPath := filepath.Join(configDir, configFileName)
+	file, err := readConfigFile(configPath)
+	if err != nil {
+		return Config{}, err
+	}
+	rawBaseURL := file.BaseURL
+	if rawBaseURL == "" {
+		rawBaseURL = defaultBaseURL
+	}
+	if configured, exists := environment(EnvironmentBaseURL); exists {
+		rawBaseURL = configured
+	}
+	baseURL, err := parseBaseURL(rawBaseURL)
+	if err != nil {
+		return Config{}, err
+	}
+	backend := CredentialBackend(file.Credentials.Backend)
+	if backend == "" {
+		backend = CredentialBackendOS
+	}
+	if backend != CredentialBackendOS && backend != CredentialBackendFile {
+		return Config{}, invalidConfigFile(nil)
+	}
+	secrets := file.Credentials.Directory
+	if secrets == "" {
+		secrets = "./secrets"
+	}
+	if secrets != strings.TrimSpace(secrets) ||
+		containsControl(secrets) ||
+		filepath.Clean(secrets) == "." {
+		return Config{}, invalidConfigFile(nil)
+	}
+	if !filepath.IsAbs(secrets) {
+		secrets = filepath.Join(configDir, secrets)
+	}
+	secrets = filepath.Clean(secrets)
+	if !filepath.IsAbs(secrets) {
+		return Config{}, invalidConfigFile(nil)
+	}
+	return Config{
+		BaseURL:           baseURL,
+		ConfigDir:         configDir,
+		ConfigPath:        configPath,
+		CredentialBackend: backend,
+		SecretsDir:        secrets,
+	}, nil
+}
 
-	return Config{BaseURL: baseURL, ConfigDir: filepath.Clean(configDir)}, nil
+type fileConfig struct {
+	BaseURL     string `json:"base_url,omitempty"`
+	Credentials struct {
+		Backend   string `json:"backend,omitempty"`
+		Directory string `json:"directory,omitempty"`
+	} `json:"credentials,omitempty"`
+}
+
+func readConfigFile(path string) (fileConfig, error) {
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fileConfig{}, nil
+	}
+	if err != nil {
+		return fileConfig{}, invalidConfigFile(err)
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, 16*1024))
+	decoder.DisallowUnknownFields()
+	var configured fileConfig
+	if err := decoder.Decode(&configured); err != nil {
+		return fileConfig{}, invalidConfigFile(err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return fileConfig{}, invalidConfigFile(nil)
+	}
+	return configured, nil
+}
+
+func invalidConfigFile(cause error) error {
+	return diagnostic.New(
+		"invalid_config_file",
+		"config.json contains invalid Kado configuration",
+		diagnostic.ExitUsage,
+		cause,
+	)
 }
 
 func parseBaseURL(raw string) (*url.URL, error) {

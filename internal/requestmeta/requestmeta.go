@@ -14,40 +14,47 @@ import (
 
 const (
 	HeaderInstallation = "Kado-Installation-Metadata"
+	HeaderAgent        = "X-Kado-Agent"
 	maxLocalValueSize  = 254
 )
 
 type installationMetadata struct {
+	HostID        string `json:"host_id"`
 	Hostname      string `json:"hostname,omitempty"`
 	LocalUsername string `json:"local_username,omitempty"`
+	Agent         string `json:"agent"`
 }
 
 // Transport adds hostname and local username to enrollment requests.
 type Transport struct {
 	Base                 http.RoundTripper
+	agent                string
 	installationMetadata string
 }
 
 // NewTransport captures the local hostname and username once.
-func NewTransport(base http.RoundTripper) *Transport {
+func NewTransport(base http.RoundTripper, agent, hostID string) *Transport {
 	hostname, _ := os.Hostname()
 	username := ""
 	if current, err := user.Current(); err == nil {
 		username = current.Username
 	}
-	return newTransport(base, hostname, username)
+	return newTransport(base, agent, hostID, hostname, username)
 }
 
-func newTransport(base http.RoundTripper, hostname, username string) *Transport {
+func newTransport(base http.RoundTripper, agent, hostID, hostname, username string) *Transport {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	installation, _ := json.Marshal(installationMetadata{
+		HostID:        boundedLocalValue(hostID),
 		Hostname:      boundedLocalValue(hostname),
 		LocalUsername: boundedLocalValue(username),
+		Agent:         boundedLocalValue(agent),
 	})
 	return &Transport{
 		Base:                 base,
+		agent:                agent,
 		installationMetadata: base64.RawURLEncoding.EncodeToString(installation),
 	}
 }
@@ -55,6 +62,7 @@ func newTransport(base http.RoundTripper, hostname, username string) *Transport 
 func (transport *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	cloned := request.Clone(request.Context())
 	cloned.Header = request.Header.Clone()
+	cloned.Header.Set(HeaderAgent, transport.agent)
 	if strings.HasSuffix(cloned.URL.Path, "/api/auth/agent/enroll") {
 		cloned.Header.Set(HeaderInstallation, transport.installationMetadata)
 	} else {

@@ -1,3 +1,5 @@
+//go:build !windows
+
 package keystore
 
 import (
@@ -16,6 +18,47 @@ func resolvedTempDir(t *testing.T) string {
 		t.Fatalf("EvalSymlinks(TempDir()) error = %v", err)
 	}
 	return resolved
+}
+
+func TestAgentFileStoresArePrivateAndIndependent(t *testing.T) {
+	root := filepath.Join(resolvedTempDir(t), "secrets")
+	codex, err := NewAgentFileStore(root, "codex")
+	if err != nil {
+		t.Fatalf("NewAgentFileStore(codex) error = %v", err)
+	}
+	opencode, err := NewAgentFileStore(root, "opencode")
+	if err != nil {
+		t.Fatalf("NewAgentFileStore(opencode) error = %v", err)
+	}
+	if err := codex.Save([]byte("codex-secret")); err != nil {
+		t.Fatalf("codex.Save() error = %v", err)
+	}
+	if err := opencode.Save([]byte("opencode-secret")); err != nil {
+		t.Fatalf("opencode.Save() error = %v", err)
+	}
+	for path, permission := range map[string]os.FileMode{
+		root:                            0o700,
+		filepath.Join(root, "codex"):    0o700,
+		filepath.Join(root, "opencode"): 0o700,
+		filepath.Join(root, "codex", "management-key.json"):    0o600,
+		filepath.Join(root, "opencode", "management-key.json"): 0o600,
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat(%q) error = %v", path, err)
+		}
+		if info.Mode().Perm() != permission {
+			t.Fatalf("%q permissions = %o, want %o", path, info.Mode().Perm(), permission)
+		}
+	}
+	codexValue, err := codex.Load()
+	if err != nil || string(codexValue) != "codex-secret" {
+		t.Fatalf("codex.Load() = %q, %v", codexValue, err)
+	}
+	opencodeValue, err := opencode.Load()
+	if err != nil || string(opencodeValue) != "opencode-secret" {
+		t.Fatalf("opencode.Load() = %q, %v", opencodeValue, err)
+	}
 }
 
 func TestFileStoreIsExplicitAndPermissionRestricted(t *testing.T) {

@@ -44,10 +44,11 @@ only the generated assets and runtime validation required by the CLI.
 The CLI performs autonomous enrollment and obtains short-lived authorization
 without exposing credentials to the invoking agent.
 
-Long-lived management keys are stored in macOS Keychain, Windows Credential
-Manager, or a Secret Service-compatible keyring on Linux and BSD. Session
-signing keys remain memory-only. An explicit permission-restricted file store
-is available for isolated Unix-like acceptance environments.
+Each detected calling agent has its own long-lived management key. Keys are
+stored in macOS Keychain, Windows Credential Manager, or a Secret
+Service-compatible keyring on Linux and BSD. Session signing keys remain
+memory-only. A permission-restricted file backend is available on every
+platform, including systems without a working OS keyring.
 
 Authentication discovers and validates the protected-resource and
 authorization-server metadata before using advertised endpoints. Enrollment
@@ -57,14 +58,26 @@ proofs, and `private_key_jwt` token exchange. Access JWTs are verified locally.
 Safe authentication state can be inspected with:
 
 ```bash
+kado auth create
 kado auth status
+kado auth identities
+kado --agent codex auth status
 ```
+
+`auth create` creates the selected identity if it does not exist; an
+authenticated Search also creates it transparently when needed.
 
 ## Local metadata
 
-Enrollment includes a bounded local hostname and operating-system username.
-No Git identity, process tree, environment-based runtime detection, browser
-state, or other local metadata is collected.
+The CLI creates a random, non-secret host ID next to its configuration.
+Enrollment includes that ID plus a bounded hostname, operating-system username,
+and canonical calling-agent name. Every service request includes
+`X-Kado-Agent`.
+
+Agent detection uses the local process ancestry first and recognized
+environment markers second. Raw process and environment data never leave the
+machine. If no supported caller is detected, the CLI selects `default`.
+`--agent <name>` overrides detection.
 
 ## Development
 
@@ -83,6 +96,26 @@ Safe non-secret configuration:
   `https://kado.so`.
 - `KADO_CONFIG_DIR`: absolute configuration directory, defaulting to the
   platform user configuration directory plus `kado`.
+
+The platform defaults are `~/Library/Application Support/kado` on macOS,
+`%AppData%\kado` on Windows, and `$XDG_CONFIG_HOME/kado` on Linux (falling
+back to `~/.config/kado` when `XDG_CONFIG_HOME` is unset).
+
+Optional `config.json`:
+
+```json
+{
+  "credentials": {
+    "backend": "file",
+    "directory": "./secrets"
+  }
+}
+```
+
+The default backend is `"os"`. The file directory may be absolute or relative
+to `config.json`; it defaults to `./secrets`. File-backed secrets use private
+Unix modes or a private Windows ACL and are additionally protected with DPAPI
+on Windows. `host.json` and `identities.json` are non-secret local state.
 
 ## Releases and self-update
 
@@ -128,7 +161,9 @@ maintained Agent Skills, Codex, and Claude Code plugin instructions.
 cmd/kado/                 CLI entrypoint
 internal/agentauth/       autonomous authentication
 internal/agentkey/        management and session signing keys
-internal/keystore/        OS and isolated credential stores
+internal/agentidentity/   local-only calling-agent detection
+internal/keystore/        OS and permission-restricted file stores
+internal/localstate/      host ID and known identity registry
 internal/releaseclient/   signed self-update and uninstall
 internal/searchclient/    Search lifecycle client
 internal/searchcontract/  JSON Schema, JSON-LD, and semantic validation

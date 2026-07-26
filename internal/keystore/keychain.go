@@ -3,6 +3,7 @@ package keystore
 import (
 	"crypto/subtle"
 	"errors"
+	"strings"
 
 	keyring "github.com/zalando/go-keyring"
 )
@@ -40,17 +41,42 @@ type OSKeychainStore struct {
 	account string
 }
 
-// NewOSKeychainStore returns the preferred long-lived key store.
-func NewOSKeychainStore() *OSKeychainStore {
-	return newOSKeychainStore(systemKeychainBackend{})
+// NewOSKeychainStore returns the preferred long-lived key store for one
+// canonical local agent identity.
+func NewOSKeychainStore(agent string) (*OSKeychainStore, error) {
+	if !validAgentNamespace(agent) {
+		return nil, storageError("configure keychain", ErrInvalid, nil)
+	}
+	return newOSKeychainStore(
+		systemKeychainBackend{},
+		defaultKeychainAccount+":"+agent,
+	), nil
 }
 
-func newOSKeychainStore(backend keychainBackend) *OSKeychainStore {
+func newOSKeychainStore(backend keychainBackend, account ...string) *OSKeychainStore {
+	selected := defaultKeychainAccount
+	if len(account) == 1 {
+		selected = account[0]
+	}
 	return &OSKeychainStore{
 		backend: backend,
 		service: defaultKeychainService,
-		account: defaultKeychainAccount,
+		account: selected,
 	}
+}
+
+func validAgentNamespace(agent string) bool {
+	if agent == "" || len(agent) > 64 {
+		return false
+	}
+	for _, character := range agent {
+		if !(character >= 'a' && character <= 'z' ||
+			character >= '0' && character <= '9' ||
+			character == '-') {
+			return false
+		}
+	}
+	return !strings.HasPrefix(agent, "-") && !strings.HasSuffix(agent, "-")
 }
 
 func (store *OSKeychainStore) Load() ([]byte, error) {

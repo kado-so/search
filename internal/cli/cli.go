@@ -18,10 +18,12 @@ import (
 	"time"
 
 	"github.com/kado-so/search/internal/agentauth"
+	"github.com/kado-so/search/internal/agentidentity"
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/config"
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/keystore"
+	"github.com/kado-so/search/internal/localstate"
 	"github.com/kado-so/search/internal/releaseclient"
 	"github.com/kado-so/search/internal/requestmeta"
 	"github.com/kado-so/search/internal/searchclient"
@@ -32,32 +34,39 @@ import (
 const helpText = `Kado Search command-line client
 
 Usage:
-  kado <command>
+  kado [--agent <identity>] <command>
 
 Commands:
-  search <query>  Run an authenticated Search to completion
-  auth status    Show safe current-installation identity state
-  auth revoke    Revoke the current installation
-  update         Install a verified signed CLI release
-  uninstall      Remove the CLI; preserve credentials by default
-  release verify Verify a downloaded release bundle
-  help           Show this help
-  version        Show bounded build information
+  search <query>   Run an authenticated Search
+  auth create      Create or authenticate an identity
+  auth status      Show identity state
+  auth revoke      Revoke an identity
+  auth identities  List locally known identities
+  agent detect     Show the detected agent
+  agent list       List supported agents
+  update            Install a signed CLI release
+  uninstall         Remove the CLI
+  release verify    Verify a release bundle
+  help              Show help
+  version           Show build information
 
 Options:
-  --json            Emit one exact canonical Search Document
-  --jsonl           Emit deterministic result and pagination records
-  --width columns   Human output width from 40 to 160 (default 96)
+  --agent identity   Explicitly select the calling agent identity
+  --json            Emit one canonical Search Document
+  --jsonl           Emit result and pagination records
+  --width columns   Human output width (40 to 160)
   -h, --help        Show this help
   -v, --version     Show bounded build information
-  version --json    Show deterministic executable provenance
+  version --json    Show executable provenance
 `
-
-const acceptanceCredentialFileEnvironment = "KADO_ACCEPTANCE_CREDENTIAL_FILE"
 
 type authCommands interface {
 	Status(context.Context) (agentauth.CredentialStatus, error)
 	Revoke(context.Context) (agentauth.CredentialStatus, error)
+}
+
+type authCreator interface {
+	Create(context.Context) (agentauth.CredentialStatus, error)
 }
 
 type searchCommands interface {
@@ -77,14 +86,20 @@ type searchRunResult struct {
 }
 
 type dependencies struct {
-	newAuth    func() (authCommands, error)
-	newSearch  func() (searchCommands, error)
-	newRelease func(buildinfo.Info) (releaseCommands, error)
+	detectAgent       func(string) (agentidentity.Detection, error)
+	listIdentities    func() ([]string, error)
+	newAuth           func() (authCommands, error)
+	newAuthForAgent   func(string) (authCommands, error)
+	newSearch         func() (searchCommands, error)
+	newSearchForAgent func(string) (searchCommands, error)
+	newRelease        func(buildinfo.Info) (releaseCommands, error)
 }
 
 type defaultAuthCommands struct {
-	client *agentauth.Client
-	store  keystore.Store
+	client    *agentauth.Client
+	store     keystore.Store
+	configDir string
+	agent     string
 }
 
 type defaultSearchCommands struct {
@@ -98,9 +113,11 @@ type defaultReleaseCommands struct {
 }
 
 type phase02CAuthorizationSource struct {
-	client *agentauth.Client
-	store  keystore.Store
-	token  agentauth.SessionToken
+	client    *agentauth.Client
+	store     keystore.Store
+	token     agentauth.SessionToken
+	configDir string
+	agent     string
 }
 
 var outputIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$`)
@@ -109,9 +126,11 @@ var errBrokenPipe = errors.New("CLI output pipe closed")
 // Run executes one CLI invocation and returns a process exit status.
 func Run(args []string, stdout, stderr io.Writer, info buildinfo.Info) int {
 	return runWithDependencies(args, stdout, stderr, info, dependencies{
-		newAuth:    newDefaultAuthCommands,
-		newSearch:  newDefaultSearchCommands,
-		newRelease: newDefaultReleaseCommands,
+		detectAgent:       agentidentity.Detect,
+		listIdentities:    listDefaultIdentities,
+		newAuthForAgent:   newDefaultAuthCommands,
+		newSearchForAgent: newDefaultSearchCommands,
+		newRelease:        newDefaultReleaseCommands,
 	})
 }
 
@@ -140,6 +159,10 @@ func run(
 	info buildinfo.Info,
 	dependencies dependencies,
 ) error {
+	override, args, err := parseGlobalOptions(args)
+	if err != nil {
+		return err
+	}
 	if len(args) == 0 {
 		_, _ = io.WriteString(stdout, helpText)
 		return nil
@@ -172,17 +195,119 @@ func run(
 		_, _ = fmt.Fprintln(stdout, info.Line())
 		return nil
 	case "auth":
-		return runAuth(args[1:], stdout, dependencies)
+		return runAuth(args[1:], stdout, override, dependencies)
 	case "search":
-		return runSearch(args[1:], stdout, dependencies)
+		return runSearch(args[1:], stdout, override, dependencies)
+	case "agent":
+		return runAgent(args[1:], stdout, override, dependencies)
 	case "update":
 		return runUpdate(args[1:], stdout, info, dependencies)
 	case "uninstall":
-		return runUninstall(args[1:], stdout, info, dependencies)
+		return runUninstall(args[1:], stdout, info, override, dependencies)
 	case "release":
 		return runRelease(args[1:], stdout, info, dependencies)
 	default:
 		return usageError("unknown command; run 'kado help' for usage")
+	}
+}
+
+func parseGlobalOptions(args []string) (string, []string, error) {
+	override := ""
+	for len(args) > 0 {
+		switch {
+		case args[0] == "--agent":
+			if len(args) < 2 || override != "" {
+				return "", nil, usageError("--agent requires one identity")
+			}
+			override = args[1]
+			args = args[2:]
+		case strings.HasPrefix(args[0], "--agent="):
+			if override != "" {
+				return "", nil, usageError("--agent accepts one identity")
+			}
+			override = strings.TrimPrefix(args[0], "--agent=")
+			if override == "" {
+				return "", nil, usageError("--agent requires one identity")
+			}
+			args = args[1:]
+		default:
+			return override, args, nil
+		}
+	}
+	return override, args, nil
+}
+
+func resolveAgent(
+	override string,
+	dependencies dependencies,
+) (agentidentity.Detection, error) {
+	if dependencies.detectAgent != nil {
+		return dependencies.detectAgent(override)
+	}
+	if override != "" {
+		if !agentidentity.Valid(override) {
+			return agentidentity.Detection{}, usageError("unknown agent identity")
+		}
+		return agentidentity.Detection{Agent: override, Source: "override"}, nil
+	}
+	return agentidentity.Detection{Agent: agentidentity.Default, Source: "default"}, nil
+}
+
+func openAuth(
+	dependencies dependencies,
+	agent string,
+) (authCommands, error) {
+	if dependencies.newAuthForAgent != nil {
+		return dependencies.newAuthForAgent(agent)
+	}
+	if dependencies.newAuth != nil {
+		return dependencies.newAuth()
+	}
+	return nil, errors.New("authentication unavailable")
+}
+
+func openSearch(
+	dependencies dependencies,
+	agent string,
+) (searchCommands, error) {
+	if dependencies.newSearchForAgent != nil {
+		return dependencies.newSearchForAgent(agent)
+	}
+	if dependencies.newSearch != nil {
+		return dependencies.newSearch()
+	}
+	return nil, errors.New("Search unavailable")
+}
+
+func runAgent(
+	args []string,
+	stdout io.Writer,
+	override string,
+	dependencies dependencies,
+) error {
+	if len(args) != 1 {
+		return usageError("usage: kado agent <detect|list>")
+	}
+	switch args[0] {
+	case "list":
+		for _, agent := range agentidentity.Known() {
+			_, _ = fmt.Fprintln(stdout, agent)
+		}
+		return nil
+	case "detect":
+		detection, err := resolveAgent(override, dependencies)
+		if err != nil {
+			return usageError(err.Error())
+		}
+		_, _ = fmt.Fprintf(
+			stdout,
+			"agent: %s\nsource: %s\n",
+			detection.Agent,
+			detection.Source,
+		)
+		return nil
+	default:
+		return usageError("unknown agent command; use 'detect' or 'list'")
 	}
 }
 
@@ -272,6 +397,7 @@ func runUninstall(
 	args []string,
 	stdout io.Writer,
 	info buildinfo.Info,
+	override string,
 	dependencies dependencies,
 ) error {
 	confirmed := false
@@ -294,10 +420,14 @@ func runUninstall(
 		)
 	}
 	if purgeCredentials {
-		if dependencies.newAuth == nil {
+		if dependencies.newAuth == nil && dependencies.newAuthForAgent == nil {
 			return authDiagnostic("revoke", errors.New("authentication unavailable"))
 		}
-		auth, err := dependencies.newAuth()
+		detection, err := resolveAgent(override, dependencies)
+		if err != nil {
+			return usageError(err.Error())
+		}
+		auth, err := openAuth(dependencies, detection.Agent)
 		if err != nil {
 			return authDiagnostic("revoke", err)
 		}
@@ -343,15 +473,24 @@ func releaseDiagnostic(cause error) error {
 	return diagnostic.New(code, message, diagnostic.ExitFailure, cause)
 }
 
-func runSearch(args []string, stdout io.Writer, dependencies dependencies) error {
+func runSearch(
+	args []string,
+	stdout io.Writer,
+	override string,
+	dependencies dependencies,
+) error {
 	query, options, outputOptions, err := parseSearchArguments(args)
 	if err != nil {
 		return err
 	}
-	if dependencies.newSearch == nil {
+	if dependencies.newSearch == nil && dependencies.newSearchForAgent == nil {
 		return searchDiagnostic(errors.New("Search unavailable"))
 	}
-	search, err := dependencies.newSearch()
+	detection, err := resolveAgent(override, dependencies)
+	if err != nil {
+		return usageError(err.Error())
+	}
+	search, err := openSearch(dependencies, detection.Agent)
 	if err != nil {
 		return searchDiagnostic(err)
 	}
@@ -511,22 +650,56 @@ func searchOutputDiagnostic(cause error) error {
 	)
 }
 
-func runAuth(args []string, stdout io.Writer, dependencies dependencies) error {
+func runAuth(
+	args []string,
+	stdout io.Writer,
+	override string,
+	dependencies dependencies,
+) error {
 	if len(args) != 1 {
-		return usageError("usage: kado auth <status|revoke>")
+		return usageError("usage: kado auth <create|status|revoke|identities>")
 	}
-	if args[0] != "status" && args[0] != "revoke" {
-		return usageError("unknown auth command; use 'status' or 'revoke'")
+	if args[0] == "identities" {
+		if dependencies.listIdentities == nil {
+			return authDiagnostic("status", errors.New("identity list unavailable"))
+		}
+		identities, err := dependencies.listIdentities()
+		if err != nil {
+			return authDiagnostic("status", err)
+		}
+		if len(identities) == 0 {
+			_, _ = fmt.Fprintln(stdout, "none")
+			return nil
+		}
+		for _, identity := range identities {
+			_, _ = fmt.Fprintln(stdout, identity)
+		}
+		return nil
 	}
-	if dependencies.newAuth == nil {
+	if args[0] != "create" && args[0] != "status" && args[0] != "revoke" {
+		return usageError(
+			"unknown auth command; use 'create', 'status', 'revoke', or 'identities'",
+		)
+	}
+	if dependencies.newAuth == nil && dependencies.newAuthForAgent == nil {
 		return authDiagnostic(args[0], errors.New("authentication unavailable"))
 	}
-	auth, err := dependencies.newAuth()
+	detection, err := resolveAgent(override, dependencies)
+	if err != nil {
+		return usageError(err.Error())
+	}
+	auth, err := openAuth(dependencies, detection.Agent)
 	if err != nil {
 		return authDiagnostic(args[0], err)
 	}
 	var status agentauth.CredentialStatus
-	if args[0] == "status" {
+	if args[0] == "create" {
+		creator, ok := auth.(authCreator)
+		if !ok {
+			return authDiagnostic("create", errors.New("identity creation unavailable"))
+		}
+		status, err = creator.Create(context.Background())
+	} else if args[0] == "status" {
 		status, err = auth.Status(context.Background())
 		if errors.Is(err, agentauth.ErrCredentialNotFound) {
 			status = agentauth.CredentialStatus{Status: agentauth.StatusNotConfigured}
@@ -590,6 +763,14 @@ func authDiagnostic(operation string, cause error) error {
 		return diagnostic.New(
 			"auth_revoke_failed",
 			"could not revoke the current installation",
+			diagnostic.ExitFailure,
+			cause,
+		)
+	}
+	if operation == "create" {
+		return diagnostic.New(
+			"auth_create_failed",
+			"could not create or authenticate the selected agent identity",
 			diagnostic.ExitFailure,
 			cause,
 		)
@@ -662,16 +843,25 @@ func searchDiagnostic(cause error) error {
 	)
 }
 
-func newDefaultAuthCommands() (authCommands, error) {
+func newDefaultAuthCommands(agent string) (authCommands, error) {
 	safeConfig, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	store, err := newDefaultCredentialStore()
+	host, err := localstate.EnsureHost(safeConfig.ConfigDir)
 	if err != nil {
 		return nil, err
 	}
-	httpClient := metadataHTTPClient(30*time.Second, agentauth.DefaultLimits().MaxResponseHeaderBytes)
+	store, err := selectCredentialStore(safeConfig, agent)
+	if err != nil {
+		return nil, err
+	}
+	httpClient := serviceHTTPClient(
+		30*time.Second,
+		agentauth.DefaultLimits().MaxResponseHeaderBytes,
+		agent,
+		host.ID,
+	)
 	client, err := agentauth.NewClient(
 		safeConfig.BaseURL,
 		httpClient,
@@ -682,21 +872,32 @@ func newDefaultAuthCommands() (authCommands, error) {
 		return nil, err
 	}
 	return &defaultAuthCommands{
-		client: client,
-		store:  store,
+		client:    client,
+		store:     store,
+		configDir: safeConfig.ConfigDir,
+		agent:     agent,
 	}, nil
 }
 
-func newDefaultSearchCommands() (searchCommands, error) {
+func newDefaultSearchCommands(agent string) (searchCommands, error) {
 	safeConfig, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	store, err := newDefaultCredentialStore()
+	host, err := localstate.EnsureHost(safeConfig.ConfigDir)
 	if err != nil {
 		return nil, err
 	}
-	httpClient := metadataHTTPClient(30*time.Second, agentauth.DefaultLimits().MaxResponseHeaderBytes)
+	store, err := selectCredentialStore(safeConfig, agent)
+	if err != nil {
+		return nil, err
+	}
+	httpClient := serviceHTTPClient(
+		30*time.Second,
+		agentauth.DefaultLimits().MaxResponseHeaderBytes,
+		agent,
+		host.ID,
+	)
 	authClient, err := agentauth.NewClient(
 		safeConfig.BaseURL,
 		httpClient,
@@ -707,8 +908,10 @@ func newDefaultSearchCommands() (searchCommands, error) {
 		return nil, err
 	}
 	authorization := &phase02CAuthorizationSource{
-		client: authClient,
-		store:  store,
+		client:    authClient,
+		store:     store,
+		configDir: safeConfig.ConfigDir,
+		agent:     agent,
 	}
 	search, err := searchclient.New(
 		safeConfig.BaseURL,
@@ -722,18 +925,26 @@ func newDefaultSearchCommands() (searchCommands, error) {
 	return &defaultSearchCommands{client: search}, nil
 }
 
-func newDefaultCredentialStore() (keystore.Store, error) {
-	return selectDefaultCredentialStore(os.LookupEnv)
+func selectCredentialStore(
+	safeConfig config.Config,
+	agent string,
+) (keystore.Store, error) {
+	switch safeConfig.CredentialBackend {
+	case config.CredentialBackendOS:
+		return keystore.NewOSKeychainStore(agent)
+	case config.CredentialBackendFile:
+		return keystore.NewAgentFileStore(safeConfig.SecretsDir, agent)
+	default:
+		return nil, errors.New("unsupported credential backend")
+	}
 }
 
-func selectDefaultCredentialStore(
-	environment func(string) (string, bool),
-) (keystore.Store, error) {
-	path, configured := environment(acceptanceCredentialFileEnvironment)
-	if !configured {
-		return keystore.NewOSKeychainStore(), nil
+func listDefaultIdentities() ([]string, error) {
+	safeConfig, err := config.Load()
+	if err != nil {
+		return nil, err
 	}
-	return keystore.NewIsolatedFileStore(path)
+	return localstate.ListIdentities(safeConfig.ConfigDir)
 }
 
 func newDefaultReleaseCommands(info buildinfo.Info) (releaseCommands, error) {
@@ -756,7 +967,7 @@ func newDefaultReleaseCommands(info buildinfo.Info) (releaseCommands, error) {
 			MetadataURL: info.ReleaseMetadataURL,
 			PublicKey:   info.ReleasePublicKey,
 			Fetcher: releaseclient.HTTPFetcher{
-				Client: metadataHTTPClient(45*time.Second, 64*1024),
+				Client: boundedHTTPClient(45*time.Second, 64*1024),
 			},
 		},
 		executable: executable,
@@ -764,25 +975,71 @@ func newDefaultReleaseCommands(info buildinfo.Info) (releaseCommands, error) {
 	}, nil
 }
 
-func metadataHTTPClient(timeout time.Duration, maxResponseHeaderBytes int64) *http.Client {
+func boundedHTTPClient(timeout time.Duration, maxResponseHeaderBytes int64) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxResponseHeaderBytes = maxResponseHeaderBytes
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: requestmeta.NewTransport(transport),
+		Transport: transport,
 	}
+}
+
+func serviceHTTPClient(
+	timeout time.Duration,
+	maxResponseHeaderBytes int64,
+	agent string,
+	hostID string,
+) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxResponseHeaderBytes = maxResponseHeaderBytes
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: requestmeta.NewTransport(transport, agent, hostID),
+	}
+}
+
+func (commands *defaultAuthCommands) Create(
+	ctx context.Context,
+) (agentauth.CredentialStatus, error) {
+	result, err := commands.client.AuthenticateOrEnroll(
+		ctx,
+		commands.store,
+		agentauth.Request{Mode: agentauth.CreateIfMissing},
+	)
+	if err != nil {
+		return agentauth.CredentialStatus{}, err
+	}
+	if err := localstate.AddIdentity(commands.configDir, commands.agent); err != nil {
+		return agentauth.CredentialStatus{}, err
+	}
+	return agentauth.CredentialStatus{
+		Status:       agentauth.StatusActive,
+		PrincipalID:  result.PrincipalID,
+		CredentialID: result.CredentialID,
+		ClientID:     result.ClientID,
+	}, nil
 }
 
 func (commands *defaultAuthCommands) Status(
 	ctx context.Context,
 ) (agentauth.CredentialStatus, error) {
-	return commands.client.CredentialStatus(ctx, commands.store)
+	status, err := commands.client.CredentialStatus(ctx, commands.store)
+	if err == nil && status.Status == agentauth.StatusActive {
+		err = localstate.AddIdentity(commands.configDir, commands.agent)
+	} else if errors.Is(err, agentauth.ErrCredentialNotFound) {
+		_ = localstate.RemoveIdentity(commands.configDir, commands.agent)
+	}
+	return status, err
 }
 
 func (commands *defaultAuthCommands) Revoke(
 	ctx context.Context,
 ) (agentauth.CredentialStatus, error) {
-	return commands.client.RevokeCurrentCredential(ctx, commands.store)
+	status, err := commands.client.RevokeCurrentCredential(ctx, commands.store)
+	if err == nil {
+		err = localstate.RemoveIdentity(commands.configDir, commands.agent)
+	}
+	return status, err
 }
 
 func (commands *defaultSearchCommands) Run(
@@ -836,6 +1093,9 @@ func (source *phase02CAuthorizationSource) Authorization(
 		agentauth.Request{Mode: agentauth.CreateIfMissing},
 	)
 	if err != nil {
+		return "", err
+	}
+	if err := localstate.AddIdentity(source.configDir, source.agent); err != nil {
 		return "", err
 	}
 	source.token = token

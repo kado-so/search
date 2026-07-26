@@ -39,11 +39,7 @@ proceed.
 
 ## Search
 
-Run one bounded Search:
-
-```bash
-kado search --jsonl "We need to reduce repetitive support tickets while preserving human escalation. We use Zendesk and have a small support team."
-```
+Perform one bounded Kado Search using the problem statement.
 
 If Search requests clarification, use an answer already established in the
 conversation. If the answer is consequential and unknown, ask the user one
