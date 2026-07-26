@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/kado-so/search/internal/keystore"
@@ -13,23 +12,20 @@ import (
 
 func TestManagementSignerPersistsAcrossFileStoreInstances(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
-	}
 
-	storePath := filepath.Join(resolvedFileStoreTempDir(t), "private", "management-key.json")
-	firstStore, err := keystore.NewFileStore(storePath)
+	root := filepath.Join(resolvedFileStoreTempDir(t), "secrets")
+	firstStore, err := keystore.NewAgentFileStore(root, "default")
 	if err != nil {
-		t.Fatalf("NewFileStore(first) error = %v", err)
+		t.Fatalf("NewAgentFileStore(first) error = %v", err)
 	}
 	created := deterministicManagementSigner(t)
 	if err := SaveManagementSigner(firstStore, created); err != nil {
 		t.Fatalf("SaveManagementSigner() error = %v", err)
 	}
 
-	secondStore, err := keystore.NewFileStore(storePath)
+	secondStore, err := keystore.NewAgentFileStore(root, "default")
 	if err != nil {
-		t.Fatalf("NewFileStore(second) error = %v", err)
+		t.Fatalf("NewAgentFileStore(second) error = %v", err)
 	}
 	loaded, err := LoadManagementSigner(secondStore)
 	if err != nil {
@@ -45,24 +41,20 @@ func TestManagementSignerPersistsAcrossFileStoreInstances(t *testing.T) {
 
 func TestFileStorePersistenceErrorDoesNotExposePath(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
-	}
 
-	privatePath := filepath.Join(
+	privateRoot := filepath.Join(
 		resolvedFileStoreTempDir(t),
 		"private-name-must-not-leak",
-		"key.json",
 	)
-	store, err := keystore.NewFileStore(privatePath)
+	store, err := keystore.NewAgentFileStore(privateRoot, "default")
 	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
+		t.Fatalf("NewAgentFileStore() error = %v", err)
 	}
 	_, err = LoadManagementSigner(store)
 	if !errors.Is(err, ErrPersistence) || !errors.Is(err, keystore.ErrNotFound) {
 		t.Fatalf("LoadManagementSigner() error = %v", err)
 	}
-	if bytes.Contains([]byte(err.Error()), []byte(privatePath)) {
+	if bytes.Contains([]byte(err.Error()), []byte(privateRoot)) {
 		t.Fatalf("persistence error exposed private path: %q", err)
 	}
 }

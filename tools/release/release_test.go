@@ -53,13 +53,35 @@ func TestDeterministicArchivesHaveSafePathsAndModes(t *testing.T) {
 	}
 }
 
+func TestReleaseIdentityRequiresExplicitSemanticVersion(t *testing.T) {
+	t.Parallel()
+
+	identity, err := newReleaseIdentity("1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Version != "1.2.3" ||
+		identity.Repository != releaseRepository ||
+		identity.InstallURL != releaseInstallURL ||
+		identity.Executable != releaseExecutable {
+		t.Fatalf("release identity = %#v", identity)
+	}
+	for _, invalid := range []string{"", "v1.2.3", "01.2.3", "1.2"} {
+		if _, err := newReleaseIdentity(invalid); err == nil {
+			t.Fatalf("newReleaseIdentity(%q) succeeded", invalid)
+		}
+	}
+}
+
 func TestGeneratedInstallAndUninstallDocumentsEnforcePolicy(t *testing.T) {
 	t.Parallel()
 
-	var source distributionSource
-	source.Plugin.Version = "0.1.0"
-	source.Plugin.Repository = "https://github.com/kado-so/search"
-	source.Installation.CLIInstallURL = "https://kado.so/install"
+	source := releaseIdentity{
+		Version:    "0.1.0",
+		Repository: "https://github.com/kado-so/search",
+		InstallURL: "https://kado.so/install",
+		Executable: "kado",
+	}
 	keyID := "sha256:0123456789abcdef"
 	documents := []string{
 		installGuide(source, keyID),
@@ -83,7 +105,7 @@ func TestGeneratedInstallAndUninstallDocumentsEnforcePolicy(t *testing.T) {
 	}
 	for _, install := range documents[:3] {
 		if !strings.Contains(install, "credentials") ||
-			!strings.Contains(install, "provenance") {
+			!strings.Contains(install, "identity") {
 			t.Fatalf("install description lost security policy: %q", install)
 		}
 	}

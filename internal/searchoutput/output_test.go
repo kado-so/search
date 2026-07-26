@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kado-so/search/internal/searchcontract"
+	"github.com/kado-so/search/internal/searchcontract/testfixture"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -283,9 +284,9 @@ func assertGolden(t *testing.T, name string, got []byte) {
 
 func releasedFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	value, err := searchcontract.ReleasedFixture(name)
+	value, err := testfixture.Load(name)
 	if err != nil {
-		t.Fatalf("ReleasedFixture(%s) error = %v", name, err)
+		t.Fatalf("testfixture.Load(%s) error = %v", name, err)
 	}
 	return value
 }

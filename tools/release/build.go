@@ -36,7 +36,7 @@ type buildInput struct {
 	root       string
 	output     string
 	goBinary   string
-	source     distributionSource
+	source     releaseIdentity
 	commit     string
 	builtAt    time.Time
 	privateKey ed25519.PrivateKey
@@ -51,9 +51,9 @@ type builtFile struct {
 }
 
 func buildRelease(input buildInput) error {
-	assetBase := strings.TrimSuffix(input.source.Installation.CLIInstallURL, "/") +
-		"/releases/" + input.source.Plugin.Version
-	metadataURL := strings.TrimSuffix(input.source.Installation.CLIInstallURL, "/") +
+	assetBase := strings.TrimSuffix(input.source.InstallURL, "/") +
+		"/releases/" + input.source.Version
+	metadataURL := strings.TrimSuffix(input.source.InstallURL, "/") +
 		"/releases/stable/release-metadata.json"
 	license, err := os.ReadFile(filepath.Join(input.root, "LICENSE"))
 	if err != nil {
@@ -104,23 +104,23 @@ func buildRelease(input buildInput) error {
 	); err != nil {
 		return errors.New("release public key could not be written")
 	}
-	guideFile, err := add("INSTALL-CLI.md", guide, 0o644)
+	_, err = add("INSTALL-CLI.md", guide, 0o644)
 	if err != nil {
 		return err
 	}
-	installUnixFile, err := add("install.sh", installUnix, 0o755)
+	_, err = add("install.sh", installUnix, 0o755)
 	if err != nil {
 		return err
 	}
-	installPowerFile, err := add("install.ps1", installPower, 0o644)
+	_, err = add("install.ps1", installPower, 0o644)
 	if err != nil {
 		return err
 	}
-	uninstallUnixFile, err := add("uninstall.sh", uninstallUnix, 0o755)
+	_, err = add("uninstall.sh", uninstallUnix, 0o755)
 	if err != nil {
 		return err
 	}
-	uninstallPowerFile, err := add("uninstall.ps1", uninstallPower, 0o644)
+	_, err = add("uninstall.ps1", uninstallPower, 0o644)
 	if err != nil {
 		return err
 	}
@@ -146,34 +146,23 @@ func buildRelease(input buildInput) error {
 	targets = releaseclient.SortedTargets(targets)
 
 	provenance := makeProvenance(input, files)
-	provenanceFile, err := add("provenance.intoto.json", provenance, 0o644)
+	_, err = add("provenance.intoto.json", provenance, 0o644)
 	if err != nil {
 		return err
 	}
 	checksums := makeChecksums(files)
-	checksumsFile, err := add("checksums.txt", checksums, 0o644)
+	_, err = add("checksums.txt", checksums, 0o644)
 	if err != nil {
 		return err
 	}
 	metadata := releaseclient.Metadata{
-		SchemaVersion:    releaseclient.SchemaVersion,
-		Product:          releaseclient.Product,
-		Version:          input.source.Plugin.Version,
-		Commit:           input.commit,
-		BuiltAt:          input.builtAt.Format(time.RFC3339),
-		Repository:       input.source.Plugin.Repository,
-		InstallURL:       input.source.Installation.CLIInstallURL,
-		SigningAlgorithm: "Ed25519",
-		KeyID:            input.keyID,
-		SigningPublicKey: releaseclient.PublicKeyText(input.publicKey),
-		Targets:          targets,
-		Checksums:        checksumsFile,
-		Provenance:       provenanceFile,
-		InstallGuide:     guideFile,
-		InstallUnix:      installUnixFile,
-		InstallPower:     installPowerFile,
-		UninstallUnix:    uninstallUnixFile,
-		UninstallPower:   uninstallPowerFile,
+		SchemaVersion: releaseclient.SchemaVersion,
+		Product:       releaseclient.Product,
+		Version:       input.source.Version,
+		Commit:        input.commit,
+		BuiltAt:       input.builtAt.Format(time.RFC3339),
+		KeyID:         input.keyID,
+		Targets:       targets,
 	}
 	metadataBytes, err := releaseclient.CanonicalMetadata(metadata)
 	if err != nil {
@@ -205,15 +194,12 @@ func buildRelease(input buildInput) error {
 		return errors.New("release metadata signature self-check failed")
 	}
 	for _, target := range targets {
-		if _, err := releaseclient.VerifyTargetArtifacts(
-			metadata,
+		if _, err := releaseclient.VerifyTargetArchive(
 			target,
-			provenance,
-			files[target.SBOM.Name].data,
 			files[target.Archive.Name].data,
 		); err != nil {
 			return fmt.Errorf(
-				"release supply-chain self-check failed for %s/%s",
+				"release archive self-check failed for %s/%s",
 				target.OS,
 				target.Arch,
 			)
@@ -243,7 +229,7 @@ func buildTargetArtifacts(
 	}
 	base := fmt.Sprintf(
 		"kado_%s_%s_%s",
-		input.source.Plugin.Version,
+		input.source.Version,
 		target.goos,
 		target.goarch,
 	)
@@ -253,7 +239,7 @@ func buildTargetArtifacts(
 		"-s",
 		"-w",
 		"-buildid=",
-		"-X", "github.com/kado-so/search/internal/buildinfo.Version=" + input.source.Plugin.Version,
+		"-X", "github.com/kado-so/search/internal/buildinfo.Version=" + input.source.Version,
 		"-X", "github.com/kado-so/search/internal/buildinfo.Commit=" + input.commit,
 		"-X", "github.com/kado-so/search/internal/buildinfo.Date=" + input.builtAt.Format(time.RFC3339),
 		"-X", "github.com/kado-so/search/internal/buildinfo.Target=" + target.goos + "/" + target.goarch,
@@ -307,7 +293,7 @@ func buildTargetArtifacts(
 
 	sbomName := base + ".spdx.json"
 	sbom := makeSBOM(input, target, sbomName, modules)
-	sbomFile, err := add(sbomName, sbom, 0o644)
+	_, err = add(sbomName, sbom, 0o644)
 	if err != nil {
 		return releaseclient.Target{}, err
 	}
@@ -334,13 +320,9 @@ func buildTargetArtifacts(
 		return releaseclient.Target{}, err
 	}
 	return releaseclient.Target{
-		OS:            target.goos,
-		Arch:          target.goarch,
-		BinaryName:    binaryName,
-		ArchiveFormat: archiveFormat,
-		Binary:        binaryFile,
-		Archive:       archiveFile,
-		SBOM:          sbomFile,
+		OS:      target.goos,
+		Arch:    target.goarch,
+		Archive: archiveFile,
 	}, nil
 }
 

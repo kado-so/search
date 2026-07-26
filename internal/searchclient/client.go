@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/searchcontract"
 )
 
@@ -29,7 +30,7 @@ type Client struct {
 }
 
 // New constructs a no-redirect, no-cookie Search client on the same exact
-// HTTPS resource/issuer boundary used by Phase 02C.
+// HTTPS resource and authorization-server boundary.
 func New(
 	base *url.URL,
 	httpClient *http.Client,
@@ -88,7 +89,7 @@ func (client *Client) Search(ctx context.Context, query string) (Document, error
 	return client.get(ctx, &endpoint, query)
 }
 
-// Status follows the document's self link and performs the Phase 03A status
+// Status follows the document's self link and performs a lifecycle status
 // operation for the exact opaque Search ID.
 func (client *Client) Status(ctx context.Context, document Document) (Document, error) {
 	if err := client.validateDocumentIdentity(document); err != nil {
@@ -500,7 +501,8 @@ func (client *Client) decodeDocument(
 	encoded []byte,
 	expectedQuery string,
 ) (Document, error) {
-	if _, err := searchcontract.Validate(encoded); err != nil {
+	validated, err := searchcontract.Validate(encoded)
+	if err != nil {
 		var unsupported *searchcontract.UnsupportedVersionError
 		if errors.As(err, &unsupported) {
 			return Document{}, newError(
@@ -513,34 +515,61 @@ func (client *Client) decodeDocument(
 		}
 		return Document{}, protocolError()
 	}
-	envelope, err := decodeEnvelope(encoded)
-	if err != nil || envelope.Query != expectedQuery {
+	if validated.Search.Query != expectedQuery {
 		return Document{}, protocolError()
 	}
-	self, err := client.validateDocumentLink(envelope.Self, false, expectedQuery)
+	self, err := client.validateDocumentLink(
+		validated.Links.Self,
+		false,
+		expectedQuery,
+	)
 	if err != nil {
 		return Document{}, err
 	}
 	var next, previous *url.URL
-	if envelope.ResultSelf != "" {
+	if validated.ResultSet != nil {
 		if _, err := client.validateDocumentLink(
-			envelope.ResultSelf,
+			validated.ResultSet.Links.Self,
 			false,
 			expectedQuery,
 		); err != nil {
 			return Document{}, err
 		}
-	}
-	if envelope.Next != "" {
-		next, err = client.validateDocumentLink(envelope.Next, true, expectedQuery)
-		if err != nil {
-			return Document{}, err
+		if validated.ResultSet.Links.Next != nil {
+			next, err = client.validateDocumentLink(
+				*validated.ResultSet.Links.Next,
+				true,
+				expectedQuery,
+			)
+			if err != nil {
+				return Document{}, err
+			}
+		}
+		if validated.ResultSet.Links.Previous != nil {
+			previous, err = client.validateDocumentLink(
+				*validated.ResultSet.Links.Previous,
+				true,
+				expectedQuery,
+			)
+			if err != nil {
+				return Document{}, err
+			}
 		}
 	}
-	if envelope.Previous != "" {
-		previous, err = client.validateDocumentLink(envelope.Previous, true, expectedQuery)
-		if err != nil {
-			return Document{}, err
+	var question *Question
+	if validated.State.Question != nil {
+		question = &Question{
+			ID:      validated.State.Question.ID,
+			Prompt:  validated.State.Question.Prompt,
+			Options: append([]string(nil), validated.State.Question.Options...),
+		}
+	}
+	var failure *Failure
+	if validated.State.Error != nil {
+		failure = &Failure{
+			Code:      boundedCode(validated.State.Error.Code),
+			Message:   diagnostic.TerminalSafeText(validated.State.Error.Message, 280),
+			Retryable: validated.State.Error.Retryable,
 		}
 	}
 	return Document{
@@ -548,12 +577,12 @@ func (client *Client) decodeDocument(
 		self:          self,
 		next:          next,
 		previous:      previous,
-		SchemaVersion: envelope.SchemaVersion,
-		SearchID:      envelope.SearchID,
-		Query:         envelope.Query,
-		Status:        envelope.Status,
-		Question:      envelope.Question,
-		Failure:       envelope.Failure,
+		SchemaVersion: validated.SchemaVersion,
+		SearchID:      validated.Search.ID,
+		Query:         validated.Search.Query,
+		Status:        validated.State.Status,
+		Question:      question,
+		Failure:       failure,
 	}, nil
 }
 

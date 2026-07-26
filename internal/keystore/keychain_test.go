@@ -93,6 +93,31 @@ func TestOSKeychainStorePersistsAcrossAdapterInstances(t *testing.T) {
 	}
 }
 
+func TestOSKeychainStoresAreNamespacedByAgent(t *testing.T) {
+	t.Parallel()
+
+	backend := newFakeKeychainBackend()
+	codex := newOSKeychainStore(backend, defaultKeychainAccount+":codex")
+	opencode := newOSKeychainStore(
+		backend,
+		defaultKeychainAccount+":opencode",
+	)
+	if err := codex.Save([]byte("codex-key")); err != nil {
+		t.Fatal(err)
+	}
+	if err := opencode.Save([]byte("opencode-key")); err != nil {
+		t.Fatal(err)
+	}
+	codexValue, err := codex.Load()
+	if err != nil || string(codexValue) != "codex-key" {
+		t.Fatalf("codex.Load() = %q, %v", codexValue, err)
+	}
+	opencodeValue, err := opencode.Load()
+	if err != nil || string(opencodeValue) != "opencode-key" {
+		t.Fatalf("opencode.Load() = %q, %v", opencodeValue, err)
+	}
+}
+
 func TestOSKeychainStoreConditionalDeleteRetainsReplacement(t *testing.T) {
 	t.Parallel()
 

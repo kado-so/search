@@ -1,0 +1,95 @@
+{
+  "@context": "https://kado.so/contexts/search-document/v1.jsonld",
+  "@id": "https://kado.so/search/search_complete/example-query",
+  "@type": "SearchResultsPage",
+  "schema_version": "kado.search-document.v1",
+  "search": {
+    "id": "search_complete",
+    "query": "example query",
+    "created_at": "2026-07-23T00:00:00Z",
+    "started_at": "2026-07-23T00:00:01Z",
+    "completed_at": "2026-07-23T00:00:03Z"
+  },
+  "state": {
+    "status": "complete"
+  },
+  "result_set": {
+    "@type": "ItemList",
+    "result_type": "mixed_results",
+    "data_schema": "https://kado.so/schemas/results/mixed-results/v1.json",
+    "items": [
+      {
+        "@type": "ListItem",
+        "id": "result_object",
+        "position": 1,
+        "type": "software_application",
+        "name": "Example application",
+        "summary": "A public-safe application result with object data.",
+        "data_schema": "https://kado.so/schemas/results/software-application/v1.json",
+        "data": {
+          "pricing_model": "usage",
+          "tags": [
+            "AI",
+            "検索"
+          ]
+        }
+      },
+      {
+        "@type": "ListItem",
+        "id": "result_array",
+        "position": 2,
+        "type": "dataset",
+        "name": "Example dataset",
+        "summary": "A dataset result with array data.",
+        "data": [
+          1,
+          "portable",
+          {
+            "open_source": true
+          }
+        ]
+      },
+      {
+        "@type": "ListItem",
+        "id": "result_scalar",
+        "position": 3,
+        "type": "article",
+        "name": "Example article",
+        "summary": "An article result with scalar data.",
+        "data": "community-maintained"
+      },
+      {
+        "@type": "ListItem",
+        "id": "result_null",
+        "position": 4,
+        "type": "service",
+        "name": "Example service",
+        "summary": "A service result whose arbitrary data is explicitly null.",
+        "data": null
+      }
+    ],
+    "pagination": {
+      "kind": "cursor",
+      "page_size": 4,
+      "returned": 4,
+      "total": null,
+      "has_more": true,
+      "next_cursor": "cursor_next_01",
+      "previous_cursor": null
+    },
+    "links": {
+      "self": "https://kado.so/search/search_complete/example-query",
+      "next": "https://kado.so/search/search_complete/example-query?cursor=cursor_next_01",
+      "previous": null
+    }
+  },
+  "links": {
+    "self": "https://kado.so/search/search_complete/example-query",
+    "schema": "https://kado.so/schemas/search-document/v1.json",
+    "context": "https://kado.so/contexts/search-document/v1.jsonld"
+  },
+  "metadata": {
+    "revision": 4,
+    "generated_at": "2026-07-23T00:00:03Z"
+  }
+}

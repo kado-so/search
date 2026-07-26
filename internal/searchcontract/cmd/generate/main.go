@@ -57,8 +57,20 @@ func main() {
 		}
 		assets[entry.Path] = checkedRead(source, entry)
 	}
-	for _, entry := range release.Fixtures {
-		assets[entry.Path] = checkedRead(source, entry)
+	if err := os.MkdirAll("testfixture", 0o755); err != nil {
+		panic(fmt.Errorf("create fixture directory: %w", err))
+	}
+	for name, entry := range release.Fixtures {
+		if name == "" || filepath.Base(name) != name {
+			panic("authoritative manifest contains an unsafe fixture name")
+		}
+		if err := os.WriteFile(
+			filepath.Join("testfixture", name+".json"),
+			checkedRead(source, entry),
+			0o644,
+		); err != nil {
+			panic(fmt.Errorf("write fixture %s: %w", name, err))
+		}
 	}
 
 	names := make([]string, 0, len(assets))

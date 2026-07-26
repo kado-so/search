@@ -86,7 +86,7 @@ func makeSBOM(
 	for index, dependency := range modules {
 		version := dependency.Version
 		if dependency.Main {
-			version = input.source.Plugin.Version
+			version = input.source.Version
 		}
 		if version == "" {
 			version = "(devel)"
@@ -103,7 +103,7 @@ func makeSBOM(
 		}
 		if dependency.Main {
 			item.Name = "kado"
-			item.DownloadLocation = input.source.Plugin.Repository
+			item.DownloadLocation = input.source.Repository
 			item.LicenseDeclared = "MIT"
 		} else {
 			item.ExternalRefs = []externalRef{{
@@ -141,7 +141,7 @@ func makeSBOM(
 		DataLicense:       "CC0-1.0",
 		SPDXID:            "SPDXRef-DOCUMENT",
 		Name:              name,
-		DocumentNamespace: "https://kado.so/spdx/kado/" + input.source.Plugin.Version + "/" + target.goos + "/" + target.goarch,
+		DocumentNamespace: "https://kado.so/spdx/kado/" + input.source.Version + "/" + target.goos + "/" + target.goarch,
 		Comment:           target.goos + "/" + target.goarch,
 		Packages:          packages,
 		Relationships:     relationships,
@@ -204,7 +204,7 @@ func makeProvenance(input buildInput, files map[string]builtFile) []byte {
 		PredicateType: "https://slsa.dev/provenance/v1",
 	}
 	statement.Predicate.BuildDefinition.ExternalParameters.Version =
-		input.source.Plugin.Version
+		input.source.Version
 	statement.Predicate.BuildDefinition.ExternalParameters.Commit = input.commit
 	statement.Predicate.BuildDefinition.BuildType =
 		"https://kado.so/build-types/go-cli-release/v1"
@@ -215,14 +215,14 @@ func makeProvenance(input buildInput, files map[string]builtFile) []byte {
 			URI    string            `json:"uri"`
 			Digest map[string]string `json:"digest"`
 		}{
-			URI:    "git+" + input.source.Plugin.Repository + "@" + input.commit,
+			URI:    "git+" + input.source.Repository + "@" + input.commit,
 			Digest: map[string]string{"gitCommit": input.commit},
 		},
 	)
 	statement.Predicate.RunDetails.Builder.ID =
-		"https://github.com/kado-so/search/.github/workflows/cli-release.yml"
+		"https://github.com/kado-so/search/tree/main/tools/release"
 	statement.Predicate.RunDetails.Metadata.InvocationID =
-		input.source.Plugin.Version + "@" + input.commit
+		input.source.Version + "@" + input.commit
 	statement.Predicate.RunDetails.Metadata.StartedOn =
 		input.builtAt.Format("2006-01-02T15:04:05Z")
 	statement.Predicate.RunDetails.Metadata.FinishedOn =

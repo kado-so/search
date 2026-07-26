@@ -18,7 +18,7 @@ import (
 	"github.com/kado-so/search/internal/keystore"
 )
 
-func TestPinnedPhase02BDiscoveryFixture(t *testing.T) {
+func TestPinnedDiscoveryFixture(t *testing.T) {
 	t.Parallel()
 
 	encoded, err := os.ReadFile("testdata/discovery.v0.1.json")

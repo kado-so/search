@@ -1,6 +1,7 @@
 package releaseclient
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"os"
@@ -60,23 +61,14 @@ func VerifyLocalBundle(
 		info.Commit != metadata.Commit ||
 		info.Date != metadata.BuiltAt ||
 		info.Target != target.OS+"/"+target.Arch ||
-		info.ReleaseKeyID != metadata.KeyID ||
-		info.ReleasePublicKey != metadata.SigningPublicKey {
+		info.ReleaseKeyID != metadata.KeyID {
 		return Metadata{}, Target{}, ErrCandidate
-	}
-	provenance, err := readAndVerifyLocal(absolute, metadata.Provenance, MaxSupportSize)
-	if err != nil {
-		return Metadata{}, Target{}, err
-	}
-	sbom, err := readAndVerifyLocal(absolute, target.SBOM, MaxSupportSize)
-	if err != nil {
-		return Metadata{}, Target{}, err
 	}
 	archive, err := readAndVerifyLocal(absolute, target.Archive, MaxArchiveSize)
 	if err != nil {
 		return Metadata{}, Target{}, err
 	}
-	binary, err := VerifyTargetArtifacts(metadata, target, provenance, sbom, archive)
+	binary, err := VerifyTargetArchive(target, archive)
 	if err != nil {
 		return Metadata{}, Target{}, err
 	}
@@ -85,7 +77,7 @@ func VerifyLocalBundle(
 		return Metadata{}, Target{}, ErrCandidate
 	}
 	running, err := os.ReadFile(executable)
-	if err != nil || !bytesEqualDigest(running, binary, target.Binary) {
+	if err != nil || !bytes.Equal(running, binary) {
 		return Metadata{}, Target{}, ErrCandidate
 	}
 	return metadata, target, nil
@@ -123,10 +115,4 @@ func readLocalFile(directory, name string, limit int64) ([]byte, error) {
 		return nil, ErrInvalidMetadata
 	}
 	return value, nil
-}
-
-func bytesEqualDigest(left, right []byte, descriptor File) bool {
-	return len(left) == len(right) &&
-		Digest(left) == descriptor.SHA256 &&
-		Digest(right) == descriptor.SHA256
 }

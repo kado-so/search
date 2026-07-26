@@ -8,23 +8,19 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"sort"
 	"strconv"
 	"testing"
+
+	"github.com/kado-so/search/internal/searchcontract/testfixture"
 )
 
 func TestReleasedFixturesValidateThroughSchemaJSONLDAndSemantics(t *testing.T) {
 	t.Parallel()
 
-	assets, err := loadReleasedAssets()
+	names, err := testfixture.Names()
 	if err != nil {
-		t.Fatalf("loadReleasedAssets() error = %v", err)
+		t.Fatalf("testfixture.Names() error = %v", err)
 	}
-	names := make([]string, 0, len(assets.manifest.Fixtures))
-	for name := range assets.manifest.Fixtures {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	for _, name := range names {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -410,17 +406,9 @@ func TestPinnedGeneratedAssetsMatchAuthoritativeSibling(t *testing.T) {
 
 func fixtureBytes(t *testing.T, name string) []byte {
 	t.Helper()
-	assets, err := loadReleasedAssets()
+	value, err := testfixture.Load(name)
 	if err != nil {
-		t.Fatalf("loadReleasedAssets() error = %v", err)
-	}
-	entry, ok := assets.manifest.Fixtures[name]
-	if !ok {
-		t.Fatalf("fixture %s is not in the released manifest", name)
-	}
-	value, err := checkedGeneratedAsset(entry)
-	if err != nil {
-		t.Fatalf("checkedGeneratedAsset(%s) error = %v", name, err)
+		t.Fatalf("testfixture.Load(%s) error = %v", name, err)
 	}
 	return value
 }

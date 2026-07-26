@@ -2,5 +2,3 @@
 /dist/
 /kado
 /kado.exe
-/tests/**/__pycache__/
-/tests/**/*.py[cod]

@@ -12,6 +12,8 @@ import (
 	"strings"
 )
 
+const maxArchiveSupportSize = 16 << 20
+
 const maxBinarySize = 96 << 20
 
 // ExtractBinary validates every archive path/type/mode and returns its executable.
@@ -75,10 +77,10 @@ func extractTarGzip(encoded []byte, binaryName string) ([]byte, error) {
 		if !allowedSupportFile(header.Name) ||
 			mode.Perm() != 0o644 ||
 			header.Size < 0 ||
-			header.Size > MaxSupportSize {
+			header.Size > maxArchiveSupportSize {
 			return nil, errors.New("release archive has an unexpected entry")
 		}
-		if _, err := io.Copy(io.Discard, io.LimitReader(reader, MaxSupportSize+1)); err != nil {
+		if _, err := io.Copy(io.Discard, io.LimitReader(reader, maxArchiveSupportSize+1)); err != nil {
 			return nil, errors.New("release archive is invalid")
 		}
 	}
@@ -114,14 +116,14 @@ func extractZip(encoded []byte, binaryName string) ([]byte, error) {
 			}
 		} else if !allowedSupportFile(file.Name) ||
 			mode != 0o644 ||
-			file.UncompressedSize64 > MaxSupportSize {
+			file.UncompressedSize64 > maxArchiveSupportSize {
 			return nil, errors.New("release archive has an unexpected entry")
 		}
 		opened, err := file.Open()
 		if err != nil {
 			return nil, errors.New("release archive is invalid")
 		}
-		limit := int64(MaxSupportSize)
+		limit := int64(maxArchiveSupportSize)
 		if file.Name == binaryName {
 			limit = maxBinarySize
 		}

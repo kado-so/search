@@ -1,0 +1,108 @@
+package kado_search
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestSkillScopeAndMetadata(t *testing.T) {
+	content := readText(t, "SKILL.md")
+	if !strings.HasPrefix(content, "---\n") ||
+		!strings.Contains(content, "\nname: kado-search\n") ||
+		!strings.Contains(content, "\nlicense: \"MIT\"\n") ||
+		!strings.Contains(content, "\n  author: \"Kado\"\n") ||
+		!strings.Contains(content, "\n  version: \"0.1.0\"\n") ||
+		!strings.Contains(content, "\n  homepage: \"https://kado.so\"\n") ||
+		!strings.Contains(content, "This skill covers\nSearch only.") {
+		t.Fatal("SKILL.md metadata or Search-only scope is invalid")
+	}
+	lower := strings.ToLower(content)
+	for _, forbidden := range []string{
+		"kado search --",
+		"kado auth",
+		"kado update",
+		"kado uninstall",
+		"install kado",
+		"credential store",
+		"release metadata",
+		"sbom",
+		"provenance",
+		"api key",
+		"browser cookie",
+	} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("SKILL.md contains forbidden instruction %q", forbidden)
+		}
+	}
+}
+
+func TestSkillAssetsAndAgentMetadata(t *testing.T) {
+	metadata := readText(t, filepath.Join("agents", "openai.yaml"))
+	for _, required := range []string{
+		`display_name: "Kado Search"`,
+		"$kado-search",
+		"allow_implicit_invocation: true",
+	} {
+		if !strings.Contains(metadata, required) {
+			t.Fatalf("openai.yaml is missing %q", required)
+		}
+	}
+	for _, asset := range []string{
+		"assets/favicon.svg",
+		"assets/icon-512.gen.png",
+		"assets/icon-1024.gen.png",
+	} {
+		if info, err := os.Stat(asset); err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("missing skill asset %q", asset)
+		}
+	}
+}
+
+func TestDirectPluginManifestsReferenceSkill(t *testing.T) {
+	root := filepath.Join("..", "..")
+	codex := readJSON(t, filepath.Join(root, ".codex-plugin", "plugin.json"))
+	claude := readJSON(t, filepath.Join(root, ".claude-plugin", "plugin.json"))
+	marketplace := readJSON(
+		t,
+		filepath.Join(root, ".agents", "plugins", "marketplace.json"),
+	)
+	if codex["name"] != "kado-search" || codex["skills"] != "./skills/" {
+		t.Fatal("Codex plugin manifest does not reference the Search skill")
+	}
+	if claude["name"] != "kado-search" || claude["skills"] != "./skills/" {
+		t.Fatal("Claude plugin manifest does not reference the Search skill")
+	}
+	plugins, ok := marketplace["plugins"].([]any)
+	if !ok || len(plugins) != 1 {
+		t.Fatal("agent marketplace must contain exactly one plugin")
+	}
+	plugin, ok := plugins[0].(map[string]any)
+	if !ok || plugin["name"] != "kado-search" {
+		t.Fatal("agent marketplace does not reference the Search skill")
+	}
+}
+
+func readText(t *testing.T, path string) string {
+	t.Helper()
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %q: %v", path, err)
+	}
+	return string(encoded)
+}
+
+func readJSON(t *testing.T, path string) map[string]any {
+	t.Helper()
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %q: %v", path, err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(encoded, &value); err != nil {
+		t.Fatalf("parse %q: %v", path, err)
+	}
+	return value
+}

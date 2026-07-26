@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -22,7 +21,18 @@ import (
 
 const signingKeyEnvironment = "KADO_RELEASE_SIGNING_KEY"
 
-var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+const (
+	releaseRepository = "https://github.com/kado-so/search"
+	releaseInstallURL = "https://kado.so/install"
+	releaseExecutable = "kado"
+)
+
+var (
+	commitPattern         = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	releaseVersionPattern = regexp.MustCompile(
+		`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`,
+	)
+)
 
 type options struct {
 	root     string
@@ -30,22 +40,14 @@ type options struct {
 	commit   string
 	epoch    int64
 	goBinary string
+	version  string
 }
 
-type distributionSource struct {
-	Plugin struct {
-		Version    string `json:"version"`
-		Repository string `json:"repository"`
-		Homepage   string `json:"homepage"`
-	} `json:"plugin"`
-	Installation struct {
-		CLIExecutable string `json:"cli_executable"`
-		CLIInstallURL string `json:"cli_install_url"`
-		Source        struct {
-			Kind       string `json:"kind"`
-			Repository string `json:"repository"`
-		} `json:"source"`
-	} `json:"installation"`
+type releaseIdentity struct {
+	Version    string
+	Repository string
+	InstallURL string
+	Executable string
 }
 
 func main() {
@@ -55,6 +57,7 @@ func main() {
 	flag.StringVar(&configured.commit, "commit", "", "exact 40-character source commit")
 	flag.Int64Var(&configured.epoch, "source-date-epoch", 0, "reproducible UTC build timestamp")
 	flag.StringVar(&configured.goBinary, "go", "go", "Go executable")
+	flag.StringVar(&configured.version, "version", "", "semantic release version")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fatal(errors.New("release does not accept positional arguments"))
@@ -79,7 +82,7 @@ func run(configured options) error {
 	if !commitPattern.MatchString(configured.commit) {
 		return errors.New("--commit must be an exact lowercase 40-character Git commit")
 	}
-	source, err := loadDistribution(root)
+	source, err := newReleaseIdentity(configured.version)
 	if err != nil {
 		return err
 	}
@@ -137,34 +140,23 @@ func run(configured options) error {
 	}
 	fmt.Printf(
 		"release dry-run complete version=%s commit=%s targets=6 output=%s\n",
-		source.Plugin.Version,
+		source.Version,
 		configured.commit,
 		output,
 	)
 	return nil
 }
 
-func loadDistribution(root string) (distributionSource, error) {
-	path := filepath.Join(root, "distribution", "kado-search.manifest.json")
-	encoded, err := os.ReadFile(path)
-	if err != nil {
-		return distributionSource{}, errors.New("canonical distribution metadata is unavailable")
+func newReleaseIdentity(version string) (releaseIdentity, error) {
+	if len(version) > 48 || !releaseVersionPattern.MatchString(version) {
+		return releaseIdentity{}, errors.New("--version must be a semantic version")
 	}
-	var source distributionSource
-	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
-	if err := decoder.Decode(&source); err != nil {
-		return distributionSource{}, errors.New("canonical distribution metadata is invalid")
-	}
-	if source.Plugin.Version == "" ||
-		source.Plugin.Repository != "https://github.com/kado-so/search" ||
-		source.Plugin.Homepage != source.Installation.CLIInstallURL ||
-		source.Installation.CLIExecutable != "kado" ||
-		source.Installation.CLIInstallURL != "https://kado.so/install" ||
-		source.Installation.Source.Kind != "github" ||
-		source.Installation.Source.Repository != "kado-so/search" {
-		return distributionSource{}, errors.New("canonical distribution identity is invalid")
-	}
-	return source, nil
+	return releaseIdentity{
+		Version:    version,
+		Repository: releaseRepository,
+		InstallURL: releaseInstallURL,
+		Executable: releaseExecutable,
+	}, nil
 }
 
 func signingKeyFromEnvironment() (ed25519.PrivateKey, error) {

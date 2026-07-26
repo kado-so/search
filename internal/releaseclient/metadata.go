@@ -25,7 +25,6 @@ const (
 	Product         = "kado"
 	MaxMetadataSize = 1 << 20
 	MaxArchiveSize  = 128 << 20
-	MaxSupportSize  = 16 << 20
 )
 
 var (
@@ -57,35 +56,20 @@ type File struct {
 
 // Target identifies one supported executable package.
 type Target struct {
-	OS            string `json:"os"`
-	Arch          string `json:"arch"`
-	BinaryName    string `json:"binary_name"`
-	ArchiveFormat string `json:"archive_format"`
-	Binary        File   `json:"binary"`
-	Archive       File   `json:"archive"`
-	SBOM          File   `json:"sbom"`
+	OS      string `json:"os"`
+	Arch    string `json:"arch"`
+	Archive File   `json:"archive"`
 }
 
 // Metadata is the canonical signed release index.
 type Metadata struct {
-	SchemaVersion    string   `json:"schema_version"`
-	Product          string   `json:"product"`
-	Version          string   `json:"version"`
-	Commit           string   `json:"commit"`
-	BuiltAt          string   `json:"built_at"`
-	Repository       string   `json:"repository"`
-	InstallURL       string   `json:"install_url"`
-	SigningAlgorithm string   `json:"signing_algorithm"`
-	KeyID            string   `json:"signing_key_id"`
-	SigningPublicKey string   `json:"signing_public_key"`
-	Targets          []Target `json:"targets"`
-	Checksums        File     `json:"checksums"`
-	Provenance       File     `json:"provenance"`
-	InstallGuide     File     `json:"install_guide"`
-	InstallUnix      File     `json:"install_unix"`
-	InstallPower     File     `json:"install_powershell"`
-	UninstallUnix    File     `json:"uninstall_unix"`
-	UninstallPower   File     `json:"uninstall_powershell"`
+	SchemaVersion string   `json:"schema_version"`
+	Product       string   `json:"product"`
+	Version       string   `json:"version"`
+	Commit        string   `json:"commit"`
+	BuiltAt       string   `json:"built_at"`
+	KeyID         string   `json:"signing_key_id"`
+	Targets       []Target `json:"targets"`
 }
 
 // CanonicalMetadata returns the only accepted release metadata encoding.
@@ -156,25 +140,19 @@ func VerifyMetadata(
 	if err != nil || metadata.KeyID != expectedKeyID {
 		return Metadata{}, errInvalidSignature
 	}
-	if metadata.SigningPublicKey != PublicKeyText(public) {
-		return Metadata{}, errInvalidSignature
-	}
 	if err := metadata.Validate(); err != nil {
 		return Metadata{}, err
 	}
 	return metadata, nil
 }
 
-// Validate rejects ambiguous, unsupported, or cross-origin release metadata.
+// Validate rejects ambiguous or unsupported release metadata.
 func (metadata Metadata) Validate() error {
 	if metadata.SchemaVersion != SchemaVersion ||
 		metadata.Product != Product ||
 		len(metadata.Version) > 48 ||
 		!versionPattern.MatchString(metadata.Version) ||
 		!commitPattern.MatchString(metadata.Commit) ||
-		metadata.Repository != "https://github.com/kado-so/search" ||
-		metadata.SigningAlgorithm != "Ed25519" ||
-		metadata.SigningPublicKey == "" ||
 		!strings.HasPrefix(metadata.KeyID, "sha256:") ||
 		len(metadata.Targets) != len(supported) {
 		return errInvalidMetadata
@@ -185,27 +163,7 @@ func (metadata Metadata) Validate() error {
 		builtAt.Format(time.RFC3339) != metadata.BuiltAt {
 		return errInvalidMetadata
 	}
-	signingPublicKey, err := ParsePublicKey(metadata.SigningPublicKey)
-	if err != nil {
-		return errInvalidMetadata
-	}
-	signingKeyID, err := KeyID(signingPublicKey)
-	if err != nil || signingKeyID != metadata.KeyID {
-		return errInvalidMetadata
-	}
-	installURL, err := parseHTTPS(metadata.InstallURL)
-	if err != nil {
-		return errInvalidMetadata
-	}
-	files := []File{
-		metadata.Checksums,
-		metadata.Provenance,
-		metadata.InstallGuide,
-		metadata.InstallUnix,
-		metadata.InstallPower,
-		metadata.UninstallUnix,
-		metadata.UninstallPower,
-	}
+	files := make([]File, 0, len(metadata.Targets))
 	seenTargets := make(map[string]struct{}, len(metadata.Targets))
 	seenFiles := make(map[string]struct{})
 	if !sort.SliceIsSorted(metadata.Targets, func(left, right int) bool {
@@ -225,19 +183,13 @@ func (metadata Metadata) Validate() error {
 			return errInvalidMetadata
 		}
 		seenTargets[key] = struct{}{}
-		wantBinary := "kado"
-		wantFormat := "tar.gz"
-		if target.OS == "windows" {
-			wantBinary = "kado.exe"
-			wantFormat = "zip"
-		}
-		if target.BinaryName != wantBinary || target.ArchiveFormat != wantFormat {
+		if _, _, ok := targetLayout(target.OS); !ok {
 			return errInvalidMetadata
 		}
-		files = append(files, target.Binary, target.Archive, target.SBOM)
+		files = append(files, target.Archive)
 	}
 	for _, file := range files {
-		if err := validateFile(file, installURL); err != nil {
+		if err := validateFile(file); err != nil {
 			return err
 		}
 		if _, duplicate := seenFiles[file.Name]; duplicate {
@@ -284,7 +236,7 @@ func SortedTargets(targets []Target) []Target {
 	return output
 }
 
-func validateFile(file File, installURL *url.URL) error {
+func validateFile(file File) error {
 	if !safeName.MatchString(file.Name) ||
 		!hexDigestPattern.MatchString(file.SHA256) ||
 		file.Size <= 0 {
@@ -292,12 +244,21 @@ func validateFile(file File, installURL *url.URL) error {
 	}
 	parsed, err := parseHTTPS(file.URL)
 	if err != nil ||
-		!strings.EqualFold(parsed.Host, installURL.Host) ||
-		parsed.Scheme != installURL.Scheme ||
 		path.Base(parsed.Path) != file.Name {
 		return errInvalidMetadata
 	}
 	return nil
+}
+
+func targetLayout(goos string) (binaryName, archiveFormat string, ok bool) {
+	switch goos {
+	case "windows":
+		return "kado.exe", "zip", true
+	case "darwin", "linux":
+		return "kado", "tar.gz", true
+	default:
+		return "", "", false
+	}
 }
 
 func parseHTTPS(value string) (*url.URL, error) {

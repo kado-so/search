@@ -53,9 +53,9 @@ func (client *Client) CredentialStatus(
 	return client.manageCredential(ctx, stored.Signer(), credentialStatusOperation)
 }
 
-// RevokeCurrentCredential permanently revokes the current installation on the
-// server and deletes its local management key only after the server confirms
-// the revoked state. A missing local key is an idempotent successful no-op.
+// RevokeCurrentCredential permanently revokes the selected agent identity and
+// deletes its local management key only after the server confirms the revoked
+// state. A missing local key is an idempotent successful no-op.
 func (client *Client) RevokeCurrentCredential(
 	ctx context.Context,
 	store keystore.Store,

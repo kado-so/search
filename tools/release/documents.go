@@ -2,7 +2,7 @@ package main
 
 import "fmt"
 
-func installGuide(source distributionSource, keyID string) string {
+func installGuide(source releaseIdentity, keyID string) string {
 	return fmt.Sprintf(`# Install the Kado CLI
 
 Version: %s
@@ -25,7 +25,7 @@ On Windows, inspect and run:
 
 The installers authenticate the canonical metadata, verify the selected
 archive checksum, inspect the archive paths and executable mode, verify the
-candidate's stamped version/provenance, and install to an empty destination
+candidate's stamped release identity, and install to an empty destination
 atomically. They refuse to overwrite an existing installation; use kado update
 so signed update and downgrade policy cannot be bypassed. During an
 update, the existing binary is retained as a rollback file until candidate
@@ -39,10 +39,10 @@ After installation:
 Use kado update for a signed in-place update. Downgrades are rejected unless
 --allow-downgrade is explicit. Use the supplied uninstall script with --yes;
 credentials are preserved unless --purge-credentials is also explicit.
-`, source.Plugin.Version, source.Plugin.Repository, source.Installation.CLIInstallURL, keyID)
+`, source.Version, source.Repository, source.InstallURL, keyID)
 }
 
-func installUnixScript(source distributionSource, keyID string) string {
+func installUnixScript(source releaseIdentity, keyID string) string {
 	return fmt.Sprintf(`#!/bin/sh
 set -eu
 
@@ -97,10 +97,10 @@ INSTALL-CLI.md" || {
 tar -xzf "$release_directory/$archive" -C "$temporary"
 test -f "$temporary/kado" && test ! -L "$temporary/kado"
 test "$(stat -f '%%Lp' "$temporary/kado" 2>/dev/null || stat -c '%%a' "$temporary/kado")" = "755"
-provenance="$("$temporary/kado" version --json)"
-printf '%%s\n' "$provenance" | grep -F "\"version\":\"${version}\"" >/dev/null
-printf '%%s\n' "$provenance" | grep -F "\"target\":\"${target_os}/${target_arch}\"" >/dev/null
-printf '%%s\n' "$provenance" | grep -F "\"release_key_id\":\"${expected_key_id}\"" >/dev/null
+identity="$("$temporary/kado" version --json)"
+printf '%%s\n' "$identity" | grep -F "\"version\":\"${version}\"" >/dev/null
+printf '%%s\n' "$identity" | grep -F "\"target\":\"${target_os}/${target_arch}\"" >/dev/null
+printf '%%s\n' "$identity" | grep -F "\"release_key_id\":\"${expected_key_id}\"" >/dev/null
 "$temporary/kado" release verify --directory "$release_directory" >/dev/null
 
 parent="$(dirname "$destination")"
@@ -116,7 +116,7 @@ if ! mv "$candidate" "$destination"; then
   exit 1
 fi
 printf 'installed kado %%s at %%s; credentials were unchanged\n' "$version" "$destination"
-`, source.Plugin.Version, keyID)
+`, source.Version, keyID)
 }
 
 func uninstallUnixScript() string {
@@ -153,7 +153,7 @@ fi
 `
 }
 
-func installPowerShellScript(source distributionSource, keyID string) string {
+func installPowerShellScript(source releaseIdentity, keyID string) string {
 	return fmt.Sprintf(`param(
   [string]$ReleaseDirectory = ".",
   [string]$Destination = "$env:LOCALAPPDATA\Kado\kado.exe"
@@ -195,9 +195,9 @@ try {
   $Entries = @(Get-ChildItem -LiteralPath $Temporary -File | ForEach-Object { $_.Name } | Sort-Object)
   if (($Entries -join ",") -ne "INSTALL-CLI.md,LICENSE,kado.exe") { throw "archive contains unexpected paths" }
   $CandidateBinary = Join-Path $Temporary "kado.exe"
-  $Provenance = & $CandidateBinary version --json | ConvertFrom-Json
-  if ($Provenance.version -ne $Version -or $Provenance.target -ne "windows/$Arch" -or $Provenance.release_key_id -ne $ExpectedKeyId) {
-    throw "candidate executable provenance is invalid"
+  $Identity = & $CandidateBinary version --json | ConvertFrom-Json
+  if ($Identity.version -ne $Version -or $Identity.target -ne "windows/$Arch" -or $Identity.release_key_id -ne $ExpectedKeyId) {
+    throw "candidate executable identity is invalid"
   }
   & $CandidateBinary release verify --directory $ReleaseDirectory | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "release bundle verification failed" }
@@ -211,7 +211,7 @@ try {
 } finally {
   Remove-Item -LiteralPath $Temporary -Recurse -Force -ErrorAction SilentlyContinue
 }
-`, source.Plugin.Version, keyID)
+`, source.Version, keyID)
 }
 
 func uninstallPowerShellScript() string {

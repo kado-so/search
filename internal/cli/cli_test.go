@@ -13,11 +13,12 @@ import (
 	"unicode"
 
 	"github.com/kado-so/search/internal/agentauth"
+	"github.com/kado-so/search/internal/agentidentity"
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/releaseclient"
 	"github.com/kado-so/search/internal/searchclient"
-	"github.com/kado-so/search/internal/searchcontract"
+	"github.com/kado-so/search/internal/searchcontract/testfixture"
 	"github.com/kado-so/search/internal/searchoutput"
 )
 
@@ -122,6 +123,119 @@ func TestAuthStatusPrintsOnlyBoundedNonSecretIdentityState(t *testing.T) {
 	assertNoCredentialSecrets(t, stdout+stderr)
 }
 
+func TestAgentOverrideSelectsNamespacedAuthFactory(t *testing.T) {
+	t.Parallel()
+
+	selected := ""
+	auth := &fakeAuthCommands{
+		status: agentauth.CredentialStatus{Status: agentauth.StatusNotConfigured},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"--agent", "claude-code", "auth", "status"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			detectAgent: func(override string) (agentidentity.Detection, error) {
+				if override != "claude-code" {
+					t.Fatalf("override = %q", override)
+				}
+				return agentidentity.Detection{
+					Agent:  override,
+					Source: "override",
+				}, nil
+			},
+			newAuth: func(agent string) (authCommands, error) {
+				selected = agent
+				return auth, nil
+			},
+		},
+	)
+	if exitCode != 0 || stderr.Len() != 0 ||
+		stdout.String() != "status: not-configured\n" ||
+		selected != "claude-code" {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q selected=%q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+			selected,
+		)
+	}
+}
+
+func TestAgentAndIdentityListsAreDeterministic(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		args []string
+		deps dependencies
+		want string
+	}{
+		{
+			args: []string{"agent", "list"},
+			want: strings.Join(agentidentity.Known(), "\n") + "\n",
+		},
+		{
+			args: []string{"auth", "identities"},
+			deps: dependencies{
+				listIdentities: func() ([]string, error) {
+					return []string{"claude-code", "codex"}, nil
+				},
+			},
+			want: "claude-code\ncodex\n",
+		},
+	} {
+		var stdout, stderr bytes.Buffer
+		exitCode := runWithDependencies(
+			test.args,
+			&stdout,
+			&stderr,
+			buildinfo.Info{},
+			test.deps,
+		)
+		if exitCode != 0 || stderr.Len() != 0 || stdout.String() != test.want {
+			t.Fatalf(
+				"Run(%q) exit=%d stdout=%q stderr=%q",
+				test.args,
+				exitCode,
+				stdout.String(),
+				stderr.String(),
+			)
+		}
+	}
+}
+
+func TestAuthCreateUsesExplicitCreationOperation(t *testing.T) {
+	t.Parallel()
+
+	auth := &fakeCreateAuthCommands{
+		fakeAuthCommands: &fakeAuthCommands{},
+		created: agentauth.CredentialStatus{
+			Status:       agentauth.StatusActive,
+			PrincipalID:  "agt_created",
+			CredentialID: "acred_created",
+			ClientID:     "clt_created",
+		},
+	}
+	stdout, stderr, exitCode := runTestAuth(
+		t,
+		[]string{"auth", "create"},
+		auth,
+	)
+	if exitCode != 0 || stderr != "" || auth.createCalls != 1 ||
+		!strings.Contains(stdout, "principal: agt_created\n") {
+		t.Fatalf(
+			"create exit=%d stdout=%q stderr=%q calls=%d",
+			exitCode,
+			stdout,
+			stderr,
+			auth.createCalls,
+		)
+	}
+}
+
 func TestAuthStatusWithoutLocalCredentialIsUsefulAndDoesNotEnroll(t *testing.T) {
 	t.Parallel()
 
@@ -177,14 +291,14 @@ func TestAuthFailuresRedactPrivateJWKTokensAndUnderlyingErrors(t *testing.T) {
 			args:     []string{"auth", "status"},
 			auth:     &fakeAuthCommands{statusErr: privateCause},
 			wantCode: "auth_status_failed",
-			wantText: "could not read current installation authentication status",
+			wantText: "could not read the selected agent identity status",
 		},
 		{
 			name:     "revoke server",
 			args:     []string{"auth", "revoke"},
 			auth:     &fakeAuthCommands{revokeErr: privateCause},
 			wantCode: "auth_revoke_failed",
-			wantText: "could not revoke the current installation",
+			wantText: "could not revoke the selected agent identity",
 		},
 		{
 			name: "revoke credential changed",
@@ -193,7 +307,7 @@ func TestAuthFailuresRedactPrivateJWKTokensAndUnderlyingErrors(t *testing.T) {
 				revokeErr: errors.Join(agentauth.ErrCredentialChanged, privateCause),
 			},
 			wantCode: "auth_credential_changed",
-			wantText: "the prior installation was revoked, but the local credential changed; retry to revoke the current installation",
+			wantText: "the prior agent identity was revoked, but the local credential changed; retry to revoke the selected identity",
 		},
 		{
 			name: "revoke local cleanup",
@@ -251,7 +365,7 @@ func TestNonAuthAndInvalidAuthCommandsDoNotInitializeCredentialAccess(t *testing
 	t.Parallel()
 
 	dependencies := dependencies{
-		newAuth: func() (authCommands, error) {
+		newAuth: func(string) (authCommands, error) {
 			t.Fatal("credential access initialized")
 			return nil, nil
 		},
@@ -272,9 +386,9 @@ func TestNonAuthAndInvalidAuthCommandsDoNotInitializeCredentialAccess(t *testing
 func TestSearchRunsLifecycleWithBoundedOptionsAndSafeSummary(t *testing.T) {
 	t.Parallel()
 
-	canonical, err := searchcontract.ReleasedFixture("complete")
+	canonical, err := testfixture.Load("complete")
 	if err != nil {
-		t.Fatalf("ReleasedFixture(complete) error = %v", err)
+		t.Fatalf("testfixture.Load(complete) error = %v", err)
 	}
 	search := &fakeSearchCommands{
 		result: searchRunResult{
@@ -301,7 +415,7 @@ func TestSearchRunsLifecycleWithBoundedOptionsAndSafeSummary(t *testing.T) {
 		&stderr,
 		buildinfo.Info{},
 		dependencies{
-			newSearch: func() (searchCommands, error) {
+			newSearch: func(string) (searchCommands, error) {
 				return search, nil
 			},
 		},
@@ -380,7 +494,7 @@ func TestSearchFailuresAreBoundedAndNeverRenderPrivateCauses(t *testing.T) {
 				&stderr,
 				buildinfo.Info{},
 				dependencies{
-					newSearch: func() (searchCommands, error) {
+					newSearch: func(string) (searchCommands, error) {
 						return search, nil
 					},
 				},
@@ -418,7 +532,7 @@ func TestSearchFailureStderrRemovesTerminalControlsAndPreservesUnicode(t *testin
 		&stderr,
 		buildinfo.Info{},
 		dependencies{
-			newSearch: func() (searchCommands, error) {
+			newSearch: func(string) (searchCommands, error) {
 				return search, nil
 			},
 		},
@@ -439,9 +553,9 @@ func TestSearchFailureStderrRemovesTerminalControlsAndPreservesUnicode(t *testin
 func TestSearchOutputModesUseValidatedCanonicalBytesAndProjections(t *testing.T) {
 	t.Parallel()
 
-	canonical, err := searchcontract.ReleasedFixture("complete")
+	canonical, err := testfixture.Load("complete")
 	if err != nil {
-		t.Fatalf("ReleasedFixture(complete) error = %v", err)
+		t.Fatalf("testfixture.Load(complete) error = %v", err)
 	}
 	for _, test := range []struct {
 		name    string
@@ -478,7 +592,7 @@ func TestSearchOutputModesUseValidatedCanonicalBytesAndProjections(t *testing.T)
 				&stdout,
 				&stderr,
 				buildinfo.Info{},
-				dependencies{newSearch: func() (searchCommands, error) {
+				dependencies{newSearch: func(string) (searchCommands, error) {
 					return search, nil
 				}},
 			)
@@ -507,9 +621,9 @@ func TestSearchOutputModesUseValidatedCanonicalBytesAndProjections(t *testing.T)
 func TestSearchFailureModesEmitValidatedLifecycleDocumentBeforeSafeDiagnostic(t *testing.T) {
 	t.Parallel()
 
-	canonical, err := searchcontract.ReleasedFixture("failed")
+	canonical, err := testfixture.Load("failed")
 	if err != nil {
-		t.Fatalf("ReleasedFixture(failed) error = %v", err)
+		t.Fatalf("testfixture.Load(failed) error = %v", err)
 	}
 	search := &fakeSearchCommands{
 		result: searchRunResult{
@@ -528,7 +642,7 @@ func TestSearchFailureModesEmitValidatedLifecycleDocumentBeforeSafeDiagnostic(t 
 		&stdout,
 		&stderr,
 		buildinfo.Info{},
-		dependencies{newSearch: func() (searchCommands, error) {
+		dependencies{newSearch: func(string) (searchCommands, error) {
 			return search, nil
 		}},
 	)
@@ -547,9 +661,9 @@ func TestSearchFailureModesEmitValidatedLifecycleDocumentBeforeSafeDiagnostic(t 
 func TestSearchBrokenPipeStopsSilently(t *testing.T) {
 	t.Parallel()
 
-	canonical, err := searchcontract.ReleasedFixture("complete")
+	canonical, err := testfixture.Load("complete")
 	if err != nil {
-		t.Fatalf("ReleasedFixture(complete) error = %v", err)
+		t.Fatalf("testfixture.Load(complete) error = %v", err)
 	}
 	search := &fakeSearchCommands{result: searchRunResult{
 		status:    searchclient.StatusComplete,
@@ -562,7 +676,7 @@ func TestSearchBrokenPipeStopsSilently(t *testing.T) {
 		closedPipeWriter{},
 		&stderr,
 		buildinfo.Info{},
-		dependencies{newSearch: func() (searchCommands, error) {
+		dependencies{newSearch: func(string) (searchCommands, error) {
 			return search, nil
 		}},
 	)
@@ -575,7 +689,7 @@ func TestSearchUnsupportedMajorFailsClearlyBeforeOutput(t *testing.T) {
 	t.Parallel()
 
 	var value map[string]any
-	if err := json.Unmarshal(mustReleasedFixture(t, "complete"), &value); err != nil {
+	if err := json.Unmarshal(mustFixture(t, "complete"), &value); err != nil {
 		t.Fatalf("json.Unmarshal(complete) error = %v", err)
 	}
 	value["schema_version"] = "kado.search-document.v8"
@@ -595,7 +709,7 @@ func TestSearchUnsupportedMajorFailsClearlyBeforeOutput(t *testing.T) {
 		&stdout,
 		&stderr,
 		buildinfo.Info{},
-		dependencies{newSearch: func() (searchCommands, error) {
+		dependencies{newSearch: func(string) (searchCommands, error) {
 			return search, nil
 		}},
 	)
@@ -618,7 +732,7 @@ func TestInvalidSearchUsageDoesNotInitializeAuthentication(t *testing.T) {
 	t.Parallel()
 
 	dependencies := dependencies{
-		newSearch: func() (searchCommands, error) {
+		newSearch: func(string) (searchCommands, error) {
 			t.Fatal("Search authentication initialized")
 			return nil, nil
 		},
@@ -732,7 +846,7 @@ func TestUninstallPreservesCredentialsUnlessPurgeIsExplicit(t *testing.T) {
 				&stderr,
 				buildinfo.Info{},
 				dependencies{
-					newAuth: func() (authCommands, error) {
+					newAuth: func(string) (authCommands, error) {
 						if !purge {
 							t.Fatal("credential access initialized without purge")
 						}
@@ -771,7 +885,7 @@ func TestUninstallRequiresConfirmationBeforeAccessingAnything(t *testing.T) {
 		&stderr,
 		buildinfo.Info{},
 		dependencies{
-			newAuth: func() (authCommands, error) {
+			newAuth: func(string) (authCommands, error) {
 				t.Fatal("credential access initialized")
 				return nil, nil
 			},
@@ -830,11 +944,11 @@ func (closedPipeWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
-func mustReleasedFixture(t *testing.T, name string) []byte {
+func mustFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	value, err := searchcontract.ReleasedFixture(name)
+	value, err := testfixture.Load(name)
 	if err != nil {
-		t.Fatalf("ReleasedFixture(%s) error = %v", name, err)
+		t.Fatalf("testfixture.Load(%s) error = %v", name, err)
 	}
 	return value
 }
@@ -846,6 +960,13 @@ type fakeAuthCommands struct {
 	revokeErr   error
 	statusCalls int
 	revokeCalls int
+}
+
+type fakeCreateAuthCommands struct {
+	*fakeAuthCommands
+	created     agentauth.CredentialStatus
+	createErr   error
+	createCalls int
 }
 
 type fakeSearchCommands struct {
@@ -911,6 +1032,13 @@ func (auth *fakeAuthCommands) Revoke(
 	return auth.revoked, auth.revokeErr
 }
 
+func (auth *fakeCreateAuthCommands) Create(
+	context.Context,
+) (agentauth.CredentialStatus, error) {
+	auth.createCalls++
+	return auth.created, auth.createErr
+}
+
 func runTestAuth(
 	t *testing.T,
 	args []string,
@@ -923,7 +1051,7 @@ func runTestAuth(
 		&stdoutBuffer,
 		&stderrBuffer,
 		buildinfo.Info{},
-		dependencies{newAuth: func() (authCommands, error) {
+		dependencies{newAuth: func(string) (authCommands, error) {
 			return auth, nil
 		}},
 	)

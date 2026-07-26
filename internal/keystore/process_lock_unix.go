@@ -36,7 +36,7 @@ func withProcessLockInDirectory(
 		return storageError("acquire creation lock", ErrUnavailable, err)
 	}
 	defer func() { _ = root.Close() }()
-	return withOpenProcessLock(root, isolatedProcessLockName(identifier), action)
+	return withOpenProcessLock(root, agentProcessLockName(identifier), action)
 }
 
 func validateProcessLockLocation(directory, identifier string) error {
@@ -45,7 +45,7 @@ func validateProcessLockLocation(directory, identifier string) error {
 		return storageError("validate creation lock", ErrUnavailable, err)
 	}
 	defer func() { _ = root.Close() }()
-	return ensureSafeDestination(root, isolatedProcessLockName(identifier))
+	return ensureSafeDestination(root, agentProcessLockName(identifier))
 }
 
 func withOpenProcessLock(
@@ -70,7 +70,7 @@ func processLockName(identifier string) string {
 	return hex.EncodeToString(digest[:]) + ".lock"
 }
 
-func isolatedProcessLockName(identifier string) string {
+func agentProcessLockName(identifier string) string {
 	return ".kado-credential-" + processLockName(identifier)
 }
 

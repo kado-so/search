@@ -19,7 +19,7 @@ const (
 	SemanticRules      = "kado.search-document-semantics.v1"
 	pinnedManifestHash = "000f3f58ea4fcf2cc105e1f4904ea2d392df8088c79fa0cc0e7514436a7a2713"
 	maxAssetBytes      = 256 * 1024
-	maxGeneratedAssets = 16
+	maxGeneratedAssets = 4
 )
 
 type releaseManifest struct {
@@ -27,7 +27,6 @@ type releaseManifest struct {
 	Version       string                   `json:"version"`
 	SchemaVersion string                   `json:"schema_version"`
 	Artifacts     map[string]manifestEntry `json:"artifacts"`
-	Fixtures      map[string]manifestEntry `json:"fixtures"`
 }
 
 type manifestEntry struct {
@@ -54,24 +53,6 @@ func loadReleasedAssets() (releasedAssets, error) {
 		assetsV1, assetsErr = decodeReleasedAssets()
 	})
 	return assetsV1, assetsErr
-}
-
-// ReleasedFixture returns an isolated authoritative fixture generated from the
-// pinned release manifest. It supports local conformance/golden tests.
-func ReleasedFixture(name string) ([]byte, error) {
-	assets, err := loadReleasedAssets()
-	if err != nil {
-		return nil, ErrInvalid
-	}
-	entry, ok := assets.manifest.Fixtures[name]
-	if !ok {
-		return nil, ErrInvalid
-	}
-	value, err := checkedGeneratedAsset(entry)
-	if err != nil {
-		return nil, ErrInvalid
-	}
-	return append([]byte(nil), value...), nil
 }
 
 func decodeReleasedAssets() (releasedAssets, error) {
