@@ -36,7 +36,7 @@ type buildInput struct {
 	root       string
 	output     string
 	goBinary   string
-	source     distributionSource
+	source     releaseConfig
 	commit     string
 	builtAt    time.Time
 	privateKey ed25519.PrivateKey
@@ -51,9 +51,9 @@ type builtFile struct {
 }
 
 func buildRelease(input buildInput) error {
-	assetBase := strings.TrimSuffix(input.source.Installation.CLIInstallURL, "/") +
-		"/releases/" + input.source.Plugin.Version
-	metadataURL := strings.TrimSuffix(input.source.Installation.CLIInstallURL, "/") +
+	assetBase := strings.TrimSuffix(input.source.InstallURL, "/") +
+		"/releases/" + input.source.Version
+	metadataURL := strings.TrimSuffix(input.source.InstallURL, "/") +
 		"/releases/stable/release-metadata.json"
 	license, err := os.ReadFile(filepath.Join(input.root, "LICENSE"))
 	if err != nil {
@@ -158,11 +158,11 @@ func buildRelease(input buildInput) error {
 	metadata := releaseclient.Metadata{
 		SchemaVersion:    releaseclient.SchemaVersion,
 		Product:          releaseclient.Product,
-		Version:          input.source.Plugin.Version,
+		Version:          input.source.Version,
 		Commit:           input.commit,
 		BuiltAt:          input.builtAt.Format(time.RFC3339),
-		Repository:       input.source.Plugin.Repository,
-		InstallURL:       input.source.Installation.CLIInstallURL,
+		Repository:       input.source.Repository,
+		InstallURL:       input.source.InstallURL,
 		SigningAlgorithm: "Ed25519",
 		KeyID:            input.keyID,
 		SigningPublicKey: releaseclient.PublicKeyText(input.publicKey),
@@ -243,7 +243,7 @@ func buildTargetArtifacts(
 	}
 	base := fmt.Sprintf(
 		"kado_%s_%s_%s",
-		input.source.Plugin.Version,
+		input.source.Version,
 		target.goos,
 		target.goarch,
 	)
@@ -253,7 +253,7 @@ func buildTargetArtifacts(
 		"-s",
 		"-w",
 		"-buildid=",
-		"-X", "github.com/kado-so/search/internal/buildinfo.Version=" + input.source.Plugin.Version,
+		"-X", "github.com/kado-so/search/internal/buildinfo.Version=" + input.source.Version,
 		"-X", "github.com/kado-so/search/internal/buildinfo.Commit=" + input.commit,
 		"-X", "github.com/kado-so/search/internal/buildinfo.Date=" + input.builtAt.Format(time.RFC3339),
 		"-X", "github.com/kado-so/search/internal/buildinfo.Target=" + target.goos + "/" + target.goarch,

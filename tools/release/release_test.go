@@ -56,10 +56,12 @@ func TestDeterministicArchivesHaveSafePathsAndModes(t *testing.T) {
 func TestGeneratedInstallAndUninstallDocumentsEnforcePolicy(t *testing.T) {
 	t.Parallel()
 
-	var source distributionSource
-	source.Plugin.Version = "0.1.0"
-	source.Plugin.Repository = "https://github.com/kado-so/search"
-	source.Installation.CLIInstallURL = "https://kado.so/install"
+	source := releaseConfig{
+		Version:    "0.1.0",
+		Repository: "https://github.com/kado-so/search",
+		InstallURL: "https://kado.so/install",
+		Executable: "kado",
+	}
 	keyID := "sha256:0123456789abcdef"
 	documents := []string{
 		installGuide(source, keyID),

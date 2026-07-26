@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,20 +33,11 @@ type options struct {
 	goBinary string
 }
 
-type distributionSource struct {
-	Plugin struct {
-		Version    string `json:"version"`
-		Repository string `json:"repository"`
-		Homepage   string `json:"homepage"`
-	} `json:"plugin"`
-	Installation struct {
-		CLIExecutable string `json:"cli_executable"`
-		CLIInstallURL string `json:"cli_install_url"`
-		Source        struct {
-			Kind       string `json:"kind"`
-			Repository string `json:"repository"`
-		} `json:"source"`
-	} `json:"installation"`
+type releaseConfig struct {
+	Version    string `json:"version"`
+	Repository string `json:"repository"`
+	InstallURL string `json:"install_url"`
+	Executable string `json:"executable"`
 }
 
 func main() {
@@ -79,7 +71,7 @@ func run(configured options) error {
 	if !commitPattern.MatchString(configured.commit) {
 		return errors.New("--commit must be an exact lowercase 40-character Git commit")
 	}
-	source, err := loadDistribution(root)
+	source, err := loadReleaseConfig(root)
 	if err != nil {
 		return err
 	}
@@ -137,32 +129,34 @@ func run(configured options) error {
 	}
 	fmt.Printf(
 		"release dry-run complete version=%s commit=%s targets=6 output=%s\n",
-		source.Plugin.Version,
+		source.Version,
 		configured.commit,
 		output,
 	)
 	return nil
 }
 
-func loadDistribution(root string) (distributionSource, error) {
-	path := filepath.Join(root, "distribution", "kado-search.manifest.json")
+func loadReleaseConfig(root string) (releaseConfig, error) {
+	path := filepath.Join(root, "distribution", "release.json")
 	encoded, err := os.ReadFile(path)
 	if err != nil {
-		return distributionSource{}, errors.New("canonical distribution metadata is unavailable")
+		return releaseConfig{}, errors.New("release configuration is unavailable")
 	}
-	var source distributionSource
+	var source releaseConfig
 	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&source); err != nil {
-		return distributionSource{}, errors.New("canonical distribution metadata is invalid")
+		return releaseConfig{}, errors.New("release configuration is invalid")
 	}
-	if source.Plugin.Version == "" ||
-		source.Plugin.Repository != "https://github.com/kado-so/search" ||
-		source.Plugin.Homepage != source.Installation.CLIInstallURL ||
-		source.Installation.CLIExecutable != "kado" ||
-		source.Installation.CLIInstallURL != "https://kado.so/install" ||
-		source.Installation.Source.Kind != "github" ||
-		source.Installation.Source.Repository != "kado-so/search" {
-		return distributionSource{}, errors.New("canonical distribution identity is invalid")
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return releaseConfig{}, errors.New("release configuration is invalid")
+	}
+	if source.Version == "" ||
+		source.Repository != "https://github.com/kado-so/search" ||
+		source.Executable != "kado" ||
+		source.InstallURL != "https://kado.so/install" {
+		return releaseConfig{}, errors.New("release configuration identity is invalid")
 	}
 	return source, nil
 }

@@ -2,7 +2,7 @@ package main
 
 import "fmt"
 
-func installGuide(source distributionSource, keyID string) string {
+func installGuide(source releaseConfig, keyID string) string {
 	return fmt.Sprintf(`# Install the Kado CLI
 
 Version: %s
@@ -39,10 +39,10 @@ After installation:
 Use kado update for a signed in-place update. Downgrades are rejected unless
 --allow-downgrade is explicit. Use the supplied uninstall script with --yes;
 credentials are preserved unless --purge-credentials is also explicit.
-`, source.Plugin.Version, source.Plugin.Repository, source.Installation.CLIInstallURL, keyID)
+`, source.Version, source.Repository, source.InstallURL, keyID)
 }
 
-func installUnixScript(source distributionSource, keyID string) string {
+func installUnixScript(source releaseConfig, keyID string) string {
 	return fmt.Sprintf(`#!/bin/sh
 set -eu
 
@@ -116,7 +116,7 @@ if ! mv "$candidate" "$destination"; then
   exit 1
 fi
 printf 'installed kado %%s at %%s; credentials were unchanged\n' "$version" "$destination"
-`, source.Plugin.Version, keyID)
+`, source.Version, keyID)
 }
 
 func uninstallUnixScript() string {
@@ -153,7 +153,7 @@ fi
 `
 }
 
-func installPowerShellScript(source distributionSource, keyID string) string {
+func installPowerShellScript(source releaseConfig, keyID string) string {
 	return fmt.Sprintf(`param(
   [string]$ReleaseDirectory = ".",
   [string]$Destination = "$env:LOCALAPPDATA\Kado\kado.exe"
@@ -211,7 +211,7 @@ try {
 } finally {
   Remove-Item -LiteralPath $Temporary -Recurse -Force -ErrorAction SilentlyContinue
 }
-`, source.Plugin.Version, keyID)
+`, source.Version, keyID)
 }
 
 func uninstallPowerShellScript() string {

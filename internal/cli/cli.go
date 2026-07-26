@@ -769,7 +769,7 @@ func metadataHTTPClient(timeout time.Duration, maxResponseHeaderBytes int64) *ht
 	transport.MaxResponseHeaderBytes = maxResponseHeaderBytes
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: requestmeta.NewTransport(transport, buildinfo.Current()),
+		Transport: requestmeta.NewTransport(transport),
 	}
 }
 

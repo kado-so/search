@@ -629,7 +629,7 @@ func verifyProvenance(encoded []byte, metadata Metadata, target Target) error {
 		statement.Predicate.BuildDefinition.ResolvedDependencies[0].
 			Digest["gitCommit"] != metadata.Commit ||
 		statement.Predicate.RunDetails.Builder.ID !=
-			"https://github.com/kado-so/search/.github/workflows/cli-release.yml" ||
+			"https://github.com/kado-so/search/tree/main/tools/release" ||
 		statement.Predicate.RunDetails.Metadata.InvocationID !=
 			metadata.Version+"@"+metadata.Commit ||
 		statement.Predicate.RunDetails.Metadata.StartedOn != metadata.BuiltAt ||

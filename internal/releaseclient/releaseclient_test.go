@@ -884,7 +884,7 @@ func provenanceBytes(version string, target Target, invalid bool) []byte {
 			},
 			"runDetails": map[string]any{
 				"builder": map[string]string{
-					"id": "https://github.com/kado-so/search/.github/workflows/cli-release.yml",
+					"id": "https://github.com/kado-so/search/tree/main/tools/release",
 				},
 				"metadata": map[string]string{
 					"invocationId": version + "@0123456789abcdef0123456789abcdef01234567",

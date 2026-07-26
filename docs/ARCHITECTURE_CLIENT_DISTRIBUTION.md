@@ -1,118 +1,65 @@
-# Kado Search Client And Skill Ownership
+# Kado Search Client Ownership
 
-Status: Approved target architecture
+## Repository boundary
 
-Canonical product architecture:
-`../../kado-app/docs/ARCHITECTURE_AGENT_NATIVE_SEARCH.md`
+This repository owns:
 
-Staging branch: `vaishnav/f/public-changes`
+- the Go `kado` CLI;
+- autonomous-agent authentication and credential storage;
+- the Search lifecycle client and output renderers;
+- the `kado-search` skill and direct plugin manifests; and
+- signed CLI release construction and self-update.
 
-## Decision
+`kado-app` owns the public service, authentication server, Search Document
+contract, and website. The repositories remain independent.
 
-This repository owns the Go `kado` CLI, autonomous-agent client, Kado Search
-skill, plugin manifests, and client release artifacts. `kado-app` owns the
-public service, authentication server, Search Document contract, and website.
+## Client boundary
 
-The repositories remain independent Git repositories. Neither is a Git
-submodule or subtree of the other. A single agent task may work in both sibling
-repositories, but it creates, validates, commits, and merges branches separately
-in each repository.
+The CLI calls only public canonical `kado.so` resources. It:
 
-## Client Boundary
-
-The CLI calls only public `kado.so` resources. It never calls the private
-administration listener or a future internal Search provider.
-
-The CLI:
-
-- discovers OAuth and agent-enrollment metadata;
-- enrolls/authenticates a stable autonomous-agent principal;
+- discovers authentication metadata;
+- enrolls or authenticates a stable autonomous-agent principal;
 - keeps long-lived keys outside model-visible state;
 - performs authenticated Search;
-- follows lifecycle and pagination links;
-- emits the canonical Search Document for `--json`; and
-- provides a concise human renderer over the same document.
+- follows server-provided lifecycle and pagination links;
+- validates every Search Document; and
+- emits canonical JSON, paginated JSONL, or bounded human output.
 
-Ordinary CLI composition always uses the platform OS keychain. For isolated
-executable acceptance only, the product-owned
-`KADO_ACCEPTANCE_CREDENTIAL_FILE` environment boundary selects the existing
-permission-restricted file-store adapter for both `auth` and `search`. Its
-caller must provide one canonical absolute path under an existing non-symlink
-`0700` directory; the selector rejects unsafe or ambiguous locations before
-network activity. The caller owns the directory lifecycle, while the CLI owns
-the credential record and deletes it solely through confirmed revocation or
-explicit credential-purging uninstall. Isolated operations serialize on one
-non-secret dot-prefixed `0600` lock retained in the same caller-owned
-directory. The acceptance runner waits for every CLI process to stop before
-removing that entire directory; per-operation lock deletion is forbidden
-because it could split exclusion between a current waiter and a newly created
-lock. Isolated operations never recreate a directory removed after selection.
+Ordinary CLI use stores the management key in the operating-system credential
+store. A permission-restricted file-store adapter exists only for explicitly
+isolated Unix-like acceptance environments.
 
-Every Kado HTTP request also carries bounded, unverified client name/version,
-platform, and best-effort agent-runtime metadata. Runtime detection uses
-inherited environment markers and then the local process tree without prompting
-the calling agent. Enrollment additionally carries a bounded hostname, local
-operating-system username, and global Git email when available. These values
-never participate in credential identity, authentication, authorization, or
-future agent-to-user linking.
+Enrollment sends a bounded hostname and local operating-system username. No
+Git identity, process tree, environment-based runtime detection, or browser
+state is collected.
 
-## Contract Consumption
+## Contract consumption
 
-The Search Document JSON Schema and JSON-LD context are owned and published by
-`kado-app`. This repository pins a released version/checksum and carries only
-generated clients, validators, and golden fixtures needed for conformance.
+The Search Document JSON Schema, JSON-LD context, semantic rules, and fixtures
+are owned and published by `kado-app`. This repository pins released assets and
+validates them locally at runtime. Unsupported major versions fail clearly.
 
-Contract changes land on the `kado-app` staging branch first. Client phases
-consume the integrated staging contract. The client must fail clearly when a
-server returns an unsupported major version.
+## Skill boundary
 
-## Skill Boundary
-
-The `kado-search` skill teaches agents when and how to use the installed `kado`
-CLI. It does not reimplement authentication or Search through ad hoc `curl`,
-temporary scripts, copied tokens, browser cookies, API keys, or device codes.
-
-The skill remains the canonical behavioral instruction source for supported
-agent/plugin manifests in this repository.
+The `kado-search` skill contains Search guidance only: when to search, how to
+form a query, how to invoke Search, and how to use the results. Authentication,
+installation, updates, releases, and uninstallation are CLI or operator
+concerns and do not belong in the skill.
 
 ## Distribution
 
-The repository produces:
+Plugin and marketplace manifests are maintained directly. CLI release identity
+is stored in `distribution/release.json`.
 
-- cross-platform Go binaries;
-- checksums and signed release metadata;
-- `distribution/kado-installation.v1.gen.json`, the one versioned installation
-  description for the CLI, skill, plugins, supported targets, approval policy,
-  and public service discovery links;
-- install/update/uninstall instructions;
-- Codex and Claude plugin/marketplace manifests;
-- Agent Skills-compatible `SKILL.md`; and
-- release/version metadata consumed by `kado.so/install`.
-
-The installation description derives product identity and version from
-`distribution/kado-search.manifest.json`, validates against its Draft 2020-12
-schema, and has a deterministic checksum manifest. `kado-app` consumes an exact
-generated copy and must not redefine its commands or release availability.
-Until signed CLI release metadata is actually published, the description stays
-explicitly `unpublished` and contains discovery fields rather than fabricated
-artifact URLs or checksums.
-
-## Branching
-
-Phase branches are created from the latest
-`vaishnav/f/public-changes` in this repository and merge back only after their
-phase completion conditions pass. Cross-repository phases use the same branch
-suffix in both repositories when both trees must change.
-
-The staging branches merge to each repository's `main` only after the full
-cross-repository cutover gate passes.
+The release builder creates cross-platform binaries, deterministic archives,
+checksums, signed release metadata, SBOMs, provenance, and local
+install/uninstall scripts. Installed binaries use those artifacts for verified
+self-update.
 
 ## Invariants
 
-- This repository owns CLI and skill source.
-- `kado-app` owns the public contracts.
-- The skill invokes the CLI instead of handling credentials.
-- Private key and token material never enters model context or logs.
-- No submodule or subtree couples the repositories.
-- Cross-repository releases prove schema, auth, installation, and Search
-  compatibility before either staging branch merges to `main`.
+- The skill invokes the CLI instead of handling credentials or HTTP.
+- Private keys and tokens never enter model context or ordinary logs.
+- JSON-LD and schema validation remain local and deterministic.
+- CLI updates verify signed metadata and the replacement executable before
+  installation.
