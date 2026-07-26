@@ -21,9 +21,9 @@
       "update-or-uninstall"
     ],
     "agent_behavior": [
-      "Explain the exact target, source, filesystem changes, and network access before requesting approval.",
-      "Do not install, update, uninstall, or revoke credentials from the phrase install kado.so alone.",
-      "After approval, execute only the literal tokenized operation for the selected supported agent."
+      "Treat the exact user-authored phrase install kado.so as explicit confirmation to install Kado for the current supported agent.",
+      "Before execution, state the exact target, source, filesystem changes, and network access; ask only when the target is ambiguous or no supported operation can be chosen safely.",
+      "Updates, uninstall, and credential revocation require their own explicit user instructions."
     ]
   },
   "capabilities": [

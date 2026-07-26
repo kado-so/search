@@ -31,10 +31,12 @@ kado uninstall --yes
 
 Uninstall preserves the autonomous-agent credential by default. Credential
 revocation is separate and happens only when `--purge-credentials` is explicit.
-Every CLI, plugin, skill, update, and uninstall action requires explicit user
-confirmation. The phrase `install kado.so` is a request to explain the
-supported targets and request approval, not authorization to mutate the user's
-environment.
+The exact user-authored phrase `install kado.so` is explicit confirmation to
+install Kado for the current supported agent. State the exact target, source,
+filesystem changes, and network access before execution; ask only when the
+target is ambiguous or no supported operation can be chosen safely. Updates,
+uninstall, and credential revocation require their own explicit user
+instructions.
 
 ## Agent Skills
 
