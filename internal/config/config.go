@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	EnvironmentBaseURL   = "KADO_BASE_URL"
 	EnvironmentConfigDir = "KADO_CONFIG_DIR"
 	defaultBaseURL       = "https://kado.so"
 	configFileName       = "config.json"
@@ -38,7 +37,6 @@ type Config struct {
 	// or decoding attacker-controlled path data.
 	BaseURL           *url.URL
 	ConfigDir         string
-	ConfigPath        string
 	CredentialBackend CredentialBackend
 	SecretsDir        string
 }
@@ -84,9 +82,6 @@ func load(environment environmentLookup, userConfigDir userConfigDirLookup) (Con
 	if rawBaseURL == "" {
 		rawBaseURL = defaultBaseURL
 	}
-	if configured, exists := environment(EnvironmentBaseURL); exists {
-		rawBaseURL = configured
-	}
 	baseURL, err := parseBaseURL(rawBaseURL)
 	if err != nil {
 		return Config{}, err
@@ -117,7 +112,6 @@ func load(environment environmentLookup, userConfigDir userConfigDirLookup) (Con
 	return Config{
 		BaseURL:           baseURL,
 		ConfigDir:         configDir,
-		ConfigPath:        configPath,
 		CredentialBackend: backend,
 		SecretsDir:        secrets,
 	}, nil
@@ -245,7 +239,7 @@ func containsControl(value string) bool {
 func invalidBaseURL(cause error) error {
 	return diagnostic.New(
 		"invalid_base_url",
-		"KADO_BASE_URL must be a canonical HTTPS URL with a valid port and optional unescaped base path",
+		"config.json base_url must be a canonical HTTPS URL with a valid port and optional unescaped base path",
 		diagnostic.ExitUsage,
 		cause,
 	)

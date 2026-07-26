@@ -156,17 +156,13 @@ func buildRelease(input buildInput) error {
 		return err
 	}
 	metadata := releaseclient.Metadata{
-		SchemaVersion:    releaseclient.SchemaVersion,
-		Product:          releaseclient.Product,
-		Version:          input.source.Version,
-		Commit:           input.commit,
-		BuiltAt:          input.builtAt.Format(time.RFC3339),
-		Repository:       input.source.Repository,
-		InstallURL:       input.source.InstallURL,
-		SigningAlgorithm: "Ed25519",
-		KeyID:            input.keyID,
-		SigningPublicKey: releaseclient.PublicKeyText(input.publicKey),
-		Targets:          targets,
+		SchemaVersion: releaseclient.SchemaVersion,
+		Product:       releaseclient.Product,
+		Version:       input.source.Version,
+		Commit:        input.commit,
+		BuiltAt:       input.builtAt.Format(time.RFC3339),
+		KeyID:         input.keyID,
+		Targets:       targets,
 	}
 	metadataBytes, err := releaseclient.CanonicalMetadata(metadata)
 	if err != nil {
@@ -324,11 +320,9 @@ func buildTargetArtifacts(
 		return releaseclient.Target{}, err
 	}
 	return releaseclient.Target{
-		OS:            target.goos,
-		Arch:          target.goarch,
-		BinaryName:    binaryName,
-		ArchiveFormat: archiveFormat,
-		Archive:       archiveFile,
+		OS:      target.goos,
+		Arch:    target.goarch,
+		Archive: archiveFile,
 	}, nil
 }
 

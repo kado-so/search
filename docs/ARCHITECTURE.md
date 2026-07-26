@@ -39,8 +39,9 @@ process and environment data, Git identity, and browser state are never sent.
 ## Contract consumption
 
 The Search Document JSON Schema, JSON-LD context, semantic rules, and fixtures
-are owned and published by `kado-app`. This repository pins released assets and
-validates them locally at runtime. Unsupported major versions fail clearly.
+are owned and published by `kado-app`. This repository embeds the three runtime
+contract artifacts and keeps conformance fixtures in test-only data.
+Unsupported major versions fail clearly.
 
 ## Skill boundary
 

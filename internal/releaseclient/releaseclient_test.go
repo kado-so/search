@@ -453,7 +453,6 @@ func TestVerifyMetadataRejectsInBandSigningKeyRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata.SigningPublicKey = PublicKeyText(replacementPublic)
 	metadata.KeyID = replacementKeyID
 	encoded, err := CanonicalMetadata(metadata)
 	if err != nil {
@@ -507,7 +506,7 @@ func TestExecutableProvenanceVerificationUsesStampedReleaseIdentity(t *testing.T
 	if err := json.Unmarshal(fixture.fetch[fixture.metadataURL], &metadata); err != nil {
 		t.Fatal(err)
 	}
-	output := buildStampedExecutable(t, metadata)
+	output := buildStampedExecutable(t, metadata, fixture.publicKey)
 	if err := VerifyExecutable(
 		context.Background(),
 		output,
@@ -515,6 +514,23 @@ func TestExecutableProvenanceVerificationUsesStampedReleaseIdentity(t *testing.T
 		fixture.target,
 	); err != nil {
 		t.Fatalf("VerifyExecutable error = %v", err)
+	}
+	wrongPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongKeyOutput := buildStampedExecutable(
+		t,
+		metadata,
+		PublicKeyText(wrongPublic),
+	)
+	if err := VerifyExecutable(
+		context.Background(),
+		wrongKeyOutput,
+		metadata,
+		fixture.target,
+	); !errors.Is(err, ErrCandidate) {
+		t.Fatalf("wrong-public-key VerifyExecutable error = %v", err)
 	}
 	metadata.Version = "0.2.1"
 	if err := VerifyExecutable(
@@ -530,7 +546,6 @@ func TestExecutableProvenanceVerificationUsesStampedReleaseIdentity(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata.SigningPublicKey = PublicKeyText(replacementPublic)
 	metadata.KeyID, err = KeyID(replacementPublic)
 	if err != nil {
 		t.Fatal(err)
@@ -560,15 +575,15 @@ func TestNativeSignedUpdateSmoke(t *testing.T) {
 	}
 	metadataFor := func(version string) Metadata {
 		return Metadata{
-			Version:          version,
-			Commit:           "0123456789abcdef0123456789abcdef01234567",
-			BuiltAt:          "2026-07-24T00:00:00Z",
-			KeyID:            keyID,
-			SigningPublicKey: PublicKeyText(public),
+			Version: version,
+			Commit:  "0123456789abcdef0123456789abcdef01234567",
+			BuiltAt: "2026-07-24T00:00:00Z",
+			KeyID:   keyID,
 		}
 	}
-	initial := buildStampedExecutable(t, metadataFor("0.1.0"))
-	replacement := buildStampedExecutable(t, metadataFor("0.2.0"))
+	publicKeyText := PublicKeyText(public)
+	initial := buildStampedExecutable(t, metadataFor("0.1.0"), publicKeyText)
+	replacement := buildStampedExecutable(t, metadataFor("0.2.0"), publicKeyText)
 	replacementBytes, err := os.ReadFile(replacement)
 	if err != nil {
 		t.Fatal(err)
@@ -707,11 +722,9 @@ func newReleaseFixtureWithBinary(
 		archive := validArchive(t, format, binaryName, targetBinary)
 		baseName := "kado_" + version + "_" + goos + "_" + goarch
 		target := Target{
-			OS:            goos,
-			Arch:          goarch,
-			BinaryName:    binaryName,
-			ArchiveFormat: format,
-			Archive:       file(baseName+archiveSuffix, archive),
+			OS:      goos,
+			Arch:    goarch,
+			Archive: file(baseName+archiveSuffix, archive),
 		}
 		if goos == selectedOS && goarch == selectedArch {
 			selected = target
@@ -720,17 +733,13 @@ func newReleaseFixtureWithBinary(
 		targets = append(targets, target)
 	}
 	metadata := Metadata{
-		SchemaVersion:    SchemaVersion,
-		Product:          Product,
-		Version:          version,
-		Commit:           "0123456789abcdef0123456789abcdef01234567",
-		BuiltAt:          "2026-07-24T00:00:00Z",
-		Repository:       "https://github.com/kado-so/search",
-		InstallURL:       "https://kado.so/install",
-		SigningAlgorithm: "Ed25519",
-		KeyID:            keyID,
-		SigningPublicKey: PublicKeyText(public),
-		Targets:          targets,
+		SchemaVersion: SchemaVersion,
+		Product:       Product,
+		Version:       version,
+		Commit:        "0123456789abcdef0123456789abcdef01234567",
+		BuiltAt:       "2026-07-24T00:00:00Z",
+		KeyID:         keyID,
+		Targets:       targets,
 	}
 	metadataBytes, err := CanonicalMetadata(metadata)
 	if err != nil {
@@ -751,7 +760,7 @@ func newReleaseFixtureWithBinary(
 	}
 }
 
-func buildStampedExecutable(t *testing.T, metadata Metadata) string {
+func buildStampedExecutable(t *testing.T, metadata Metadata, publicKey string) string {
 	t.Helper()
 	output := filepath.Join(t.TempDir(), executableName(runtime.GOOS))
 	ldflags := "-s -w -buildid=" +
@@ -760,7 +769,7 @@ func buildStampedExecutable(t *testing.T, metadata Metadata) string {
 		" -X github.com/kado-so/search/internal/buildinfo.Date=" + metadata.BuiltAt +
 		" -X github.com/kado-so/search/internal/buildinfo.Target=" + runtime.GOOS + "/" + runtime.GOARCH +
 		" -X github.com/kado-so/search/internal/buildinfo.ReleaseKeyID=" + metadata.KeyID +
-		" -X github.com/kado-so/search/internal/buildinfo.ReleasePublicKey=" + metadata.SigningPublicKey
+		" -X github.com/kado-so/search/internal/buildinfo.ReleasePublicKey=" + publicKey
 	command := exec.Command(
 		"go",
 		"build",

@@ -61,8 +61,7 @@ func VerifyLocalBundle(
 		info.Commit != metadata.Commit ||
 		info.Date != metadata.BuiltAt ||
 		info.Target != target.OS+"/"+target.Arch ||
-		info.ReleaseKeyID != metadata.KeyID ||
-		info.ReleasePublicKey != metadata.SigningPublicKey {
+		info.ReleaseKeyID != metadata.KeyID {
 		return Metadata{}, Target{}, ErrCandidate
 	}
 	archive, err := readAndVerifyLocal(absolute, target.Archive, MaxArchiveSize)

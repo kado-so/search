@@ -223,7 +223,11 @@ func (manager Manager) Update(ctx context.Context, options Options) (Result, err
 // VerifyTargetArchive safely extracts the executable from an archive already
 // authenticated by signed release metadata.
 func VerifyTargetArchive(target Target, archive []byte) ([]byte, error) {
-	binary, err := ExtractBinary(archive, target.ArchiveFormat, target.BinaryName)
+	binaryName, archiveFormat, ok := targetLayout(target.OS)
+	if !ok {
+		return nil, ErrChecksum
+	}
+	binary, err := ExtractBinary(archive, archiveFormat, binaryName)
 	if err != nil {
 		return nil, ErrChecksum
 	}
@@ -287,12 +291,20 @@ func VerifyExecutable(
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return ErrCandidate
 	}
+	publicKey, err := ParsePublicKey(value.PublicKey)
+	if err != nil {
+		return ErrCandidate
+	}
+	publicKeyID, err := KeyID(publicKey)
+	if err != nil {
+		return ErrCandidate
+	}
 	if value.Version != metadata.Version ||
 		value.Commit != metadata.Commit ||
 		value.BuiltAt != metadata.BuiltAt ||
 		value.Target != target.OS+"/"+target.Arch ||
 		value.ReleaseKeyID != metadata.KeyID ||
-		value.PublicKey != metadata.SigningPublicKey {
+		publicKeyID != metadata.KeyID {
 		return ErrCandidate
 	}
 	return nil

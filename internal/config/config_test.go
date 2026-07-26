@@ -27,25 +27,23 @@ func TestLoadDefaults(t *testing.T) {
 	if got.ConfigDir != wantDir {
 		t.Fatalf("ConfigDir = %q, want %q", got.ConfigDir, wantDir)
 	}
-	if got.ConfigPath != filepath.Join(wantDir, "config.json") ||
-		got.CredentialBackend != CredentialBackendOS ||
+	if got.CredentialBackend != CredentialBackendOS ||
 		got.SecretsDir != filepath.Join(wantDir, "secrets") {
 		t.Fatalf("default config = %#v", got)
 	}
 }
 
-func TestLoadOverridesSafeValues(t *testing.T) {
+func TestLoadUsesConfigDirectoryOverride(t *testing.T) {
 	t.Parallel()
 
 	environment := map[string]string{
-		EnvironmentBaseURL:   "https://search.example.test/base",
 		EnvironmentConfigDir: filepath.Join(t.TempDir(), "kado"),
 	}
 	got, err := load(mapEnvironment(environment), unavailableConfigDir)
 	if err != nil {
 		t.Fatalf("load() error = %v", err)
 	}
-	if got.BaseURL.String() != "https://search.example.test/base" {
+	if got.BaseURL.String() != "https://kado.so/" {
 		t.Fatalf("BaseURL = %q", got.BaseURL)
 	}
 	if got.ConfigDir != environment[EnvironmentConfigDir] {

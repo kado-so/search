@@ -33,8 +33,9 @@ The corresponding public key and its SHA-256 key ID are non-secret. The builder
 stamps them into every executable and writes `release-public-key.pem` for
 independent verification. In-band signing-key rotation is deliberately
 unsupported in release protocol v1: an installed binary accepts only metadata
-signed by its embedded key, and the signed metadata and replacement executable
-must carry that same key and key ID. Rotating the release key therefore
+signed by its embedded key. The metadata carries that key's ID, and the
+replacement executable must carry a public key with the same derived ID.
+Rotating the release key therefore
 requires an out-of-band reinstall from the reviewed official
 `https://kado.so/install` boundary. Existing binaries cannot self-update
 across a key rotation, even when a release is signed by the old key.
@@ -81,7 +82,7 @@ stable archive headers make identical inputs byte-identical.
 
 `release-metadata.json` is canonical JSON and binds:
 
-- version, source commit, UTC build time, repository, and signing-key identity;
+- version, source commit, UTC build time, and signing-key identity;
 - each platform archive by URL, size, and SHA-256.
 
 `release-metadata.json.sig` authenticates those exact bytes. Direct binaries,

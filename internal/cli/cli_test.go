@@ -18,7 +18,7 @@ import (
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/releaseclient"
 	"github.com/kado-so/search/internal/searchclient"
-	"github.com/kado-so/search/internal/searchcontract"
+	"github.com/kado-so/search/internal/searchcontract/testfixture"
 	"github.com/kado-so/search/internal/searchoutput"
 )
 
@@ -386,9 +386,9 @@ func TestNonAuthAndInvalidAuthCommandsDoNotInitializeCredentialAccess(t *testing
 func TestSearchRunsLifecycleWithBoundedOptionsAndSafeSummary(t *testing.T) {
 	t.Parallel()
 
-	canonical, err := searchcontract.ReleasedFixture("complete")
+	canonical, err := testfixture.Load("complete")
 	if err != nil {
-		t.Fatalf("ReleasedFixture(complete) error = %v", err)
+		t.Fatalf("testfixture.Load(complete) error = %v", err)
 	}
 	search := &fakeSearchCommands{
 		result: searchRunResult{
@@ -553,9 +553,9 @@ func TestSearchFailureStderrRemovesTerminalControlsAndPreservesUnicode(t *testin
 func TestSearchOutputModesUseValidatedCanonicalBytesAndProjections(t *testing.T) {
 	t.Parallel()
 
-	canonical, err := searchcontract.ReleasedFixture("complete")
+	canonical, err := testfixture.Load("complete")
 	if err != nil {
-		t.Fatalf("ReleasedFixture(complete) error = %v", err)
+		t.Fatalf("testfixture.Load(complete) error = %v", err)
 	}
 	for _, test := range []struct {
 		name    string
@@ -621,9 +621,9 @@ func TestSearchOutputModesUseValidatedCanonicalBytesAndProjections(t *testing.T)
 func TestSearchFailureModesEmitValidatedLifecycleDocumentBeforeSafeDiagnostic(t *testing.T) {
 	t.Parallel()
 
-	canonical, err := searchcontract.ReleasedFixture("failed")
+	canonical, err := testfixture.Load("failed")
 	if err != nil {
-		t.Fatalf("ReleasedFixture(failed) error = %v", err)
+		t.Fatalf("testfixture.Load(failed) error = %v", err)
 	}
 	search := &fakeSearchCommands{
 		result: searchRunResult{
@@ -661,9 +661,9 @@ func TestSearchFailureModesEmitValidatedLifecycleDocumentBeforeSafeDiagnostic(t 
 func TestSearchBrokenPipeStopsSilently(t *testing.T) {
 	t.Parallel()
 
-	canonical, err := searchcontract.ReleasedFixture("complete")
+	canonical, err := testfixture.Load("complete")
 	if err != nil {
-		t.Fatalf("ReleasedFixture(complete) error = %v", err)
+		t.Fatalf("testfixture.Load(complete) error = %v", err)
 	}
 	search := &fakeSearchCommands{result: searchRunResult{
 		status:    searchclient.StatusComplete,
@@ -689,7 +689,7 @@ func TestSearchUnsupportedMajorFailsClearlyBeforeOutput(t *testing.T) {
 	t.Parallel()
 
 	var value map[string]any
-	if err := json.Unmarshal(mustReleasedFixture(t, "complete"), &value); err != nil {
+	if err := json.Unmarshal(mustFixture(t, "complete"), &value); err != nil {
 		t.Fatalf("json.Unmarshal(complete) error = %v", err)
 	}
 	value["schema_version"] = "kado.search-document.v8"
@@ -944,11 +944,11 @@ func (closedPipeWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
-func mustReleasedFixture(t *testing.T, name string) []byte {
+func mustFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	value, err := searchcontract.ReleasedFixture(name)
+	value, err := testfixture.Load(name)
 	if err != nil {
-		t.Fatalf("ReleasedFixture(%s) error = %v", name, err)
+		t.Fatalf("testfixture.Load(%s) error = %v", name, err)
 	}
 	return value
 }

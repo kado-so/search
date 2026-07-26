@@ -89,12 +89,9 @@ go test ./...
 go vet ./...
 ```
 
-Safe non-secret configuration:
-
-- `KADO_BASE_URL`: canonical HTTPS service URL, defaulting to
-  `https://kado.so`.
-- `KADO_CONFIG_DIR`: absolute configuration directory, defaulting to the
-  platform user configuration directory plus `kado`.
+Safe non-secret configuration uses `config.json`. `KADO_CONFIG_DIR` selects its
+absolute directory, defaulting to the platform user configuration directory
+plus `kado`.
 
 The platform defaults are `~/Library/Application Support/kado` on macOS,
 `%AppData%\kado` on Windows, and `$XDG_CONFIG_HOME/kado` on Linux (falling
@@ -104,6 +101,7 @@ Optional `config.json`:
 
 ```json
 {
+  "base_url": "https://kado.so",
   "credentials": {
     "backend": "file",
     "directory": "./secrets"

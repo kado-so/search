@@ -35,36 +35,8 @@ type enrollmentFixture struct {
 	Payload enrollmentPayload `json:"payload"`
 }
 
-func TestPinnedWireProfileAndSignedEnrollmentFixture(t *testing.T) {
+func TestPinnedSignedEnrollmentFixture(t *testing.T) {
 	t.Parallel()
-
-	wire, err := os.ReadFile("testdata/wire-profile.v0.1.json")
-	if err != nil {
-		t.Fatalf("ReadFile(wire profile) error = %v", err)
-	}
-	var profile map[string]json.RawMessage
-	if err := decodeExactJSONObject(
-		wire,
-		&profile,
-		[]string{"protocol_version", "discovery_fixture", "account_resolution"},
-	); err != nil {
-		t.Fatalf("decodeExactJSONObject(wire profile) error = %v", err)
-	}
-	var profileVersion string
-	if err := json.Unmarshal(profile["protocol_version"], &profileVersion); err != nil {
-		t.Fatalf("Unmarshal(protocol_version) error = %v", err)
-	}
-	var account map[string]json.RawMessage
-	if err := json.Unmarshal(profile["account_resolution"], &account); err != nil {
-		t.Fatalf("Unmarshal(account_resolution) error = %v", err)
-	}
-	var endpoint string
-	if err := json.Unmarshal(account["endpoint_path"], &endpoint); err != nil {
-		t.Fatalf("Unmarshal(endpoint_path) error = %v", err)
-	}
-	if profileVersion != ProtocolVersion || endpoint != "/api/auth/agent/enroll" {
-		t.Fatalf("unexpected wire profile version=%q endpoint=%q", profileVersion, endpoint)
-	}
 
 	encoded, err := os.ReadFile("testdata/signed-enrollment.v0.1.json")
 	if err != nil {

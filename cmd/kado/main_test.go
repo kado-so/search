@@ -34,10 +34,8 @@ func TestActualCLIUsesConfiguredFileCredentialBackend(t *testing.T) {
 	}
 	environment := append(
 		environmentWithout(
-			"KADO_BASE_URL",
 			"KADO_CONFIG_DIR",
 		),
-		"KADO_BASE_URL=https://127.0.0.1:1",
 		"KADO_CONFIG_DIR="+configDirectory,
 	)
 
