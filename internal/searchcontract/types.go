@@ -114,7 +114,6 @@ type Links struct {
 }
 
 type Metadata struct {
-	Revision    int             `json:"revision"`
-	GeneratedAt string          `json:"generated_at"`
-	Extensions  json.RawMessage `json:"extensions"`
+	Revision    int    `json:"revision"`
+	GeneratedAt string `json:"generated_at"`
 }

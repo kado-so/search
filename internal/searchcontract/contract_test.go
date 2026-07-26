@@ -221,9 +221,7 @@ func TestUnsupportedMajorIsClearAndDoesNotEchoDocumentData(t *testing.T) {
 		t.Fatalf("json.Unmarshal(queued) error = %v", err)
 	}
 	value["schema_version"] = "kado.search-document.v27"
-	value["metadata"].(map[string]any)["extensions"] = map[string]any{
-		"private": "Bearer should-not-appear",
-	}
+	value["search"].(map[string]any)["query"] = "Bearer should-not-appear"
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		t.Fatalf("json.Marshal(v27) error = %v", err)
@@ -275,10 +273,10 @@ func TestEveryReleasedSemanticRuleHasARejectingMutation(t *testing.T) {
 		{"PAGE_TOTAL_BELOW_OFFSET", "complete_page", func(value map[string]any) {
 			pagination(value)["page"] = float64(2)
 			pagination(value)["previous_page"] = float64(1)
-			resultLinks(value)["previous"] = "https://kado.so/search/q/search_complete_page/previous"
+			resultLinks(value)["previous"] = "https://kado.so/search/search_complete_page/previous"
 		}},
 		{"RESULT_SELF_LINK_MISMATCH", "complete", func(value map[string]any) {
-			resultLinks(value)["self"] = "https://kado.so/search/q/different/example"
+			resultLinks(value)["self"] = "https://kado.so/search/different/example"
 		}},
 		{"CURSOR_PREVIOUS_LINK_MISMATCH", "complete", func(value map[string]any) {
 			pagination(value)["previous_cursor"] = "cursor_previous"
@@ -289,7 +287,7 @@ func TestEveryReleasedSemanticRuleHasARejectingMutation(t *testing.T) {
 		{"PAGE_NEXT_REFERENCE_MISMATCH", "complete_page", func(value map[string]any) {
 			pagination(value)["has_more"] = true
 			pagination(value)["next_page"] = float64(3)
-			resultLinks(value)["next"] = "https://kado.so/search/q/search_complete_page/next"
+			resultLinks(value)["next"] = "https://kado.so/search/search_complete_page/next"
 		}},
 		{"PAGE_HAS_MORE_TOTAL_MISMATCH", "complete_page", func(value map[string]any) {
 			pagination(value)["total"] = float64(100)
@@ -312,7 +310,7 @@ func TestEveryReleasedSemanticRuleHasARejectingMutation(t *testing.T) {
 			pagination(value)["has_more"] = true
 			pagination(value)["previous_page"] = float64(1)
 			pagination(value)["next_page"] = float64(3)
-			resultLinks(value)["previous"] = "https://kado.so/search/q/search_complete_page/relation"
+			resultLinks(value)["previous"] = "https://kado.so/search/search_complete_page/relation"
 			resultLinks(value)["next"] = resultLinks(value)["previous"]
 		}},
 		{"ITEM_POSITION_DUPLICATE", "complete", func(value map[string]any) {

@@ -17,7 +17,7 @@ const (
 	ContextURL         = "https://kado.so/contexts/search-document/v1.jsonld"
 	SchemaURL          = "https://kado.so/schemas/search-document/v1.json"
 	SemanticRules      = "kado.search-document-semantics.v1"
-	pinnedManifestHash = "5a7dd8708e5b6eb7767cdea27703a2c2b8e6e4b7cc68311a660d71f3a08b0ddb"
+	pinnedManifestHash = "000f3f58ea4fcf2cc105e1f4904ea2d392df8088c79fa0cc0e7514436a7a2713"
 	maxAssetBytes      = 256 * 1024
 	maxGeneratedAssets = 16
 )

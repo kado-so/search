@@ -614,9 +614,8 @@ func TestClientRejectsResponsesThatReflectItsBearerCredential(t *testing.T) {
 			) {
 				if success {
 					document := completeDocument(serverURL(request), "tools", "search_secret", "", "")
-					document["metadata"].(map[string]any)["extensions"] = map[string]any{
-						"reflected": request.Header.Get("Authorization"),
-					}
+					document["search"].(map[string]any)["query"] =
+						request.Header.Get("Authorization")
 					writeDocument(response, document)
 					return
 				}
@@ -657,9 +656,7 @@ func TestClientRejectsUnsupportedSearchDocumentMajorClearly(t *testing.T) {
 			"",
 		)
 		document["schema_version"] = "kado.search-document.v9"
-		document["metadata"].(map[string]any)["extensions"] = map[string]any{
-			"private": "must-not-appear",
-		}
+		document["search"].(map[string]any)["query"] = "must-not-appear"
 		writeDocument(response, document)
 	}))
 	defer server.Close()
@@ -718,9 +715,7 @@ func TestClientRejectsEscapedCredentialReflectionAcrossResponsePaths(t *testing.
 					"",
 					"",
 				)
-				document["metadata"].(map[string]any)["extensions"] = map[string]any{
-					"diagnostic": "__AUTHORIZATION__",
-				}
+				document["search"].(map[string]any)["query"] = "__AUTHORIZATION__"
 				encoded, err := json.Marshal(document)
 				if err != nil {
 					t.Fatalf("json.Marshal(document) error = %v", err)
@@ -1638,7 +1633,6 @@ func baseDocument(
 		"metadata": map[string]any{
 			"revision":     1,
 			"generated_at": "2026-07-23T00:00:02Z",
-			"extensions":   map[string]any{},
 		},
 	}
 }

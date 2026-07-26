@@ -16,7 +16,7 @@ import (
 	"strconv"
 )
 
-const pinnedManifestSHA256 = "5a7dd8708e5b6eb7767cdea27703a2c2b8e6e4b7cc68311a660d71f3a08b0ddb"
+const pinnedManifestSHA256 = "000f3f58ea4fcf2cc105e1f4904ea2d392df8088c79fa0cc0e7514436a7a2713"
 
 type manifest struct {
 	Contract      string                   `json:"contract"`

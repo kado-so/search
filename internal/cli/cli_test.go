@@ -579,9 +579,7 @@ func TestSearchUnsupportedMajorFailsClearlyBeforeOutput(t *testing.T) {
 		t.Fatalf("json.Unmarshal(complete) error = %v", err)
 	}
 	value["schema_version"] = "kado.search-document.v8"
-	value["metadata"].(map[string]any)["extensions"] = map[string]any{
-		"private": "Bearer must-not-appear",
-	}
+	value["search"].(map[string]any)["query"] = "Bearer must-not-appear"
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		t.Fatalf("json.Marshal(v8) error = %v", err)
