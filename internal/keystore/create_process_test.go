@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,10 +19,7 @@ const createProcessHelperEnvironment = "KADO_KEYSTORE_CREATE_HELPER"
 const conditionalDeleteProcessHelperEnvironment = "KADO_KEYSTORE_CONDITIONAL_DELETE_HELPER"
 
 func TestCreateRetainsOneWinnerAcrossProcesses(t *testing.T) {
-	kinds := []string{"keychain"}
-	if runtime.GOOS != "windows" {
-		kinds = append(kinds, "file")
-	}
+	kinds := []string{"keychain", "file"}
 	for _, kind := range kinds {
 		t.Run(kind, func(t *testing.T) {
 			root := resolvedTempDir(t)
@@ -108,11 +104,11 @@ func TestCreateProcessHelper(t *testing.T) {
 	var store Store
 	switch os.Getenv("KADO_KEYSTORE_CREATE_KIND") {
 	case "file":
-		configured, err := NewFileStore(
+		configured, err := newFileStore(
 			filepath.Join(root, "private", "management-key.json"),
 		)
 		if err != nil {
-			t.Fatalf("NewFileStore() error = %v", err)
+			t.Fatalf("newFileStore() error = %v", err)
 		}
 		store = configured
 	case "keychain":
@@ -138,10 +134,7 @@ func TestCreateProcessHelper(t *testing.T) {
 }
 
 func TestConditionalDeleteNeverDeletesReenrolledKeyAcrossProcesses(t *testing.T) {
-	kinds := []string{"keychain"}
-	if runtime.GOOS != "windows" {
-		kinds = append(kinds, "file")
-	}
+	kinds := []string{"keychain", "file"}
 	for _, kind := range kinds {
 		t.Run(kind, func(t *testing.T) {
 			root := resolvedTempDir(t)
@@ -269,11 +262,11 @@ func processTestStore(t *testing.T, kind, root string) Store {
 	t.Helper()
 	switch kind {
 	case "file":
-		configured, err := NewFileStore(
+		configured, err := newFileStore(
 			filepath.Join(root, "private", "management-key.json"),
 		)
 		if err != nil {
-			t.Fatalf("NewFileStore() error = %v", err)
+			t.Fatalf("newFileStore() error = %v", err)
 		}
 		return configured
 	case "keychain":

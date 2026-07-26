@@ -19,7 +19,7 @@ type FileStore struct {
 	path string
 }
 
-func NewFileStore(path string) (*FileStore, error) {
+func newFileStore(path string) (*FileStore, error) {
 	if path == "" ||
 		path != strings.TrimSpace(path) ||
 		strings.ContainsFunc(path, unicode.IsControl) ||
@@ -32,10 +32,6 @@ func NewFileStore(path string) (*FileStore, error) {
 		return nil, err
 	}
 	return store, nil
-}
-
-func NewIsolatedFileStore(path string) (*FileStore, error) {
-	return NewFileStore(path)
 }
 
 func NewAgentFileStore(root, agent string) (*FileStore, error) {
@@ -57,7 +53,7 @@ func NewAgentFileStore(root, agent string) (*FileStore, error) {
 			return nil, storageError("secure file fallback", ErrPermissions, err)
 		}
 	}
-	return NewFileStore(filepath.Join(agentDirectory, "management-key.json"))
+	return newFileStore(filepath.Join(agentDirectory, "management-key.json"))
 }
 
 func (store *FileStore) ValidateLocation() error {

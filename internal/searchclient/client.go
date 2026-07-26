@@ -29,7 +29,7 @@ type Client struct {
 }
 
 // New constructs a no-redirect, no-cookie Search client on the same exact
-// HTTPS resource/issuer boundary used by Phase 02C.
+// HTTPS resource and authorization-server boundary.
 func New(
 	base *url.URL,
 	httpClient *http.Client,
@@ -88,7 +88,7 @@ func (client *Client) Search(ctx context.Context, query string) (Document, error
 	return client.get(ctx, &endpoint, query)
 }
 
-// Status follows the document's self link and performs the Phase 03A status
+// Status follows the document's self link and performs a lifecycle status
 // operation for the exact opaque Search ID.
 func (client *Client) Status(ctx context.Context, document Document) (Document, error) {
 	if err := client.validateDocumentIdentity(document); err != nil {

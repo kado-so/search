@@ -25,7 +25,6 @@ const (
 	Product         = "kado"
 	MaxMetadataSize = 1 << 20
 	MaxArchiveSize  = 128 << 20
-	MaxSupportSize  = 16 << 20
 )
 
 var (
@@ -61,9 +60,7 @@ type Target struct {
 	Arch          string `json:"arch"`
 	BinaryName    string `json:"binary_name"`
 	ArchiveFormat string `json:"archive_format"`
-	Binary        File   `json:"binary"`
 	Archive       File   `json:"archive"`
-	SBOM          File   `json:"sbom"`
 }
 
 // Metadata is the canonical signed release index.
@@ -79,13 +76,6 @@ type Metadata struct {
 	KeyID            string   `json:"signing_key_id"`
 	SigningPublicKey string   `json:"signing_public_key"`
 	Targets          []Target `json:"targets"`
-	Checksums        File     `json:"checksums"`
-	Provenance       File     `json:"provenance"`
-	InstallGuide     File     `json:"install_guide"`
-	InstallUnix      File     `json:"install_unix"`
-	InstallPower     File     `json:"install_powershell"`
-	UninstallUnix    File     `json:"uninstall_unix"`
-	UninstallPower   File     `json:"uninstall_powershell"`
 }
 
 // CanonicalMetadata returns the only accepted release metadata encoding.
@@ -197,15 +187,7 @@ func (metadata Metadata) Validate() error {
 	if err != nil {
 		return errInvalidMetadata
 	}
-	files := []File{
-		metadata.Checksums,
-		metadata.Provenance,
-		metadata.InstallGuide,
-		metadata.InstallUnix,
-		metadata.InstallPower,
-		metadata.UninstallUnix,
-		metadata.UninstallPower,
-	}
+	files := make([]File, 0, len(metadata.Targets))
 	seenTargets := make(map[string]struct{}, len(metadata.Targets))
 	seenFiles := make(map[string]struct{})
 	if !sort.SliceIsSorted(metadata.Targets, func(left, right int) bool {
@@ -234,7 +216,7 @@ func (metadata Metadata) Validate() error {
 		if target.BinaryName != wantBinary || target.ArchiveFormat != wantFormat {
 			return errInvalidMetadata
 		}
-		files = append(files, target.Binary, target.Archive, target.SBOM)
+		files = append(files, target.Archive)
 	}
 	for _, file := range files {
 		if err := validateFile(file, installURL); err != nil {

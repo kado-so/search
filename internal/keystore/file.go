@@ -20,13 +20,10 @@ const temporaryFileAttempts = 100
 // FileStore is an explicit fallback for systems where an OS keychain cannot be
 // used. It is never selected automatically.
 type FileStore struct {
-	path                  string
-	processLockParent     string
-	requireExistingParent bool
+	path string
 }
 
-// NewFileStore creates an explicit permission-restricted file store.
-func NewFileStore(path string) (*FileStore, error) {
+func newFileStore(path string) (*FileStore, error) {
 	if path == "" ||
 		path != strings.TrimSpace(path) ||
 		strings.ContainsFunc(path, unicode.IsControl) ||
@@ -34,7 +31,17 @@ func NewFileStore(path string) (*FileStore, error) {
 		path != filepath.Clean(path) {
 		return nil, storageError("configure file fallback", ErrInvalid, nil)
 	}
-	return &FileStore{path: path}, nil
+	store := &FileStore{path: path}
+	if err := store.ValidateLocation(); err != nil {
+		return nil, err
+	}
+	if err := validateProcessLockLocation(
+		filepath.Dir(store.path),
+		store.lockIdentifier(),
+	); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 // NewAgentFileStore creates private per-agent directories beneath root.
@@ -56,32 +63,9 @@ func NewAgentFileStore(root, agent string) (*FileStore, error) {
 		return nil, err
 	}
 	_ = privateAgent.Close()
-	return NewIsolatedFileStore(
+	return newFileStore(
 		filepath.Join(agentDirectory, "management-key.json"),
 	)
-}
-
-// NewIsolatedFileStore selects a FileStore only when its caller has already
-// provisioned a private, non-symlink parent directory. It is intended for
-// explicit isolated executable boundaries; unlike NewFileStore, it never
-// creates the configured directory while selecting the store.
-func NewIsolatedFileStore(path string) (*FileStore, error) {
-	store, err := NewFileStore(path)
-	if err != nil {
-		return nil, err
-	}
-	if err := store.ValidateLocation(); err != nil {
-		return nil, err
-	}
-	store.processLockParent = filepath.Dir(store.path)
-	store.requireExistingParent = true
-	if err := validateProcessLockLocation(
-		store.processLockParent,
-		store.lockIdentifier(),
-	); err != nil {
-		return nil, err
-	}
-	return store, nil
 }
 
 // ValidateLocation verifies that the configured parent is an existing exact
@@ -160,7 +144,7 @@ func (store *FileStore) saveUnlocked(keyMaterial []byte) error {
 		return err
 	}
 	parent := filepath.Dir(store.path)
-	parentRoot, err := openPrivateDirectory(parent, !store.requireExistingParent)
+	parentRoot, err := openPrivateDirectory(parent, false)
 	if err != nil {
 		return err
 	}
@@ -226,14 +210,11 @@ func (store *FileStore) lockIdentifier() string {
 }
 
 func (store *FileStore) withProcessLock(action func() error) error {
-	if store.processLockParent != "" {
-		return withProcessLockInDirectory(
-			store.processLockParent,
-			store.lockIdentifier(),
-			action,
-		)
-	}
-	return withProcessLock(store.lockIdentifier(), action)
+	return withProcessLockInDirectory(
+		filepath.Dir(store.path),
+		store.lockIdentifier(),
+		action,
+	)
 }
 
 // openPrivateDirectory walks from the filesystem root one component at a time,

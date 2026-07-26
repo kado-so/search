@@ -51,18 +51,18 @@ concerns and do not belong in the skill.
 
 ## Distribution
 
-Plugin and marketplace manifests are maintained directly. CLI release identity
-is stored in `distribution/release.json`.
+Plugin and marketplace manifests are maintained directly. The release operator
+provides the semantic version explicitly; product identity is fixed in the
+release builder.
 
 The release builder creates cross-platform binaries, deterministic archives,
-checksums, signed release metadata, SBOMs, provenance, and local
-install/uninstall scripts. Installed binaries use those artifacts for verified
-self-update.
+and signed archive metadata for self-update. Checksums, SBOMs, provenance, and
+local install/uninstall scripts are standalone operator artifacts.
 
 ## Invariants
 
 - The skill invokes the CLI instead of handling credentials or HTTP.
 - Private keys and tokens never enter model context or ordinary logs.
 - JSON-LD and schema validation remain local and deterministic.
-- CLI updates verify signed metadata and the replacement executable before
-  installation.
+- CLI updates verify signed archive metadata and the replacement executable
+  identity before installation.

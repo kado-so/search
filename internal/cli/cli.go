@@ -86,13 +86,11 @@ type searchRunResult struct {
 }
 
 type dependencies struct {
-	detectAgent       func(string) (agentidentity.Detection, error)
-	listIdentities    func() ([]string, error)
-	newAuth           func() (authCommands, error)
-	newAuthForAgent   func(string) (authCommands, error)
-	newSearch         func() (searchCommands, error)
-	newSearchForAgent func(string) (searchCommands, error)
-	newRelease        func(buildinfo.Info) (releaseCommands, error)
+	detectAgent    func(string) (agentidentity.Detection, error)
+	listIdentities func() ([]string, error)
+	newAuth        func(string) (authCommands, error)
+	newSearch      func(string) (searchCommands, error)
+	newRelease     func(buildinfo.Info) (releaseCommands, error)
 }
 
 type defaultAuthCommands struct {
@@ -112,7 +110,7 @@ type defaultReleaseCommands struct {
 	info       buildinfo.Info
 }
 
-type phase02CAuthorizationSource struct {
+type agentAuthorizationSource struct {
 	client    *agentauth.Client
 	store     keystore.Store
 	token     agentauth.SessionToken
@@ -126,11 +124,11 @@ var errBrokenPipe = errors.New("CLI output pipe closed")
 // Run executes one CLI invocation and returns a process exit status.
 func Run(args []string, stdout, stderr io.Writer, info buildinfo.Info) int {
 	return runWithDependencies(args, stdout, stderr, info, dependencies{
-		detectAgent:       agentidentity.Detect,
-		listIdentities:    listDefaultIdentities,
-		newAuthForAgent:   newDefaultAuthCommands,
-		newSearchForAgent: newDefaultSearchCommands,
-		newRelease:        newDefaultReleaseCommands,
+		detectAgent:    agentidentity.Detect,
+		listIdentities: listDefaultIdentities,
+		newAuth:        newDefaultAuthCommands,
+		newSearch:      newDefaultSearchCommands,
+		newRelease:     newDefaultReleaseCommands,
 	})
 }
 
@@ -251,32 +249,6 @@ func resolveAgent(
 		return agentidentity.Detection{Agent: override, Source: "override"}, nil
 	}
 	return agentidentity.Detection{Agent: agentidentity.Default, Source: "default"}, nil
-}
-
-func openAuth(
-	dependencies dependencies,
-	agent string,
-) (authCommands, error) {
-	if dependencies.newAuthForAgent != nil {
-		return dependencies.newAuthForAgent(agent)
-	}
-	if dependencies.newAuth != nil {
-		return dependencies.newAuth()
-	}
-	return nil, errors.New("authentication unavailable")
-}
-
-func openSearch(
-	dependencies dependencies,
-	agent string,
-) (searchCommands, error) {
-	if dependencies.newSearchForAgent != nil {
-		return dependencies.newSearchForAgent(agent)
-	}
-	if dependencies.newSearch != nil {
-		return dependencies.newSearch()
-	}
-	return nil, errors.New("Search unavailable")
 }
 
 func runAgent(
@@ -420,14 +392,14 @@ func runUninstall(
 		)
 	}
 	if purgeCredentials {
-		if dependencies.newAuth == nil && dependencies.newAuthForAgent == nil {
+		if dependencies.newAuth == nil {
 			return authDiagnostic("revoke", errors.New("authentication unavailable"))
 		}
 		detection, err := resolveAgent(override, dependencies)
 		if err != nil {
 			return usageError(err.Error())
 		}
-		auth, err := openAuth(dependencies, detection.Agent)
+		auth, err := dependencies.newAuth(detection.Agent)
 		if err != nil {
 			return authDiagnostic("revoke", err)
 		}
@@ -483,14 +455,14 @@ func runSearch(
 	if err != nil {
 		return err
 	}
-	if dependencies.newSearch == nil && dependencies.newSearchForAgent == nil {
+	if dependencies.newSearch == nil {
 		return searchDiagnostic(errors.New("Search unavailable"))
 	}
 	detection, err := resolveAgent(override, dependencies)
 	if err != nil {
 		return usageError(err.Error())
 	}
-	search, err := openSearch(dependencies, detection.Agent)
+	search, err := dependencies.newSearch(detection.Agent)
 	if err != nil {
 		return searchDiagnostic(err)
 	}
@@ -681,14 +653,14 @@ func runAuth(
 			"unknown auth command; use 'create', 'status', 'revoke', or 'identities'",
 		)
 	}
-	if dependencies.newAuth == nil && dependencies.newAuthForAgent == nil {
+	if dependencies.newAuth == nil {
 		return authDiagnostic(args[0], errors.New("authentication unavailable"))
 	}
 	detection, err := resolveAgent(override, dependencies)
 	if err != nil {
 		return usageError(err.Error())
 	}
-	auth, err := openAuth(dependencies, detection.Agent)
+	auth, err := dependencies.newAuth(detection.Agent)
 	if err != nil {
 		return authDiagnostic(args[0], err)
 	}
@@ -746,7 +718,7 @@ func authDiagnostic(operation string, cause error) error {
 	if operation == "revoke" && errors.Is(cause, agentauth.ErrCredentialChanged) {
 		return diagnostic.New(
 			"auth_credential_changed",
-			"the prior installation was revoked, but the local credential changed; retry to revoke the current installation",
+			"the prior agent identity was revoked, but the local credential changed; retry to revoke the selected identity",
 			diagnostic.ExitFailure,
 			cause,
 		)
@@ -762,7 +734,7 @@ func authDiagnostic(operation string, cause error) error {
 	if operation == "revoke" {
 		return diagnostic.New(
 			"auth_revoke_failed",
-			"could not revoke the current installation",
+			"could not revoke the selected agent identity",
 			diagnostic.ExitFailure,
 			cause,
 		)
@@ -777,7 +749,7 @@ func authDiagnostic(operation string, cause error) error {
 	}
 	return diagnostic.New(
 		"auth_status_failed",
-		"could not read current installation authentication status",
+		"could not read the selected agent identity status",
 		diagnostic.ExitFailure,
 		cause,
 	)
@@ -907,7 +879,7 @@ func newDefaultSearchCommands(agent string) (searchCommands, error) {
 	if err != nil {
 		return nil, err
 	}
-	authorization := &phase02CAuthorizationSource{
+	authorization := &agentAuthorizationSource{
 		client:    authClient,
 		store:     store,
 		configDir: safeConfig.ConfigDir,
@@ -1078,7 +1050,7 @@ func (commands *defaultReleaseCommands) VerifyBundle(
 	return releaseclient.VerifyLocalBundle(directory, commands.info)
 }
 
-func (source *phase02CAuthorizationSource) Authorization(
+func (source *agentAuthorizationSource) Authorization(
 	ctx context.Context,
 	refresh bool,
 ) (string, error) {

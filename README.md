@@ -87,7 +87,6 @@ The module requires the Go toolchain pinned in `.prototools`.
 go build ./cmd/kado
 go test ./...
 go vet ./...
-python3 -B -m unittest discover -s tests
 ```
 
 Safe non-secret configuration:
@@ -119,13 +118,13 @@ on Windows. `host.json` and `identities.json` are non-secret local state.
 
 ## Releases and self-update
 
-The release builder reads product identity from
-`distribution/release.json`. It creates deterministic binaries and archives
-for Linux, macOS, and Windows, plus SHA-256 checksums, detached Ed25519-signed
-metadata, SPDX SBOMs, SLSA/in-toto provenance, and local installers.
+The release builder accepts an explicit semantic version and uses fixed product
+identity constants. It creates deterministic binaries and archives for Linux,
+macOS, and Windows. SHA-256 checksums, SPDX SBOMs, SLSA/in-toto provenance, and
+local installers are also generated as standalone operator artifacts.
 
-Installed release binaries verify the signed metadata, target archive,
-checksum, SBOM, provenance, and candidate executable before replacement:
+Installed release binaries verify the signed metadata, selected platform
+archive, and candidate executable identity before replacement:
 
 ```bash
 kado version --json
@@ -152,7 +151,7 @@ authentication, update, release, and uninstall policy live outside the skill.
 Install the external `kado` CLI before enabling the skill. The canonical CLI
 installation boundary is [kado.so/install](https://kado.so/install).
 
-See [distribution/INSTALL.md](distribution/INSTALL.md) for the directly
+See [installation documentation](docs/INSTALL.md) for the directly
 maintained Agent Skills, Codex, and Claude Code plugin instructions.
 
 ## Repository layout
@@ -170,5 +169,5 @@ internal/searchcontract/  JSON Schema, JSON-LD, and semantic validation
 internal/searchoutput/    human, JSON, and JSONL rendering
 skills/kado-search/       Search-only agent skill
 tools/release/            deterministic release builder
-distribution/            release configuration and installation docs
+docs/                     installation, architecture, and release operations
 ```

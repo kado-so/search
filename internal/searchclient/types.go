@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	// CanonicalMediaType is the versioned Phase 03A Search Document media type.
+	// CanonicalMediaType is the versioned Search Document media type.
 	CanonicalMediaType = "application/vnd.kado.search.v1+json"
 	SchemaVersion      = searchcontract.SchemaVersion
 )
@@ -40,9 +40,9 @@ var (
 	)
 )
 
-// AuthorizationSource returns an in-memory Phase 02C bearer authorization
-// value. A true refresh value is used only after an authenticated request was
-// rejected before the Search operation ran.
+// AuthorizationSource returns an in-memory bearer authorization value. A true
+// refresh value is used only after an authenticated request was rejected
+// before the Search operation ran.
 type AuthorizationSource interface {
 	Authorization(context.Context, bool) (string, error)
 }

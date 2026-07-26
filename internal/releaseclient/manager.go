@@ -25,8 +25,7 @@ var (
 	ErrChecksum         = errors.New("release artifact checksum is invalid")
 	ErrPlatform         = errors.New("release does not support this platform")
 	ErrDowngrade        = errors.New("release downgrade requires explicit permission")
-	ErrProvenance       = errors.New("release provenance is invalid")
-	ErrCandidate        = errors.New("release executable provenance is invalid")
+	ErrCandidate        = errors.New("release executable identity is invalid")
 	ErrInstall          = errors.New("release could not be installed atomically")
 	ErrUninstall        = errors.New("release executable could not be removed")
 )
@@ -113,8 +112,8 @@ type Result struct {
 	DryRun      bool
 }
 
-// Update verifies metadata, signature, checksums, provenance, platform, and
-// candidate executable before replacing anything.
+// Update verifies signed metadata, the selected archive, and candidate
+// executable identity before replacing anything.
 func (manager Manager) Update(ctx context.Context, options Options) (Result, error) {
 	goos, goarch := manager.GOOS, manager.GOARCH
 	if goos == "" {
@@ -184,30 +183,11 @@ func (manager Manager) Update(ctx context.Context, options Options) (Result, err
 		}
 	}
 
-	provenance, err := fetchAndVerify(
-		ctx,
-		fetcher,
-		metadata.Provenance,
-		MaxSupportSize,
-	)
-	if err != nil {
-		return result, err
-	}
-	sbom, err := fetchAndVerify(ctx, fetcher, target.SBOM, MaxSupportSize)
-	if err != nil {
-		return result, err
-	}
 	archive, err := fetchAndVerify(ctx, fetcher, target.Archive, MaxArchiveSize)
 	if err != nil {
 		return result, err
 	}
-	binary, err := VerifyTargetArtifacts(
-		metadata,
-		target,
-		provenance,
-		sbom,
-		archive,
-	)
+	binary, err := VerifyTargetArchive(target, archive)
 	if err != nil {
 		return result, err
 	}
@@ -240,23 +220,11 @@ func (manager Manager) Update(ctx context.Context, options Options) (Result, err
 	return result, nil
 }
 
-// VerifyTargetArtifacts proves the signed provenance, SBOM, archive, and
-// extracted executable agree for one target.
-func VerifyTargetArtifacts(
-	metadata Metadata,
-	target Target,
-	provenance []byte,
-	sbom []byte,
-	archive []byte,
-) ([]byte, error) {
-	if err := verifyProvenance(provenance, metadata, target); err != nil {
-		return nil, ErrProvenance
-	}
-	if err := verifySBOM(sbom, metadata, target); err != nil {
-		return nil, ErrProvenance
-	}
+// VerifyTargetArchive safely extracts the executable from an archive already
+// authenticated by signed release metadata.
+func VerifyTargetArchive(target Target, archive []byte) ([]byte, error) {
 	binary, err := ExtractBinary(archive, target.ArchiveFormat, target.BinaryName)
-	if err != nil || VerifyFile(target.Binary, binary) != nil {
+	if err != nil {
 		return nil, ErrChecksum
 	}
 	return binary, nil
@@ -284,7 +252,7 @@ func Uninstall(targetPath string) error {
 }
 
 // VerifyExecutable executes only the extracted same-platform candidate and
-// checks its stamped, bounded provenance before replacement.
+// checks its stamped, bounded release identity before replacement.
 func VerifyExecutable(
 	ctx context.Context,
 	candidate string,
@@ -550,17 +518,9 @@ func fetchAndVerify(
 }
 
 func sameReleaseOrigin(metadataURL *url.URL, metadata Metadata) error {
-	files := []File{
-		metadata.Checksums,
-		metadata.Provenance,
-		metadata.InstallGuide,
-		metadata.InstallUnix,
-		metadata.InstallPower,
-		metadata.UninstallUnix,
-		metadata.UninstallPower,
-	}
+	files := make([]File, 0, len(metadata.Targets))
 	for _, target := range metadata.Targets {
-		files = append(files, target.Binary, target.Archive, target.SBOM)
+		files = append(files, target.Archive)
 	}
 	for _, file := range files {
 		parsed, err := parseHTTPS(file.URL)
@@ -569,107 +529,6 @@ func sameReleaseOrigin(metadataURL *url.URL, metadata Metadata) error {
 			!strings.EqualFold(parsed.Host, metadataURL.Host) {
 			return ErrInvalidMetadata
 		}
-	}
-	return nil
-}
-
-func verifyProvenance(encoded []byte, metadata Metadata, target Target) error {
-	var statement struct {
-		Type          string `json:"_type"`
-		PredicateType string `json:"predicateType"`
-		Subject       []struct {
-			Name   string            `json:"name"`
-			Digest map[string]string `json:"digest"`
-		} `json:"subject"`
-		Predicate struct {
-			BuildDefinition struct {
-				BuildType          string `json:"buildType"`
-				ExternalParameters struct {
-					Version string `json:"version"`
-					Commit  string `json:"commit"`
-				} `json:"externalParameters"`
-				InternalParameters   map[string]any `json:"internalParameters"`
-				ResolvedDependencies []struct {
-					URI    string            `json:"uri"`
-					Digest map[string]string `json:"digest"`
-				} `json:"resolvedDependencies"`
-			} `json:"buildDefinition"`
-			RunDetails struct {
-				Builder struct {
-					ID string `json:"id"`
-				} `json:"builder"`
-				Metadata struct {
-					InvocationID string `json:"invocationId"`
-					StartedOn    string `json:"startedOn"`
-					FinishedOn   string `json:"finishedOn"`
-				} `json:"metadata"`
-				Byproducts []any `json:"byproducts"`
-			} `json:"runDetails"`
-		} `json:"predicate"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&statement); err != nil {
-		return ErrProvenance
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return ErrProvenance
-	}
-	if statement.Type != "https://in-toto.io/Statement/v1" ||
-		statement.PredicateType != "https://slsa.dev/provenance/v1" ||
-		statement.Predicate.BuildDefinition.BuildType !=
-			"https://kado.so/build-types/go-cli-release/v1" ||
-		statement.Predicate.BuildDefinition.ExternalParameters.Version != metadata.Version ||
-		statement.Predicate.BuildDefinition.ExternalParameters.Commit != metadata.Commit ||
-		len(statement.Predicate.BuildDefinition.InternalParameters) != 0 ||
-		len(statement.Predicate.BuildDefinition.ResolvedDependencies) != 1 ||
-		statement.Predicate.BuildDefinition.ResolvedDependencies[0].URI !=
-			"git+"+metadata.Repository+"@"+metadata.Commit ||
-		statement.Predicate.BuildDefinition.ResolvedDependencies[0].
-			Digest["gitCommit"] != metadata.Commit ||
-		statement.Predicate.RunDetails.Builder.ID !=
-			"https://github.com/kado-so/search/tree/main/tools/release" ||
-		statement.Predicate.RunDetails.Metadata.InvocationID !=
-			metadata.Version+"@"+metadata.Commit ||
-		statement.Predicate.RunDetails.Metadata.StartedOn != metadata.BuiltAt ||
-		statement.Predicate.RunDetails.Metadata.FinishedOn != metadata.BuiltAt ||
-		len(statement.Predicate.RunDetails.Byproducts) != 0 {
-		return ErrProvenance
-	}
-	subjects := make(map[string]string, len(statement.Subject))
-	for _, subject := range statement.Subject {
-		if len(subject.Digest) != 1 || subject.Digest["sha256"] == "" {
-			return ErrProvenance
-		}
-		subjects[subject.Name] = subject.Digest["sha256"]
-	}
-	for _, file := range []File{target.Binary, target.Archive, target.SBOM} {
-		if subjects[file.Name] != file.SHA256 {
-			return ErrProvenance
-		}
-	}
-	return nil
-}
-
-func verifySBOM(encoded []byte, metadata Metadata, target Target) error {
-	var document struct {
-		SPDXVersion string `json:"spdxVersion"`
-		Name        string `json:"name"`
-		Comment     string `json:"comment"`
-		Packages    []struct {
-			Name    string `json:"name"`
-			Version string `json:"versionInfo"`
-		} `json:"packages"`
-	}
-	if err := json.Unmarshal(encoded, &document); err != nil ||
-		document.SPDXVersion != "SPDX-2.3" ||
-		document.Name != target.SBOM.Name ||
-		document.Comment != target.OS+"/"+target.Arch ||
-		len(document.Packages) == 0 ||
-		document.Packages[0].Name != Product ||
-		document.Packages[0].Version != metadata.Version {
-		return ErrProvenance
 	}
 	return nil
 }

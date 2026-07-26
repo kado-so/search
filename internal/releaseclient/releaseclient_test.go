@@ -30,7 +30,7 @@ func TestCleanInstallUpdateDowngradeDryRunAndUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first := newReleaseFixture(t, "0.1.0", runtime.GOOS, runtime.GOARCH, false)
+	first := newReleaseFixture(t, "0.1.0", runtime.GOOS, runtime.GOARCH)
 	manager := first.manager(t)
 	result, err := manager.Update(context.Background(), Options{
 		TargetPath: targetPath,
@@ -40,7 +40,7 @@ func TestCleanInstallUpdateDowngradeDryRunAndUninstall(t *testing.T) {
 	}
 	assertFileContent(t, targetPath, first.binary)
 
-	second := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH, false)
+	second := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
 	manager = second.manager(t)
 	result, err = manager.Update(context.Background(), Options{
 		TargetPath:     targetPath,
@@ -86,7 +86,7 @@ func TestCleanInstallUpdateDowngradeDryRunAndUninstall(t *testing.T) {
 	assertFileContent(t, credential, []byte("preserve"))
 }
 
-func TestUpdateRejectsTamperSignatureChecksumProvenanceAndPlatform(t *testing.T) {
+func TestUpdateRejectsTamperChecksumAndUnsupportedPlatform(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
@@ -116,13 +116,6 @@ func TestUpdateRejectsTamperSignatureChecksumProvenanceAndPlatform(t *testing.T)
 			want: ErrChecksum,
 		},
 		{
-			name: "semantic provenance",
-			mutate: func(fixture *releaseFixture) {
-				fixture = resignInvalidProvenance(fixture)
-			},
-			want: ErrProvenance,
-		},
-		{
 			name: "unsupported platform",
 			mutate: func(fixture *releaseFixture) {
 				fixture.goos = "freebsd"
@@ -139,7 +132,6 @@ func TestUpdateRejectsTamperSignatureChecksumProvenanceAndPlatform(t *testing.T)
 				"0.2.0",
 				runtime.GOOS,
 				runtime.GOARCH,
-				false,
 			)
 			test.mutate(fixture)
 			manager := fixture.manager(t)
@@ -156,7 +148,7 @@ func TestUpdateRejectsTamperSignatureChecksumProvenanceAndPlatform(t *testing.T)
 func TestDryRunVerifiesCurrentVersionArtifactsInsteadOfShortCircuiting(t *testing.T) {
 	t.Parallel()
 
-	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH, false)
+	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
 	fixture.fetch[fixture.target.Archive.URL][0] ^= 1
 	_, err := fixture.manager(t).Update(context.Background(), Options{
 		TargetPath:     filepath.Join(t.TempDir(), executableName(runtime.GOOS)),
@@ -426,7 +418,7 @@ func TestReplacementRejectsAChangedInstalledBinary(t *testing.T) {
 func TestVerifyMetadataRequiresCanonicalSignedIdentity(t *testing.T) {
 	t.Parallel()
 
-	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH, false)
+	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
 	metadata, err := VerifyMetadata(
 		fixture.fetch[fixture.metadataURL],
 		fixture.fetch[fixture.metadataURL+".sig"],
@@ -448,7 +440,7 @@ func TestVerifyMetadataRequiresCanonicalSignedIdentity(t *testing.T) {
 func TestVerifyMetadataRejectsInBandSigningKeyRotation(t *testing.T) {
 	t.Parallel()
 
-	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH, false)
+	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
 	var metadata Metadata
 	if err := json.Unmarshal(fixture.fetch[fixture.metadataURL], &metadata); err != nil {
 		t.Fatal(err)
@@ -510,7 +502,7 @@ func TestVersionPolicyUsesSemverPrereleaseOrdering(t *testing.T) {
 func TestExecutableProvenanceVerificationUsesStampedReleaseIdentity(t *testing.T) {
 	t.Parallel()
 
-	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH, false)
+	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
 	var metadata Metadata
 	if err := json.Unmarshal(fixture.fetch[fixture.metadataURL], &metadata); err != nil {
 		t.Fatal(err)
@@ -586,7 +578,6 @@ func TestNativeSignedUpdateSmoke(t *testing.T) {
 		"0.2.0",
 		runtime.GOOS,
 		runtime.GOARCH,
-		false,
 		private,
 		replacementBytes,
 	)
@@ -648,7 +639,6 @@ func newReleaseFixture(
 	version string,
 	selectedOS string,
 	selectedArch string,
-	invalidProvenance bool,
 ) *releaseFixture {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
@@ -660,7 +650,6 @@ func newReleaseFixture(
 		version,
 		selectedOS,
 		selectedArch,
-		invalidProvenance,
 		private,
 		nil,
 	)
@@ -671,7 +660,6 @@ func newReleaseFixtureWithBinary(
 	version string,
 	selectedOS string,
 	selectedArch string,
-	invalidProvenance bool,
 	private ed25519.PrivateKey,
 	selectedBinary []byte,
 ) *releaseFixture {
@@ -718,15 +706,12 @@ func newReleaseFixtureWithBinary(
 		}
 		archive := validArchive(t, format, binaryName, targetBinary)
 		baseName := "kado_" + version + "_" + goos + "_" + goarch
-		sbom := sbomBytes(baseName+".spdx.json", version, goos+"/"+goarch)
 		target := Target{
 			OS:            goos,
 			Arch:          goarch,
 			BinaryName:    binaryName,
 			ArchiveFormat: format,
-			Binary:        file(baseName+binarySuffix(goos), targetBinary),
 			Archive:       file(baseName+archiveSuffix, archive),
-			SBOM:          file(baseName+".spdx.json", sbom),
 		}
 		if goos == selectedOS && goarch == selectedArch {
 			selected = target
@@ -734,7 +719,6 @@ func newReleaseFixtureWithBinary(
 		}
 		targets = append(targets, target)
 	}
-	provenance := provenanceBytes(version, selected, invalidProvenance)
 	metadata := Metadata{
 		SchemaVersion:    SchemaVersion,
 		Product:          Product,
@@ -747,13 +731,6 @@ func newReleaseFixtureWithBinary(
 		KeyID:            keyID,
 		SigningPublicKey: PublicKeyText(public),
 		Targets:          targets,
-		Checksums:        file("checksums.txt", []byte("checksums\n")),
-		Provenance:       file("provenance.intoto.json", provenance),
-		InstallGuide:     file("INSTALL-CLI.md", []byte("guide\n")),
-		InstallUnix:      file("install.sh", []byte("install unix\n")),
-		InstallPower:     file("install.ps1", []byte("install powershell\n")),
-		UninstallUnix:    file("uninstall.sh", []byte("uninstall unix\n")),
-		UninstallPower:   file("uninstall.ps1", []byte("uninstall powershell\n")),
 	}
 	metadataBytes, err := CanonicalMetadata(metadata)
 	if err != nil {
@@ -837,79 +814,6 @@ func (fetcher mapFetcher) Fetch(
 		return nil, errors.New("missing fixture")
 	}
 	return append([]byte(nil), value...), nil
-}
-
-func resignInvalidProvenance(fixture *releaseFixture) *releaseFixture {
-	var metadata Metadata
-	_ = json.Unmarshal(fixture.fetch[fixture.metadataURL], &metadata)
-	invalid := provenanceBytes(metadata.Version, fixture.target, true)
-	metadata.Provenance.SHA256 = Digest(invalid)
-	metadata.Provenance.Size = int64(len(invalid))
-	fixture.fetch[metadata.Provenance.URL] = invalid
-	encoded, _ := CanonicalMetadata(metadata)
-	fixture.fetch[fixture.metadataURL] = encoded
-	fixture.fetch[fixture.metadataURL+".sig"] = ed25519.Sign(fixture.privateKey, encoded)
-	return fixture
-}
-
-func provenanceBytes(version string, target Target, invalid bool) []byte {
-	archiveDigest := target.Archive.SHA256
-	if invalid {
-		archiveDigest = Digest([]byte("wrong provenance"))
-	}
-	value := map[string]any{
-		"_type":         "https://in-toto.io/Statement/v1",
-		"predicateType": "https://slsa.dev/provenance/v1",
-		"subject": []any{
-			map[string]any{"name": target.Binary.Name, "digest": map[string]string{"sha256": target.Binary.SHA256}},
-			map[string]any{"name": target.Archive.Name, "digest": map[string]string{"sha256": archiveDigest}},
-			map[string]any{"name": target.SBOM.Name, "digest": map[string]string{"sha256": target.SBOM.SHA256}},
-		},
-		"predicate": map[string]any{
-			"buildDefinition": map[string]any{
-				"buildType": "https://kado.so/build-types/go-cli-release/v1",
-				"externalParameters": map[string]string{
-					"version": version,
-					"commit":  "0123456789abcdef0123456789abcdef01234567",
-				},
-				"internalParameters": map[string]any{},
-				"resolvedDependencies": []any{
-					map[string]any{
-						"uri": "git+https://github.com/kado-so/search@0123456789abcdef0123456789abcdef01234567",
-						"digest": map[string]string{
-							"gitCommit": "0123456789abcdef0123456789abcdef01234567",
-						},
-					},
-				},
-			},
-			"runDetails": map[string]any{
-				"builder": map[string]string{
-					"id": "https://github.com/kado-so/search/tree/main/tools/release",
-				},
-				"metadata": map[string]string{
-					"invocationId": version + "@0123456789abcdef0123456789abcdef01234567",
-					"startedOn":    "2026-07-24T00:00:00Z",
-					"finishedOn":   "2026-07-24T00:00:00Z",
-				},
-				"byproducts": []any{},
-			},
-		},
-	}
-	encoded, _ := json.Marshal(value)
-	return append(encoded, '\n')
-}
-
-func sbomBytes(name, version, target string) []byte {
-	value := map[string]any{
-		"spdxVersion": "SPDX-2.3",
-		"name":        name,
-		"comment":     target,
-		"packages": []any{
-			map[string]string{"name": Product, "versionInfo": version},
-		},
-	}
-	encoded, _ := json.Marshal(value)
-	return append(encoded, '\n')
 }
 
 func validArchive(t *testing.T, format, binaryName string, binary []byte) []byte {

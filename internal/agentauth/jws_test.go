@@ -83,7 +83,7 @@ func TestFlattenedJWSSignsExactBytesAndRejectsTamper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publicJWK() error = %v", err)
 	}
-	payload := []byte(`{"fixture":"phase-02b-go"}`)
+	payload := []byte(`{"fixture":"agent-auth-go"}`)
 	jws, err := signFlattenedJWS(bytes.NewReader(nil), signer, payload, protectedHeader{
 		Type:  enrollmentProofType,
 		Alg:   "EdDSA",
@@ -97,7 +97,7 @@ func TestFlattenedJWSSignsExactBytesAndRejectsTamper(t *testing.T) {
 	if jws.Protected != "eyJ0eXAiOiJhZ2VudC1lbnJvbGxtZW50K2p3cyIsImFsZyI6IkVkRFNBIiwiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU183VHlXUUhPZzdoY3ZQYXBpTWxyd0lhYVBjSFVSbyIsImFsZyI6IkVkRFNBIn0sIm5vbmNlIjoiYm05dVkyVXRabWw0ZEhWeVpTMHhNak0wTlEiLCJ1cmwiOiJodHRwczovL2thZG8uc28vYXBpL2F1dGgvYWdlbnQvZW5yb2xsIn0" {
 		t.Fatalf("protected fixture changed: %q", jws.Protected)
 	}
-	if jws.Payload != "eyJmaXh0dXJlIjoicGhhc2UtMDJiLWdvIn0" {
+	if jws.Payload != "eyJmaXh0dXJlIjoiYWdlbnQtYXV0aC1nbyJ9" {
 		t.Fatalf("payload fixture changed: %q", jws.Payload)
 	}
 	if _, err := verifyFlattenedJWS(

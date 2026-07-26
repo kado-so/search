@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -61,87 +60,23 @@ func TestAgentFileStoresArePrivateAndIndependent(t *testing.T) {
 	}
 }
 
-func TestFileStoreIsExplicitAndPermissionRestricted(t *testing.T) {
+func TestFileStoreSelectionRequiresPrivateLocation(t *testing.T) {
 	t.Parallel()
-
-	if runtime.GOOS == "windows" {
-		if _, err := NewFileStore(`C:\kado\management-key`); !errors.Is(err, ErrUnsupported) {
-			t.Fatalf("NewFileStore() error = %v, want ErrUnsupported", err)
-		}
-		return
-	}
-
-	storePath := filepath.Join(resolvedTempDir(t), "private", "management-key.json")
-	store, err := NewFileStore(storePath)
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-	keyMaterial := []byte("persistent-management-key")
-	if err := store.Save(keyMaterial); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	directoryInfo, err := os.Stat(filepath.Dir(storePath))
-	if err != nil {
-		t.Fatalf("Stat(directory) error = %v", err)
-	}
-	if directoryInfo.Mode().Perm() != 0o700 {
-		t.Fatalf("directory mode = %o, want 700", directoryInfo.Mode().Perm())
-	}
-	fileInfo, err := os.Stat(storePath)
-	if err != nil {
-		t.Fatalf("Stat(file) error = %v", err)
-	}
-	if fileInfo.Mode().Perm() != 0o600 {
-		t.Fatalf("file mode = %o, want 600", fileInfo.Mode().Perm())
-	}
-
-	reopened, err := NewFileStore(storePath)
-	if err != nil {
-		t.Fatalf("NewFileStore(reopen) error = %v", err)
-	}
-	loaded, err := reopened.Load()
-	if err != nil {
-		t.Fatalf("reopened Load() error = %v", err)
-	}
-	if string(loaded) != string(keyMaterial) {
-		t.Fatal("loaded key material differs")
-	}
-	if err := reopened.Delete(); err != nil {
-		t.Fatalf("Delete() error = %v", err)
-	}
-	if _, err := store.Load(); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Load() after Delete() error = %v, want ErrNotFound", err)
-	}
-}
-
-func TestIsolatedFileStoreRequiresPreprovisionedSafeLocation(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS == "windows" {
-		if _, err := NewIsolatedFileStore(`C:\kado\management-key`); !errors.Is(
-			err,
-			ErrUnsupported,
-		) {
-			t.Fatalf("NewIsolatedFileStore() error = %v, want ErrUnsupported", err)
-		}
-		return
-	}
-
 	root := resolvedTempDir(t)
 	privateDirectory := filepath.Join(root, "private")
 	if err := os.Mkdir(privateDirectory, 0o700); err != nil {
 		t.Fatalf("Mkdir(private) error = %v", err)
 	}
 	storePath := filepath.Join(privateDirectory, "management-key.json")
-	store, err := NewIsolatedFileStore(storePath)
+	store, err := newFileStore(storePath)
 	if err != nil {
-		t.Fatalf("NewIsolatedFileStore() error = %v", err)
+		t.Fatalf("newFileStore() error = %v", err)
 	}
-	if err := store.Save([]byte("isolated-management-key")); err != nil {
+	if err := store.Save([]byte("agent-management-key")); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if _, err := NewIsolatedFileStore(storePath); err != nil {
-		t.Fatalf("NewIsolatedFileStore(existing) error = %v", err)
+	if _, err := newFileStore(storePath); err != nil {
+		t.Fatalf("newFileStore(existing) error = %v", err)
 	}
 
 	for _, test := range []struct {
@@ -181,9 +116,9 @@ func TestIsolatedFileStoreRequiresPreprovisionedSafeLocation(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := NewIsolatedFileStore(test.path); !errors.Is(err, test.kind) {
+			if _, err := newFileStore(test.path); !errors.Is(err, test.kind) {
 				t.Fatalf(
-					"NewIsolatedFileStore() error = %v, want %v",
+					"newFileStore() error = %v, want %v",
 					err,
 					test.kind,
 				)
@@ -192,11 +127,8 @@ func TestIsolatedFileStoreRequiresPreprovisionedSafeLocation(t *testing.T) {
 	}
 }
 
-func TestIsolatedFileStoreRejectsSymlinksAndUnsafePermissionsAtSelection(t *testing.T) {
+func TestAgentFileStoreRejectsSymlinksAndUnsafePermissionsAtSelection(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
-	}
 
 	root := resolvedTempDir(t)
 	privateDirectory := filepath.Join(root, "private")
@@ -210,7 +142,7 @@ func TestIsolatedFileStoreRejectsSymlinksAndUnsafePermissionsAtSelection(t *test
 	if err := os.Chmod(storePath, 0o644); err != nil {
 		t.Fatalf("Chmod(store) error = %v", err)
 	}
-	if _, err := NewIsolatedFileStore(storePath); !errors.Is(err, ErrPermissions) {
+	if _, err := newFileStore(storePath); !errors.Is(err, ErrPermissions) {
 		t.Fatalf("unsafe file error = %v, want ErrPermissions", err)
 	}
 	if err := os.Remove(storePath); err != nil {
@@ -219,7 +151,7 @@ func TestIsolatedFileStoreRejectsSymlinksAndUnsafePermissionsAtSelection(t *test
 	if err := os.Chmod(privateDirectory, 0o755); err != nil {
 		t.Fatalf("Chmod(private) error = %v", err)
 	}
-	if _, err := NewIsolatedFileStore(storePath); !errors.Is(err, ErrPermissions) {
+	if _, err := newFileStore(storePath); !errors.Is(err, ErrPermissions) {
 		t.Fatalf("unsafe directory error = %v, want ErrPermissions", err)
 	}
 	if err := os.Chmod(privateDirectory, 0o700); err != nil {
@@ -234,18 +166,15 @@ func TestIsolatedFileStoreRejectsSymlinksAndUnsafePermissionsAtSelection(t *test
 	if err := os.Symlink(realDirectory, alias); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, err := NewIsolatedFileStore(
+	if _, err := newFileStore(
 		filepath.Join(alias, "management-key.json"),
 	); !errors.Is(err, ErrPermissions) {
 		t.Fatalf("symlink parent error = %v, want ErrPermissions", err)
 	}
 }
 
-func TestIsolatedFileStoreNeverRecreatesRemovedParent(t *testing.T) {
+func TestAgentFileStoreNeverRecreatesRemovedParent(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
-	}
 
 	root := resolvedTempDir(t)
 	privateDirectory := filepath.Join(root, "private")
@@ -253,9 +182,9 @@ func TestIsolatedFileStoreNeverRecreatesRemovedParent(t *testing.T) {
 		t.Fatalf("Mkdir(private) error = %v", err)
 	}
 	storePath := filepath.Join(privateDirectory, "management-key.json")
-	store, err := NewIsolatedFileStore(storePath)
+	store, err := newFileStore(storePath)
 	if err != nil {
-		t.Fatalf("NewIsolatedFileStore() error = %v", err)
+		t.Fatalf("newFileStore() error = %v", err)
 	}
 	if err := os.Remove(privateDirectory); err != nil {
 		t.Fatalf("Remove(private) error = %v", err)
@@ -265,7 +194,7 @@ func TestIsolatedFileStoreNeverRecreatesRemovedParent(t *testing.T) {
 		t.Fatalf("Save() error = %v, want ErrNotFound", err)
 	}
 	if _, err := os.Stat(privateDirectory); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Save() recreated isolated parent: %v", err)
+		t.Fatalf("Save() recreated removed parent: %v", err)
 	}
 	if _, _, err := store.Create(
 		[]byte("must-not-be-created"),
@@ -273,19 +202,20 @@ func TestIsolatedFileStoreNeverRecreatesRemovedParent(t *testing.T) {
 		t.Fatalf("Create() error = %v, want ErrNotFound", err)
 	}
 	if _, err := os.Stat(privateDirectory); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Create() recreated isolated parent: %v", err)
+		t.Fatalf("Create() recreated removed parent: %v", err)
 	}
 }
 
 func TestFileStoreConditionalDeleteRetainsReplacement(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
+	privateDirectory := filepath.Join(resolvedTempDir(t), "private")
+	if err := os.Mkdir(privateDirectory, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	storePath := filepath.Join(resolvedTempDir(t), "private", "management-key.json")
-	store, err := NewFileStore(storePath)
+	storePath := filepath.Join(privateDirectory, "management-key.json")
+	store, err := newFileStore(storePath)
 	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
+		t.Fatalf("newFileStore() error = %v", err)
 	}
 	oldKey := []byte("management-key-A")
 	newKey := []byte("management-key-B")
@@ -313,9 +243,6 @@ func TestFileStoreConditionalDeleteRetainsReplacement(t *testing.T) {
 
 func TestFileStoreRejectsInsecureDirectoryAndFileModes(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
-	}
 
 	root := resolvedTempDir(t)
 	insecureDirectory := filepath.Join(root, "insecure")
@@ -325,18 +252,19 @@ func TestFileStoreRejectsInsecureDirectoryAndFileModes(t *testing.T) {
 	if err := os.Chmod(insecureDirectory, 0o755); err != nil {
 		t.Fatalf("Chmod(directory) error = %v", err)
 	}
-	store, err := NewFileStore(filepath.Join(insecureDirectory, "management-key.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-	if err := store.Save([]byte("secret")); !errors.Is(err, ErrPermissions) {
-		t.Fatalf("Save() error = %v, want ErrPermissions", err)
+	if _, err := newFileStore(
+		filepath.Join(insecureDirectory, "management-key.json"),
+	); !errors.Is(err, ErrPermissions) {
+		t.Fatalf("newFileStore() error = %v, want ErrPermissions", err)
 	}
 
 	privateDirectory := filepath.Join(root, "private")
-	store, err = NewFileStore(filepath.Join(privateDirectory, "management-key.json"))
+	if err := os.Mkdir(privateDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := newFileStore(filepath.Join(privateDirectory, "management-key.json"))
 	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
+		t.Fatalf("newFileStore() error = %v", err)
 	}
 	if err := store.Save([]byte("secret")); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -351,14 +279,15 @@ func TestFileStoreRejectsInsecureDirectoryAndFileModes(t *testing.T) {
 
 func TestFileStoreRejectsSymlinksAndCorruptionWithoutLeakingContent(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
-	}
 
-	storePath := filepath.Join(resolvedTempDir(t), "private", "management-key.json")
-	store, err := NewFileStore(storePath)
+	privateDirectory := filepath.Join(resolvedTempDir(t), "private")
+	if err := os.Mkdir(privateDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(privateDirectory, "management-key.json")
+	store, err := newFileStore(storePath)
 	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
+		t.Fatalf("newFileStore() error = %v", err)
 	}
 	if err := store.Save([]byte("secret")); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -396,14 +325,15 @@ func TestFileStoreRejectsSymlinksAndCorruptionWithoutLeakingContent(t *testing.T
 
 func TestFileStoreRejectsUnknownFormatInsteadOfMigrating(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
-	}
 
-	storePath := filepath.Join(resolvedTempDir(t), "private", "management-key.json")
-	store, err := NewFileStore(storePath)
+	privateDirectory := filepath.Join(resolvedTempDir(t), "private")
+	if err := os.Mkdir(privateDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(privateDirectory, "management-key.json")
+	store, err := newFileStore(storePath)
 	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
+		t.Fatalf("newFileStore() error = %v", err)
 	}
 	if err := store.Save([]byte("secret")); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -416,15 +346,12 @@ func TestFileStoreRejectsUnknownFormatInsteadOfMigrating(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	if _, err := store.Load(); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("Load(legacy) error = %v, want ErrCorrupt", err)
+		t.Fatalf("Load(unknown format) error = %v, want ErrCorrupt", err)
 	}
 }
 
 func TestFileStoreRejectsSymlinkInAnyAncestor(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
-	}
 
 	root := resolvedTempDir(t)
 	realRoot := filepath.Join(root, "real")
@@ -437,20 +364,15 @@ func TestFileStoreRejectsSymlinkInAnyAncestor(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	store, err := NewFileStore(filepath.Join(alias, "private", "management-key.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-	if err := store.Save([]byte("secret")); !errors.Is(err, ErrPermissions) {
-		t.Fatalf("Save(ancestor symlink) error = %v, want ErrPermissions", err)
+	if _, err := newFileStore(
+		filepath.Join(alias, "private", "management-key.json"),
+	); !errors.Is(err, ErrPermissions) {
+		t.Fatalf("newFileStore(ancestor symlink) error = %v, want ErrPermissions", err)
 	}
 }
 
 func TestAnchoredDirectorySurvivesAncestorReplacement(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("file fallback is intentionally unsupported on Windows")
-	}
 
 	root := resolvedTempDir(t)
 	original := filepath.Join(root, "original")

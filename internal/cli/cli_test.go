@@ -146,7 +146,7 @@ func TestAgentOverrideSelectsNamespacedAuthFactory(t *testing.T) {
 					Source: "override",
 				}, nil
 			},
-			newAuthForAgent: func(agent string) (authCommands, error) {
+			newAuth: func(agent string) (authCommands, error) {
 				selected = agent
 				return auth, nil
 			},
@@ -291,14 +291,14 @@ func TestAuthFailuresRedactPrivateJWKTokensAndUnderlyingErrors(t *testing.T) {
 			args:     []string{"auth", "status"},
 			auth:     &fakeAuthCommands{statusErr: privateCause},
 			wantCode: "auth_status_failed",
-			wantText: "could not read current installation authentication status",
+			wantText: "could not read the selected agent identity status",
 		},
 		{
 			name:     "revoke server",
 			args:     []string{"auth", "revoke"},
 			auth:     &fakeAuthCommands{revokeErr: privateCause},
 			wantCode: "auth_revoke_failed",
-			wantText: "could not revoke the current installation",
+			wantText: "could not revoke the selected agent identity",
 		},
 		{
 			name: "revoke credential changed",
@@ -307,7 +307,7 @@ func TestAuthFailuresRedactPrivateJWKTokensAndUnderlyingErrors(t *testing.T) {
 				revokeErr: errors.Join(agentauth.ErrCredentialChanged, privateCause),
 			},
 			wantCode: "auth_credential_changed",
-			wantText: "the prior installation was revoked, but the local credential changed; retry to revoke the current installation",
+			wantText: "the prior agent identity was revoked, but the local credential changed; retry to revoke the selected identity",
 		},
 		{
 			name: "revoke local cleanup",
@@ -365,7 +365,7 @@ func TestNonAuthAndInvalidAuthCommandsDoNotInitializeCredentialAccess(t *testing
 	t.Parallel()
 
 	dependencies := dependencies{
-		newAuth: func() (authCommands, error) {
+		newAuth: func(string) (authCommands, error) {
 			t.Fatal("credential access initialized")
 			return nil, nil
 		},
@@ -415,7 +415,7 @@ func TestSearchRunsLifecycleWithBoundedOptionsAndSafeSummary(t *testing.T) {
 		&stderr,
 		buildinfo.Info{},
 		dependencies{
-			newSearch: func() (searchCommands, error) {
+			newSearch: func(string) (searchCommands, error) {
 				return search, nil
 			},
 		},
@@ -494,7 +494,7 @@ func TestSearchFailuresAreBoundedAndNeverRenderPrivateCauses(t *testing.T) {
 				&stderr,
 				buildinfo.Info{},
 				dependencies{
-					newSearch: func() (searchCommands, error) {
+					newSearch: func(string) (searchCommands, error) {
 						return search, nil
 					},
 				},
@@ -532,7 +532,7 @@ func TestSearchFailureStderrRemovesTerminalControlsAndPreservesUnicode(t *testin
 		&stderr,
 		buildinfo.Info{},
 		dependencies{
-			newSearch: func() (searchCommands, error) {
+			newSearch: func(string) (searchCommands, error) {
 				return search, nil
 			},
 		},
@@ -592,7 +592,7 @@ func TestSearchOutputModesUseValidatedCanonicalBytesAndProjections(t *testing.T)
 				&stdout,
 				&stderr,
 				buildinfo.Info{},
-				dependencies{newSearch: func() (searchCommands, error) {
+				dependencies{newSearch: func(string) (searchCommands, error) {
 					return search, nil
 				}},
 			)
@@ -642,7 +642,7 @@ func TestSearchFailureModesEmitValidatedLifecycleDocumentBeforeSafeDiagnostic(t 
 		&stdout,
 		&stderr,
 		buildinfo.Info{},
-		dependencies{newSearch: func() (searchCommands, error) {
+		dependencies{newSearch: func(string) (searchCommands, error) {
 			return search, nil
 		}},
 	)
@@ -676,7 +676,7 @@ func TestSearchBrokenPipeStopsSilently(t *testing.T) {
 		closedPipeWriter{},
 		&stderr,
 		buildinfo.Info{},
-		dependencies{newSearch: func() (searchCommands, error) {
+		dependencies{newSearch: func(string) (searchCommands, error) {
 			return search, nil
 		}},
 	)
@@ -709,7 +709,7 @@ func TestSearchUnsupportedMajorFailsClearlyBeforeOutput(t *testing.T) {
 		&stdout,
 		&stderr,
 		buildinfo.Info{},
-		dependencies{newSearch: func() (searchCommands, error) {
+		dependencies{newSearch: func(string) (searchCommands, error) {
 			return search, nil
 		}},
 	)
@@ -732,7 +732,7 @@ func TestInvalidSearchUsageDoesNotInitializeAuthentication(t *testing.T) {
 	t.Parallel()
 
 	dependencies := dependencies{
-		newSearch: func() (searchCommands, error) {
+		newSearch: func(string) (searchCommands, error) {
 			t.Fatal("Search authentication initialized")
 			return nil, nil
 		},
@@ -846,7 +846,7 @@ func TestUninstallPreservesCredentialsUnlessPurgeIsExplicit(t *testing.T) {
 				&stderr,
 				buildinfo.Info{},
 				dependencies{
-					newAuth: func() (authCommands, error) {
+					newAuth: func(string) (authCommands, error) {
 						if !purge {
 							t.Fatal("credential access initialized without purge")
 						}
@@ -885,7 +885,7 @@ func TestUninstallRequiresConfirmationBeforeAccessingAnything(t *testing.T) {
 		&stderr,
 		buildinfo.Info{},
 		dependencies{
-			newAuth: func() (authCommands, error) {
+			newAuth: func(string) (authCommands, error) {
 				t.Fatal("credential access initialized")
 				return nil, nil
 			},
@@ -1051,7 +1051,7 @@ func runTestAuth(
 		&stdoutBuffer,
 		&stderrBuffer,
 		buildinfo.Info{},
-		dependencies{newAuth: func() (authCommands, error) {
+		dependencies{newAuth: func(string) (authCommands, error) {
 			return auth, nil
 		}},
 	)

@@ -1,5 +1,4 @@
-// Package config owns non-secret CLI configuration. Authentication credential
-// storage is intentionally owned by a later, separate package.
+// Package config owns non-secret CLI configuration.
 package config
 
 import (

@@ -11,22 +11,22 @@ import (
 	"testing"
 )
 
-func TestIsolatedProcessLockNameDoesNotChangeGlobalLockNamespace(t *testing.T) {
+func TestAgentProcessLockUsesPrivateNamespace(t *testing.T) {
 	t.Parallel()
 
-	const identifier = "file:/private/acceptance/management-key.json"
+	const identifier = "file:/private/agent/management-key.json"
 	digest := sha256.Sum256([]byte(identifier))
 	global := hex.EncodeToString(digest[:]) + ".lock"
 	if got := processLockName(identifier); got != global {
-		t.Fatalf("global lock name = %q, want legacy %q", got, global)
+		t.Fatalf("global lock name = %q, want %q", got, global)
 	}
-	if got, want := isolatedProcessLockName(identifier),
+	if got, want := agentProcessLockName(identifier),
 		".kado-credential-"+global; got != want {
-		t.Fatalf("isolated lock name = %q, want %q", got, want)
+		t.Fatalf("agent lock name = %q, want %q", got, want)
 	}
 }
 
-func TestIsolatedFileStoreRejectsUnsafeLocalProcessLockAtSelection(t *testing.T) {
+func TestAgentFileStoreRejectsUnsafeLocalProcessLockAtSelection(t *testing.T) {
 	t.Parallel()
 
 	root := resolvedTempDir(t)
@@ -35,18 +35,18 @@ func TestIsolatedFileStoreRejectsUnsafeLocalProcessLockAtSelection(t *testing.T)
 		t.Fatalf("Mkdir(private) error = %v", err)
 	}
 	storePath := filepath.Join(privateDirectory, "management-key.json")
-	unselected, err := NewFileStore(storePath)
+	unselected, err := newFileStore(storePath)
 	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
+		t.Fatalf("newFileStore() error = %v", err)
 	}
 	lockPath := filepath.Join(
 		privateDirectory,
-		isolatedProcessLockName(unselected.lockIdentifier()),
+		agentProcessLockName(unselected.lockIdentifier()),
 	)
 	if err := os.WriteFile(lockPath, []byte("unsafe"), 0o644); err != nil {
 		t.Fatalf("WriteFile(lock) error = %v", err)
 	}
-	if _, err := NewIsolatedFileStore(storePath); !errors.Is(err, ErrPermissions) {
+	if _, err := newFileStore(storePath); !errors.Is(err, ErrPermissions) {
 		t.Fatalf("unsafe lock error = %v, want ErrPermissions", err)
 	}
 	if err := os.Remove(lockPath); err != nil {
@@ -59,7 +59,7 @@ func TestIsolatedFileStoreRejectsUnsafeLocalProcessLockAtSelection(t *testing.T)
 	if err := os.Symlink(decoy, lockPath); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, err := NewIsolatedFileStore(storePath); !errors.Is(err, ErrPermissions) {
+	if _, err := newFileStore(storePath); !errors.Is(err, ErrPermissions) {
 		t.Fatalf("symlink lock error = %v, want ErrPermissions", err)
 	}
 }
