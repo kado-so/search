@@ -117,10 +117,9 @@ on Windows. `host.json` and `identities.json` are non-secret local state.
 
 ## Releases and self-update
 
-The release builder accepts an explicit semantic version and uses fixed product
-identity constants. It creates deterministic binaries and archives for Linux,
-macOS, and Windows. SHA-256 checksums, SPDX SBOMs, SLSA/in-toto provenance, and
-local installers are also generated as standalone operator artifacts.
+GoReleaser cross-compiles binaries for Linux, macOS, and Windows. Kado's release
+finalizer packages and signs those binaries and generates SHA-256 checksums,
+SPDX SBOMs, SLSA/in-toto provenance, and local installers.
 
 Installed release binaries verify the signed metadata, selected platform
 archive, and candidate executable identity before replacement:

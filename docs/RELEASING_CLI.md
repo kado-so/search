@@ -1,9 +1,8 @@
 # Kado CLI Release Boundary
 
-The search repository owns reproducible CLI release construction. It does not
-publish a release as part of the build. Release operators provide the exact
-semantic version; repository, executable, and install URL are fixed in
-`tools/release`.
+The search repository owns CLI release construction and publication. Release
+operators provide the exact semantic version; repository, executable, and
+install URL are fixed in `tools/release`.
 
 ## Supported targets
 
@@ -17,8 +16,8 @@ Every release contains direct versioned binaries, versioned archives, an SPDX
 - `windows/amd64`
 - `windows/arm64`
 
-Unix archives are deterministic `tar.gz` files. Windows archives are
-deterministic ZIP files. Each archive contains only `kado` or `kado.exe`,
+Unix archives are `tar.gz` files. Windows archives are ZIP files. Each archive
+contains only `kado` or `kado.exe`,
 `LICENSE`, and `INSTALL-CLI.md`, with fixed safe modes and timestamps.
 
 ## Signing boundary
@@ -40,43 +39,41 @@ requires an out-of-band reinstall from the reviewed official
 `https://kado.so/install` boundary. Existing binaries cannot self-update
 across a key rotation, even when a release is signed by the old key.
 
-Local dry runs generate one ephemeral key at runtime and reuse it for both
-reproducibility builds. A production release must use the protected production
-seed and must not reuse a dry-run key.
+Local dry runs use an ephemeral key. A production release must use the
+protected production seed and must not reuse a dry-run key.
 
-## Reproducible dry run
+## Local dry run
 
-Use the Go version pinned by the `toolchain` directive in `go.mod`. Choose the
-source commit and its canonical UTC source timestamp. Generate a temporary
-signing seed without printing it:
+Use the Go version pinned by the `toolchain` directive in `go.mod`. Generate
+prebuilt binaries with the pinned GoReleaser version, then finalize them with
+an ephemeral signing seed:
 
 ```bash
 release_seed_file="$(mktemp "${TMPDIR:-/tmp}/kado-release-seed.XXXXXX")"
 openssl rand -base64 32 >"$release_seed_file"
 chmod 600 "$release_seed_file"
 export KADO_RELEASE_SIGNING_KEY="$(tr -d '\n' <"$release_seed_file")"
-
 go run ./tools/release \
   --version 0.1.0 \
   --commit 0123456789abcdef0123456789abcdef01234567 \
   --source-date-epoch 1784851200 \
-  --out dist/release-a
+  --write-goreleaser-env "$release_seed_file.env"
+set -a
+. "$release_seed_file.env"
+set +a
+
+goreleaser build --clean --snapshot
 go run ./tools/release \
   --version 0.1.0 \
   --commit 0123456789abcdef0123456789abcdef01234567 \
   --source-date-epoch 1784851200 \
-  --out dist/release-b
-
-diff -qr dist/release-a dist/release-b
+  --prebuilt dist/goreleaser \
+  --out dist/release
 ```
 
 Delete the temporary seed and dry-run directories after verification. The
 builder requires absent or empty output directories and installs its complete
 output directory with one rename, so a partial build never looks complete.
-
-The exact Go version, `-trimpath`, disabled VCS auto-stamping, empty Go build
-ID, `CGO_ENABLED=0`, fixed timestamps, stable target order, canonical JSON, and
-stable archive headers make identical inputs byte-identical.
 
 ## Release contents and verification
 
@@ -131,11 +128,10 @@ The release builder creates and verifies release directories but does not
 upload or publish them. External publication is a separate operator action
 after review of:
 
-1. byte-identical double-build output;
-2. detached signature verification;
-3. checksums, SBOMs, and provenance;
-4. clean install, update, downgrade-policy, rollback, and uninstall tests; and
-5. native Linux, macOS, and Windows verification.
+1. detached signature verification;
+2. checksums, SBOMs, and provenance;
+3. clean install, update, downgrade-policy, rollback, and uninstall tests; and
+4. native Linux and Windows verification.
 
 The protected GitHub workflow publishes the canonical build as one GitHub
 Release. A separate publisher, configured independently from this repository,

@@ -13,7 +13,7 @@ import (
 	"github.com/kado-so/search/internal/skillclient"
 )
 
-func TestDeterministicArchivesHaveSafePathsAndModes(t *testing.T) {
+func TestArchivesHaveSafePathsAndModes(t *testing.T) {
 	t.Parallel()
 
 	builtAt := time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)
@@ -21,40 +21,26 @@ func TestDeterministicArchivesHaveSafePathsAndModes(t *testing.T) {
 	license := []byte("license\n")
 	guide := []byte("guide\n")
 
-	firstTar, err := makeTarGzip(builtAt, "kado", binary, license, guide)
+	tarArchive, err := makeTarGzip(builtAt, "kado", binary, license, guide)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondTar, err := makeTarGzip(builtAt, "kado", binary, license, guide)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(firstTar, secondTar) {
-		t.Fatal("tar.gz output is not deterministic")
-	}
-	extracted, err := releaseclient.ExtractBinary(firstTar, "tar.gz", "kado")
+	extracted, err := releaseclient.ExtractBinary(tarArchive, "tar.gz", "kado")
 	if err != nil || !bytes.Equal(extracted, binary) {
 		t.Fatalf("ExtractBinary(tar.gz) = %q, %v", extracted, err)
 	}
 
-	firstZip, err := makeZip(builtAt, "kado.exe", binary, license, guide)
+	zipArchive, err := makeZip(builtAt, "kado.exe", binary, license, guide)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondZip, err := makeZip(builtAt, "kado.exe", binary, license, guide)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(firstZip, secondZip) {
-		t.Fatal("zip output is not deterministic")
-	}
-	extracted, err = releaseclient.ExtractBinary(firstZip, "zip", "kado.exe")
+	extracted, err = releaseclient.ExtractBinary(zipArchive, "zip", "kado.exe")
 	if err != nil || !bytes.Equal(extracted, binary) {
 		t.Fatalf("ExtractBinary(zip) = %q, %v", extracted, err)
 	}
 }
 
-func TestSkillReleaseIsDeterministicAndSelfVerifying(t *testing.T) {
+func TestSkillReleaseIsSelfVerifying(t *testing.T) {
 	t.Parallel()
 
 	seed := make([]byte, ed25519.SeedSize)
@@ -63,7 +49,7 @@ func TestSkillReleaseIsDeterministicAndSelfVerifying(t *testing.T) {
 	}
 	private := ed25519.NewKeyFromSeed(seed)
 	builtAt := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
-	firstArchive, firstMetadata, firstSignature, err := makeSkillRelease(
+	archive, _, _, err := makeSkillRelease(
 		builtAt,
 		"https://kado.so/install",
 		"0.1.0",
@@ -72,21 +58,7 @@ func TestSkillReleaseIsDeterministicAndSelfVerifying(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondArchive, secondMetadata, secondSignature, err := makeSkillRelease(
-		builtAt,
-		"https://kado.so/install",
-		"0.1.0",
-		private,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(firstArchive, secondArchive) ||
-		!bytes.Equal(firstMetadata, secondMetadata) ||
-		!bytes.Equal(firstSignature, secondSignature) {
-		t.Fatal("skill release output is not deterministic")
-	}
-	files, err := skillclient.ExtractArchive(firstArchive)
+	files, err := skillclient.ExtractArchive(archive)
 	if err != nil || len(files["SKILL.md"]) == 0 {
 		t.Fatalf("ExtractArchive() = %#v, %v", files, err)
 	}

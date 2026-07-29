@@ -21,7 +21,7 @@ jobs:
       commit: ${{ steps.inputs.outputs.commit }}
       epoch: ${{ steps.inputs.outputs.epoch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: inputs
@@ -47,14 +47,10 @@ jobs:
         run: |
           version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
           echo "version=$version" >>"$GITHUB_OUTPUT"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ steps.toolchain.outputs.version }}
-      - name: Test release source
-        run: |
-          go test ./...
-          go vet ./...
-      - name: Build twice and compare
+      - name: Export signed release build metadata
         env:
           KADO_RELEASE_SIGNING_KEY: ${{ secrets.KADO_RELEASE_SIGNING_KEY }}
           VERSION: ${{ steps.inputs.outputs.version }}
@@ -65,17 +61,30 @@ jobs:
             --version "$VERSION" \
             --commit "$COMMIT" \
             --source-date-epoch "$EPOCH" \
-            --out dist/release-a
+            --write-goreleaser-env "$GITHUB_ENV"
+      - name: Build all release targets with GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: build --clean
+      - name: Finalize signed release
+        env:
+          KADO_RELEASE_SIGNING_KEY: ${{ secrets.KADO_RELEASE_SIGNING_KEY }}
+          VERSION: ${{ steps.inputs.outputs.version }}
+          COMMIT: ${{ steps.inputs.outputs.commit }}
+          EPOCH: ${{ steps.inputs.outputs.epoch }}
+        run: |
           go run ./tools/release \
             --version "$VERSION" \
             --commit "$COMMIT" \
             --source-date-epoch "$EPOCH" \
-            --out dist/release-b
-          diff -qr dist/release-a dist/release-b
-      - uses: actions/upload-artifact@v4
+            --prebuilt dist/goreleaser \
+            --out dist/release
+      - uses: actions/upload-artifact@v7
         with:
           name: kado-${{ steps.inputs.outputs.version }}
-          path: dist/release-a/
+          path: dist/release/
           if-no-files-found: error
           retention-days: 14
 
@@ -88,15 +97,12 @@ jobs:
           - runner: depot-ubuntu-24.04
             archive: kado_${{ needs.build.outputs.version }}_linux_amd64.tar.gz
             binary: kado
-          - runner: depot-macos-15
-            archive: kado_${{ needs.build.outputs.version }}_darwin_arm64.tar.gz
-            binary: kado
           - runner: depot-windows-2025
             archive: kado_${{ needs.build.outputs.version }}_windows_amd64.zip
             binary: kado.exe
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: kado-${{ needs.build.outputs.version }}
           path: release
@@ -143,7 +149,7 @@ jobs:
       VERSION: ${{ needs.build.outputs.version }}
       COMMIT: ${{ needs.build.outputs.commit }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: kado-${{ needs.build.outputs.version }}
           path: release

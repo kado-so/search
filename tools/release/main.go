@@ -1,4 +1,4 @@
-// Command release builds deterministic, signed Kado CLI release bundles.
+// Command release finalizes and signs prebuilt Kado CLI release bundles.
 package main
 
 import (
@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -35,12 +34,13 @@ var (
 )
 
 type options struct {
-	root     string
-	output   string
-	commit   string
-	epoch    int64
-	goBinary string
-	version  string
+	root          string
+	output        string
+	prebuilt      string
+	commit        string
+	epoch         int64
+	version       string
+	goreleaserEnv string
 }
 
 type releaseIdentity struct {
@@ -54,10 +54,21 @@ func main() {
 	var configured options
 	flag.StringVar(&configured.root, "root", ".", "repository root")
 	flag.StringVar(&configured.output, "out", "dist/release", "output directory")
+	flag.StringVar(
+		&configured.prebuilt,
+		"prebuilt",
+		"",
+		"directory containing GoReleaser-built binaries",
+	)
 	flag.StringVar(&configured.commit, "commit", "", "exact 40-character source commit")
-	flag.Int64Var(&configured.epoch, "source-date-epoch", 0, "reproducible UTC build timestamp")
-	flag.StringVar(&configured.goBinary, "go", "go", "Go executable")
+	flag.Int64Var(&configured.epoch, "source-date-epoch", 0, "release UTC build timestamp")
 	flag.StringVar(&configured.version, "version", "", "semantic release version")
+	flag.StringVar(
+		&configured.goreleaserEnv,
+		"write-goreleaser-env",
+		"",
+		"append public build metadata to a GoReleaser environment file",
+	)
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fatal(errors.New("release does not accept positional arguments"))
@@ -86,7 +97,7 @@ func run(configured options) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyGoVersion(root, configured.goBinary); err != nil {
+	if err := verifyGoVersion(root, "go"); err != nil {
 		return err
 	}
 	private, err := signingKeyFromEnvironment()
@@ -113,6 +124,26 @@ func run(configured options) error {
 	if builtAt.Year() < 1980 {
 		return errors.New("--source-date-epoch must be in 1980 or later")
 	}
+	metadataURL := strings.TrimSuffix(source.InstallURL, "/") +
+		"/releases/stable/release-metadata.json"
+	if configured.goreleaserEnv != "" {
+		return writeGoReleaserEnvironment(
+			configured.goreleaserEnv,
+			source,
+			configured.commit,
+			builtAt,
+			releaseclient.PublicKeyText(public),
+			keyID,
+			metadataURL,
+		)
+	}
+	if configured.prebuilt == "" {
+		return errors.New("--prebuilt is required")
+	}
+	prebuilt := configured.prebuilt
+	if !filepath.IsAbs(prebuilt) {
+		prebuilt = filepath.Join(root, prebuilt)
+	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
 		return errors.New("release output parent could not be created")
 	}
@@ -124,7 +155,8 @@ func run(configured options) error {
 	if err := buildRelease(buildInput{
 		root:       root,
 		output:     staging,
-		goBinary:   configured.goBinary,
+		prebuilt:   prebuilt,
+		goBinary:   "go",
 		source:     source,
 		commit:     configured.commit,
 		builtAt:    builtAt,
@@ -139,12 +171,45 @@ func run(configured options) error {
 		return err
 	}
 	fmt.Printf(
-		"release dry-run complete version=%s commit=%s targets=6 output=%s\n",
+		"release finalized version=%s commit=%s targets=6 output=%s\n",
 		source.Version,
 		configured.commit,
 		output,
 	)
 	return nil
+}
+
+func writeGoReleaserEnvironment(
+	path string,
+	source releaseIdentity,
+	commit string,
+	builtAt time.Time,
+	publicKey string,
+	keyID string,
+	metadataURL string,
+) error {
+	values := []string{
+		"KADO_RELEASE_VERSION=" + source.Version,
+		"KADO_RELEASE_COMMIT=" + commit,
+		"KADO_RELEASE_DATE=" + builtAt.Format(time.RFC3339),
+		"KADO_RELEASE_PUBLIC_KEY=" + publicKey,
+		"KADO_RELEASE_KEY_ID=" + keyID,
+		"KADO_RELEASE_METADATA_URL=" + metadataURL,
+	}
+	for _, value := range values {
+		if strings.ContainsAny(value, "\r\n") {
+			return errors.New("GoReleaser environment value is invalid")
+		}
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return errors.New("GoReleaser environment file could not be opened")
+	}
+	defer file.Close()
+	if _, err := file.WriteString(strings.Join(values, "\n") + "\n"); err != nil {
+		return errors.New("GoReleaser environment file could not be written")
+	}
+	return file.Sync()
 }
 
 func newReleaseIdentity(version string) (releaseIdentity, error) {
@@ -234,8 +299,4 @@ func replaceOutput(staging, output string) error {
 func fatal(err error) {
 	fmt.Fprintf(os.Stderr, "kado-release: %s\n", err)
 	os.Exit(1)
-}
-
-func epochText(value time.Time) string {
-	return strconv.FormatInt(value.Unix(), 10)
 }

@@ -24,8 +24,8 @@ Continuous integration runs on pull requests and `main`:
 1. install the Go version from `go.mod`;
 2. run `go test ./...`;
 3. run `go vet ./...`;
-4. build `./cmd/kado`; and
-5. test the embedded skill and release builder.
+4. check formatting and generated files; and
+5. cross-compile every supported target with GoReleaser.
 
 A production release begins when an operator pushes a semantic `vX.Y.Z` tag.
 Merging to `main` runs CI but does not publish. The protected release workflow:
@@ -35,8 +35,8 @@ Merging to `main` runs CI but does not publish. The protected release workflow:
 3. reject an existing GitHub Release for that version;
 4. derive `SOURCE_DATE_EPOCH` from the commit;
 5. enter a reviewer-protected release environment;
-6. build twice using the protected Ed25519 signing seed;
-7. require byte-identical outputs;
+6. build all six targets once with the pinned GoReleaser version;
+7. validate every signed artifact before publication;
 8. verify all bundles and smoke-test on native runners;
 9. expose the canonical build as one short-lived Actions artifact; and
 10. publish the GitHub Release from that exact downloaded Actions artifact.
@@ -212,7 +212,7 @@ Implemented in this repository:
 - asynchronous skill refresh and cached CLI update availability notices;
 - agent-first Unix and Windows installers;
 - Windows verified-candidate update handoff;
-- Depot CI, reproducible release construction, native smoke jobs, and GitHub
+- Depot CI, GoReleaser construction, native smoke jobs, and GitHub
   Releases.
 
 Required outside or after this repository change:
