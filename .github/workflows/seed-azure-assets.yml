@@ -1,7 +1,9 @@
 name: seed Azure release assets
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - "azure-seed-v0.1.0"
 
 permissions:
   contents: read
