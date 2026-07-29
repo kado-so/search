@@ -21,6 +21,7 @@ release_directory="$2"
 
 storage=(--account-name "$AZURE_STORAGE_ACCOUNT" \
   --container-name "$AZURE_STORAGE_CONTAINER" --auth-mode login)
+storage_account=(--account-name "$AZURE_STORAGE_ACCOUNT" --auth-mode login)
 immutable_cache='public,max-age=31536000,immutable'
 channel_cache='no-cache,must-revalidate'
 release_prefix="install/releases/$KADO_RELEASE_VERSION"
@@ -56,10 +57,13 @@ case "$operation" in
       exit 1
     }
 
-    while IFS= read -r -d '' source; do
-      name="${source#"$release_directory"/}"
-      upload "$source" "$release_prefix/$name" false "$immutable_cache"
-    done < <(find "$release_directory" -type f -print0 | sort -z)
+    az storage blob upload-batch "${storage_account[@]}" \
+      --destination "$AZURE_STORAGE_CONTAINER" \
+      --source "$release_directory" \
+      --destination-path "$release_prefix" \
+      --overwrite false \
+      --content-cache-control "$immutable_cache" \
+      --only-show-errors
 
     skill_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' \
       "$release_directory/skill-metadata.json")"
@@ -83,13 +87,15 @@ case "$operation" in
 
     verification_directory="$(mktemp -d)"
     trap 'rm -rf "$verification_directory"' EXIT
+    az storage blob download-batch "${storage_account[@]}" \
+      --source "$AZURE_STORAGE_CONTAINER" \
+      --destination "$verification_directory" \
+      --pattern "$release_prefix/*" \
+      --overwrite \
+      --only-show-errors
     while IFS= read -r -d '' source; do
       name="${source#"$release_directory"/}"
-      destination="$verification_directory/$name"
-      mkdir -p "$(dirname "$destination")"
-      az storage blob download "${storage[@]}" \
-        --name "$release_prefix/$name" --file "$destination" \
-        --overwrite --only-show-errors
+      destination="$verification_directory/$release_prefix/$name"
       cmp "$source" "$destination"
     done < <(find "$release_directory" -type f -print0 | sort -z)
     ;;
