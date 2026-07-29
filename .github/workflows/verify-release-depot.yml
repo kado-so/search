@@ -1,0 +1,124 @@
+name: verify release flow on Depot
+
+on:
+  push:
+    branches:
+      - "vaishnav/f/agent-first-cli-release"
+    paths:
+      - ".github/workflows/verify-release-depot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: depot-ubuntu-24.04
+    environment: cli-release
+    outputs:
+      version: ${{ steps.inputs.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: inputs
+        shell: bash
+        run: |
+          version="0.0.0-depot.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          commit="$(git rev-parse HEAD)"
+          epoch="$(git show -s --format=%ct HEAD)"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+          echo "epoch=$epoch" >>"$GITHUB_OUTPUT"
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - name: Test release source
+        run: |
+          test -z "$(gofmt -l .)"
+          go test ./...
+          go vet ./...
+      - name: Build twice with the production signing key
+        env:
+          KADO_RELEASE_SIGNING_KEY: ${{ secrets.KADO_RELEASE_SIGNING_KEY }}
+          VERSION: ${{ steps.inputs.outputs.version }}
+          COMMIT: ${{ steps.inputs.outputs.commit }}
+          EPOCH: ${{ steps.inputs.outputs.epoch }}
+        shell: bash
+        run: |
+          go run ./tools/release \
+            --version "$VERSION" \
+            --commit "$COMMIT" \
+            --source-date-epoch "$EPOCH" \
+            --out dist/release-a
+          go run ./tools/release \
+            --version "$VERSION" \
+            --commit "$COMMIT" \
+            --source-date-epoch "$EPOCH" \
+            --out dist/release-b
+          diff -qr dist/release-a dist/release-b
+          bash -n dist/release-a/install.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: depot-release-flow-${{ steps.inputs.outputs.version }}
+          path: dist/release-a/
+          if-no-files-found: error
+          retention-days: 1
+
+  native-smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-ubuntu-24.04
+            archive: kado_${{ needs.build.outputs.version }}_linux_amd64.tar.gz
+            binary: kado
+          - runner: depot-macos-15
+            archive: kado_${{ needs.build.outputs.version }}_darwin_arm64.tar.gz
+            binary: kado
+          - runner: depot-windows-2025
+            archive: kado_${{ needs.build.outputs.version }}_windows_amd64.zip
+            binary: kado.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: depot-release-flow-${{ needs.build.outputs.version }}
+          path: release
+      - name: Smoke test Unix archive
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+          BINARY: ${{ matrix.binary }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          mkdir extracted
+          tar -xzf "release/$ARCHIVE" -C extracted
+          test "$(./extracted/$BINARY version --json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')" = "$VERSION"
+          ./extracted/$BINARY release verify --directory "$PWD/release"
+      - name: Smoke test Windows archive and installer syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+          BINARY: ${{ matrix.binary }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          $ParseTokens = $null
+          $ParseErrors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "release/install.ps1"),
+            [ref]$ParseTokens,
+            [ref]$ParseErrors
+          )
+          if ($ParseErrors.Count -ne 0) { throw "install.ps1 does not parse" }
+          Expand-Archive -LiteralPath "release/$env:ARCHIVE" -DestinationPath extracted
+          $identity = & "extracted/$env:BINARY" version --json | ConvertFrom-Json
+          if ($identity.version -ne $env:VERSION) { throw "version mismatch" }
+          & "extracted/$env:BINARY" release verify --directory "$PWD/release"
+          if ($LASTEXITCODE -ne 0) { throw "release verification failed" }
