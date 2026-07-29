@@ -35,6 +35,7 @@ var releaseTargets = []buildTarget{
 type buildInput struct {
 	root       string
 	output     string
+	prebuilt   string
 	goBinary   string
 	source     releaseIdentity
 	commit     string
@@ -53,8 +54,6 @@ type builtFile struct {
 func buildRelease(input buildInput) error {
 	assetBase := strings.TrimSuffix(input.source.InstallURL, "/") +
 		"/releases/" + input.source.Version
-	metadataURL := strings.TrimSuffix(input.source.InstallURL, "/") +
-		"/releases/stable/release-metadata.json"
 	license, err := os.ReadFile(filepath.Join(input.root, "LICENSE"))
 	if err != nil {
 		return errors.New("release license is unavailable")
@@ -124,6 +123,24 @@ func buildRelease(input buildInput) error {
 	if err != nil {
 		return err
 	}
+	skillArchive, skillMetadata, skillSignature, err := makeSkillRelease(
+		input.builtAt,
+		input.source.InstallURL,
+		input.source.Version,
+		input.privateKey,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := add("kado-search.tar.gz", skillArchive, 0o644); err != nil {
+		return err
+	}
+	if _, err := add("skill-metadata.json", skillMetadata, 0o644); err != nil {
+		return err
+	}
+	if _, err := add("skill-metadata.json.sig", skillSignature, 0o644); err != nil {
+		return err
+	}
 
 	targets := make([]releaseclient.Target, 0, len(releaseTargets))
 	for _, target := range releaseTargets {
@@ -131,7 +148,6 @@ func buildRelease(input buildInput) error {
 			input,
 			target,
 			assetBase,
-			metadataURL,
 			license,
 			guide,
 			modules,
@@ -212,7 +228,6 @@ func buildTargetArtifacts(
 	input buildInput,
 	target buildTarget,
 	assetBase string,
-	metadataURL string,
 	license []byte,
 	guide []byte,
 	modules []module,
@@ -235,46 +250,17 @@ func buildTargetArtifacts(
 	)
 	versionedBinaryName := base + suffix
 	binaryPath := filepath.Join(input.output, versionedBinaryName)
-	ldflags := strings.Join([]string{
-		"-s",
-		"-w",
-		"-buildid=",
-		"-X", "github.com/kado-so/search/internal/buildinfo.Version=" + input.source.Version,
-		"-X", "github.com/kado-so/search/internal/buildinfo.Commit=" + input.commit,
-		"-X", "github.com/kado-so/search/internal/buildinfo.Date=" + input.builtAt.Format(time.RFC3339),
-		"-X", "github.com/kado-so/search/internal/buildinfo.Target=" + target.goos + "/" + target.goarch,
-		"-X", "github.com/kado-so/search/internal/buildinfo.ReleasePublicKey=" + releaseclient.PublicKeyText(input.publicKey),
-		"-X", "github.com/kado-so/search/internal/buildinfo.ReleaseKeyID=" + input.keyID,
-		"-X", "github.com/kado-so/search/internal/buildinfo.ReleaseMetadataURL=" + metadataURL,
-	}, " ")
-	environment := append(sanitizedEnvironment(),
-		"CGO_ENABLED=0",
-		"GOOS="+target.goos,
-		"GOARCH="+target.goarch,
-		"SOURCE_DATE_EPOCH="+epochText(input.builtAt),
-	)
-	if _, err := commandOutput(
-		input.root,
-		environment,
-		input.goBinary,
-		"build",
-		"-trimpath",
-		"-buildvcs=false",
-		"-ldflags",
-		ldflags,
-		"-o",
-		binaryPath,
-		"./cmd/kado",
-	); err != nil {
+	prebuiltPath := filepath.Join(input.prebuilt, versionedBinaryName)
+	binary, err := os.ReadFile(prebuiltPath)
+	if err != nil {
 		return releaseclient.Target{}, fmt.Errorf(
-			"release build failed for %s/%s",
+			"GoReleaser binary is unavailable for %s/%s",
 			target.goos,
 			target.goarch,
 		)
 	}
-	binary, err := os.ReadFile(binaryPath)
-	if err != nil {
-		return releaseclient.Target{}, errors.New("release binary could not be read")
+	if err := os.WriteFile(binaryPath, binary, 0o755); err != nil {
+		return releaseclient.Target{}, errors.New("release binary could not be written")
 	}
 	binaryFile := releaseclient.File{
 		Name:   versionedBinaryName,

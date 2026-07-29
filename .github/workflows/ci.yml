@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: depot-ubuntu-24.04
+    env:
+      KADO_RELEASE_VERSION: 0.0.0-ci
+      KADO_RELEASE_COMMIT: ${{ github.sha }}
+      KADO_RELEASE_DATE: "1980-01-01T00:00:00Z"
+      KADO_RELEASE_PUBLIC_KEY: ""
+      KADO_RELEASE_KEY_ID: ci
+      KADO_RELEASE_METADATA_URL: https://kado.so/install/releases/stable/release-metadata.json
+    steps:
+      - uses: actions/checkout@v5
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Check formatting and generated files
+        run: |
+          test -z "$(gofmt -l .)"
+          git diff --exit-code
+      - name: Build all release targets with GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: build --clean --snapshot

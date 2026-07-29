@@ -11,34 +11,38 @@ Install metadata: %s
 Release signing key: %s
 
 Download the complete release directory for your platform through a browser,
-package manager, or another HTTPS client. Do not pipe a network response into a
-shell. Keep release-metadata.json, release-metadata.json.sig,
-release-public-key.pem, checksums.txt, and the platform archive together.
+or install directly from the canonical Kado HTTPS boundary.
 
-On Linux or macOS, inspect and run:
+On Linux or macOS:
 
-    sh install.sh . "$HOME/.local/bin/kado"
+    curl -fsSL https://kado.so/install.sh | sh
 
-On Windows, inspect and run:
+or:
 
-    powershell -NoProfile -File .\install.ps1 -ReleaseDirectory . -Destination "$env:LOCALAPPDATA\Kado\kado.exe"
+    wget -qO- https://kado.so/install.sh | sh
 
-The installers authenticate the canonical metadata, verify the selected
-archive checksum, inspect the archive paths and executable mode, verify the
-candidate's stamped release identity, and install to an empty destination
-atomically. They refuse to overwrite an existing installation; use kado update
-so signed update and downgrade policy cannot be bypassed. During an
-update, the existing binary is retained as a rollback file until candidate
-verification and replacement complete.
+On Windows:
+
+    powershell -NoProfile -Command "irm https://kado.so/install.ps1 | iex"
+
+The installers require no superuser privileges. They authenticate canonical
+metadata with the downloaded candidate, verify its archive and stamped release
+identity, install into a user-owned directory, configure the user PATH when
+needed, and install the latest compatible signed Search skill. Set
+KADO_INSTALL_DIR to choose another user-owned executable directory or
+KADO_NO_MODIFY_PATH=1 to leave shell configuration unchanged.
 
 After installation:
 
     kado version --json
     kado auth status
+    kado skill status
 
 Use kado update for a signed in-place update. Downgrades are rejected unless
---allow-downgrade is explicit. Use the supplied uninstall script with --yes;
-credentials are preserved unless --purge-credentials is also explicit.
+--allow-downgrade is explicit. Kado refreshes its managed skill installations
+asynchronously and reports signed CLI updates without blocking Search. Use the
+supplied uninstall script with --yes; credentials are preserved unless
+--purge-credentials is also explicit.
 `, source.Version, source.Repository, source.InstallURL, keyID)
 }
 
@@ -46,10 +50,9 @@ func installUnixScript(source releaseIdentity, keyID string) string {
 	return fmt.Sprintf(`#!/bin/sh
 set -eu
 
-release_directory="${1:-.}"
-destination="${2:-${HOME}/.local/bin/kado}"
-version=%q
-expected_key_id=%q
+base_url=%q
+install_dir="${KADO_INSTALL_DIR:-${HOME}/.local/bin}"
+destination="$install_dir/kado"
 
 case "$(uname -s)" in
   Darwin) target_os=darwin ;;
@@ -62,61 +65,87 @@ case "$(uname -m)" in
   *) printf 'unsupported architecture\n' >&2; exit 1 ;;
 esac
 
-archive="kado_${version}_${target_os}_${target_arch}.tar.gz"
-for required in release-metadata.json release-metadata.json.sig release-public-key.pem checksums.txt "$archive"; do
-  test -f "$release_directory/$required" || {
-    printf 'missing release file: %%s\n' "$required" >&2
+download() {
+  source_url="$1"
+  output_path="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl --proto '=https' --tlsv1.2 -fsSL "$source_url" -o "$output_path"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --https-only -O "$output_path" "$source_url"
+  else
+    printf 'kado installation requires curl or wget\n' >&2
     exit 1
-  }
-done
-expected="$(awk -v file="$archive" '$2 == file { print $1 }' "$release_directory/checksums.txt")"
-test "${#expected}" -eq 64 || {
-  printf 'archive checksum is missing\n' >&2
-  exit 1
-}
-if command -v sha256sum >/dev/null 2>&1; then
-  actual="$(sha256sum "$release_directory/$archive" | awk '{ print $1 }')"
-else
-  actual="$(shasum -a 256 "$release_directory/$archive" | awk '{ print $1 }')"
-fi
-test "$actual" = "$expected" || {
-  printf 'archive checksum verification failed\n' >&2
-  exit 1
+  fi
 }
 
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/kado-install.XXXXXX")"
 cleanup() { rm -rf "$temporary"; }
 trap cleanup EXIT HUP INT TERM
-listing="$(tar -tzf "$release_directory/$archive")"
+
+metadata_url="$base_url/releases/stable/release-metadata.json"
+download "$metadata_url" "$temporary/release-metadata.json"
+download "$metadata_url.sig" "$temporary/release-metadata.json.sig"
+version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$temporary/release-metadata.json")"
+case "$version" in
+  ''|*[!0-9A-Za-z.+-]*) printf 'release metadata version is invalid\n' >&2; exit 1 ;;
+esac
+archive="kado_${version}_${target_os}_${target_arch}.tar.gz"
+download "$base_url/releases/$version/$archive" "$temporary/$archive"
+listing="$(tar -tzf "$temporary/$archive")"
 test "$listing" = "kado
 LICENSE
 INSTALL-CLI.md" || {
   printf 'archive contains unexpected paths\n' >&2
   exit 1
 }
-tar -xzf "$release_directory/$archive" -C "$temporary"
+tar -xzf "$temporary/$archive" -C "$temporary"
 test -f "$temporary/kado" && test ! -L "$temporary/kado"
 test "$(stat -f '%%Lp' "$temporary/kado" 2>/dev/null || stat -c '%%a' "$temporary/kado")" = "755"
 identity="$("$temporary/kado" version --json)"
 printf '%%s\n' "$identity" | grep -F "\"version\":\"${version}\"" >/dev/null
 printf '%%s\n' "$identity" | grep -F "\"target\":\"${target_os}/${target_arch}\"" >/dev/null
-printf '%%s\n' "$identity" | grep -F "\"release_key_id\":\"${expected_key_id}\"" >/dev/null
-"$temporary/kado" release verify --directory "$release_directory" >/dev/null
+"$temporary/kado" release verify --directory "$temporary" >/dev/null
 
-parent="$(dirname "$destination")"
-mkdir -p "$parent"
+mkdir -p "$install_dir"
 test ! -e "$destination" || {
-  printf 'kado is already installed; use kado update\n' >&2
+  printf 'kado is already installed; run kado update\n' >&2
   exit 1
 }
-candidate="$(mktemp "$parent/.kado-candidate.XXXXXX")"
+candidate="$(mktemp "$install_dir/.kado-candidate.XXXXXX")"
 cp "$temporary/kado" "$candidate"
 chmod 755 "$candidate"
-if ! mv "$candidate" "$destination"; then
-  exit 1
+mv "$candidate" "$destination"
+
+case ":$PATH:" in
+  *":$install_dir:"*) ;;
+  *)
+    if test "${KADO_NO_MODIFY_PATH:-0}" != 1; then
+      case "${SHELL:-}" in
+        */zsh) profile="${ZDOTDIR:-$HOME}/.zshrc" ;;
+        */bash) profile="$HOME/.bashrc" ;;
+        */fish) profile="$HOME/.config/fish/config.fish" ;;
+        *) profile="$HOME/.profile" ;;
+      esac
+      mkdir -p "$(dirname "$profile")"
+      if ! grep -F '# >>> kado initialize >>>' "$profile" >/dev/null 2>&1; then
+        {
+          printf '\n# >>> kado initialize >>>\n'
+          case "$profile" in
+            */fish/config.fish) printf 'fish_add_path %%s\n' "$install_dir" ;;
+            *) printf 'export PATH="%%s:$PATH"\n' "$install_dir" ;;
+          esac
+          printf '# <<< kado initialize <<<\n'
+        } >>"$profile"
+      fi
+    fi
+    ;;
+esac
+
+if ! "$destination" skill install; then
+  printf 'kado was installed; run kado skill install to finish skill setup\n' >&2
 fi
 printf 'installed kado %%s at %%s; credentials were unchanged\n' "$version" "$destination"
-`, source.Version, keyID)
+`, source.InstallURL)
 }
 
 func uninstallUnixScript() string {
@@ -155,63 +184,63 @@ fi
 
 func installPowerShellScript(source releaseIdentity, keyID string) string {
 	return fmt.Sprintf(`param(
-  [string]$ReleaseDirectory = ".",
-  [string]$Destination = "$env:LOCALAPPDATA\Kado\kado.exe"
+  [string]$InstallDirectory = $(if ($env:KADO_INSTALL_DIR) { $env:KADO_INSTALL_DIR } else { "$env:LOCALAPPDATA\Kado" }),
+  [switch]$NoModifyPath
 )
 $ErrorActionPreference = "Stop"
-$Version = %q
-$ExpectedKeyId = %q
+$BaseUrl = %q
+$Destination = Join-Path $InstallDirectory "kado.exe"
 $Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
   "X64" { "amd64" }
   "Arm64" { "arm64" }
   default { throw "unsupported architecture" }
 }
-$Archive = "kado_${Version}_windows_${Arch}.zip"
-$Required = @("release-metadata.json", "release-metadata.json.sig", "release-public-key.pem", "checksums.txt", $Archive)
-foreach ($Name in $Required) {
-  if (-not (Test-Path -LiteralPath (Join-Path $ReleaseDirectory $Name) -PathType Leaf)) {
-    throw "missing release file"
-  }
-}
-$ChecksumLine = Get-Content -LiteralPath (Join-Path $ReleaseDirectory "checksums.txt") |
-  Where-Object { $_ -match "^[0-9a-f]{64}  $([regex]::Escape($Archive))$" }
-if (@($ChecksumLine).Count -ne 1) { throw "archive checksum is missing" }
-$Expected = $ChecksumLine.Substring(0, 64)
-$Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $ReleaseDirectory $Archive)).Hash.ToLowerInvariant()
-if ($Actual -ne $Expected) { throw "archive checksum verification failed" }
-$ArchivePath = Join-Path $ReleaseDirectory $Archive
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$Zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
-try {
-  $ZipEntries = @($Zip.Entries | ForEach-Object { $_.FullName } | Sort-Object)
-  if (($ZipEntries -join ",") -ne "INSTALL-CLI.md,LICENSE,kado.exe") { throw "archive contains unexpected paths" }
-} finally {
-  $Zip.Dispose()
-}
 $Temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("kado-install-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $Temporary | Out-Null
 try {
-  Expand-Archive -LiteralPath $ArchivePath -DestinationPath $Temporary
-  $Entries = @(Get-ChildItem -LiteralPath $Temporary -File | ForEach-Object { $_.Name } | Sort-Object)
-  if (($Entries -join ",") -ne "INSTALL-CLI.md,LICENSE,kado.exe") { throw "archive contains unexpected paths" }
+  $MetadataUrl = "$BaseUrl/releases/stable/release-metadata.json"
+  Invoke-WebRequest -UseBasicParsing -Uri $MetadataUrl -OutFile (Join-Path $Temporary "release-metadata.json")
+  Invoke-WebRequest -UseBasicParsing -Uri "$MetadataUrl.sig" -OutFile (Join-Path $Temporary "release-metadata.json.sig")
+  $Metadata = Get-Content -Raw -LiteralPath (Join-Path $Temporary "release-metadata.json") | ConvertFrom-Json
+  $Version = [string]$Metadata.version
+  if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') { throw "release metadata version is invalid" }
+  $Archive = "kado_${Version}_windows_${Arch}.zip"
+  Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/releases/$Version/$Archive" -OutFile (Join-Path $Temporary $Archive)
+  Expand-Archive -LiteralPath (Join-Path $Temporary $Archive) -DestinationPath $Temporary
   $CandidateBinary = Join-Path $Temporary "kado.exe"
   $Identity = & $CandidateBinary version --json | ConvertFrom-Json
-  if ($Identity.version -ne $Version -or $Identity.target -ne "windows/$Arch" -or $Identity.release_key_id -ne $ExpectedKeyId) {
+  if ($Identity.version -ne $Version -or $Identity.target -ne "windows/$Arch") {
     throw "candidate executable identity is invalid"
   }
-  & $CandidateBinary release verify --directory $ReleaseDirectory | Out-Null
+  & $CandidateBinary release verify --directory $Temporary | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "release bundle verification failed" }
-  $Parent = Split-Path -Parent $Destination
-  New-Item -ItemType Directory -Path $Parent -Force | Out-Null
-  if (Test-Path -LiteralPath $Destination) { throw "kado is already installed; use kado update" }
-  $Candidate = Join-Path $Parent (".kado-candidate-" + [guid]::NewGuid().ToString("N") + ".exe")
-  Copy-Item -LiteralPath $CandidateBinary -Destination $Candidate
-  Move-Item -LiteralPath $Candidate -Destination $Destination
+
+  New-Item -ItemType Directory -Path $InstallDirectory -Force | Out-Null
+  if (Test-Path -LiteralPath $Destination) {
+    throw "kado is already installed; run kado update"
+  }
+  $InstallCandidate = Join-Path $InstallDirectory (".kado-candidate-" + [guid]::NewGuid().ToString("N") + ".exe")
+  Copy-Item -LiteralPath $CandidateBinary -Destination $InstallCandidate
+  Move-Item -LiteralPath $InstallCandidate -Destination $Destination
+
+  $SkipPath = $NoModifyPath -or $env:KADO_NO_MODIFY_PATH -eq "1"
+  if (-not $SkipPath) {
+    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $Parts = @($UserPath -split ';' | Where-Object { $_ })
+    if ($Parts -notcontains $InstallDirectory) {
+      $NewPath = (@($Parts) + $InstallDirectory) -join ';'
+      [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
+    }
+  }
+  & $Destination skill install
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Kado was installed; run 'kado skill install' to finish skill setup"
+  }
   Write-Output "installed kado $Version at $Destination; credentials were unchanged"
 } finally {
   Remove-Item -LiteralPath $Temporary -Recurse -Force -ErrorAction SilentlyContinue
 }
-`, source.Version, keyID)
+`, source.InstallURL)
 }
 
 func uninstallPowerShellScript() string {

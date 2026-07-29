@@ -110,6 +110,69 @@ type Result struct {
 	Target      string
 	Changed     bool
 	DryRun      bool
+	Pending     bool
+}
+
+// Check verifies current signed metadata without downloading or installing an
+// archive.
+func (manager Manager) Check(
+	ctx context.Context,
+	currentVersion string,
+) (Result, error) {
+	goos, goarch := manager.GOOS, manager.GOARCH
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	result := Result{
+		FromVersion: currentVersion,
+		Target:      goos + "/" + goarch,
+		DryRun:      true,
+	}
+	fetcher := manager.Fetcher
+	if fetcher == nil {
+		fetcher = HTTPFetcher{}
+	}
+	metadataURL, err := parseHTTPS(manager.MetadataURL)
+	if err != nil {
+		return result, ErrInvalidMetadata
+	}
+	metadataBytes, err := fetcher.Fetch(ctx, metadataURL.String(), MaxMetadataSize)
+	if err != nil {
+		return result, err
+	}
+	signatureBytes, err := fetcher.Fetch(
+		ctx,
+		metadataURL.String()+".sig",
+		ed25519SignatureSize,
+	)
+	if err != nil {
+		return result, err
+	}
+	metadata, err := VerifyMetadata(metadataBytes, signatureBytes, manager.PublicKey)
+	if err != nil {
+		if errors.Is(err, errInvalidSignature) {
+			return result, ErrInvalidSignature
+		}
+		return result, ErrInvalidMetadata
+	}
+	if _, err := metadata.TargetFor(goos, goarch); err != nil {
+		return result, ErrPlatform
+	}
+	if err := sameReleaseOrigin(metadataURL, metadata); err != nil {
+		return result, ErrInvalidMetadata
+	}
+	result.ToVersion = metadata.Version
+	if currentVersion != "" && currentVersion != "dev" {
+		comparison, err := compareVersions(metadata.Version, currentVersion)
+		if err != nil {
+			return result, ErrInvalidMetadata
+		}
+		result.Changed = comparison > 0
+	}
+	return result, nil
 }
 
 // Update verifies signed metadata, the selected archive, and candidate
@@ -209,14 +272,16 @@ func (manager Manager) Update(ctx context.Context, options Options) (Result, err
 	if options.DryRun {
 		return result, nil
 	}
-	if err := manager.replaceExpected(
+	pending, err := manager.installCandidate(
 		candidate,
 		options.TargetPath,
 		targetSnapshot,
-	); err != nil {
+	)
+	if err != nil {
 		return result, ErrInstall
 	}
 	result.Changed = true
+	result.Pending = pending
 	return result, nil
 }
 
@@ -323,6 +388,15 @@ func (manager Manager) replaceExpected(
 	target string,
 	expectedSnapshot string,
 ) error {
+	return manager.replaceExpectedAndVerify(candidate, target, expectedSnapshot, nil)
+}
+
+func (manager Manager) replaceExpectedAndVerify(
+	candidate string,
+	target string,
+	expectedSnapshot string,
+	verify func() error,
+) error {
 	releaseLock, err := acquireUpdateLock(target)
 	if err != nil {
 		return err
@@ -397,6 +471,18 @@ func (manager Manager) replaceExpected(
 			return errors.Join(err, rollbackErr)
 		}
 		return err
+	}
+	if verify != nil {
+		if err := verify(); err != nil {
+			rollbackErr := rename(target, candidate)
+			if rollbackErr == nil {
+				rollbackErr = rename(backup, target)
+			}
+			if rollbackErr != nil {
+				return errors.Join(err, rollbackErr)
+			}
+			return err
+		}
 	}
 	backupNeedsCleanup := true
 	defer func() {

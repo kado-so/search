@@ -81,7 +81,8 @@ machine. If no supported caller is detected, the CLI selects `default`.
 
 ## Development
 
-The module requires the Go toolchain pinned in `.prototools`.
+The module requires the Go toolchain pinned by the `toolchain` directive in
+`go.mod`.
 
 ```bash
 go build ./cmd/kado
@@ -116,10 +117,9 @@ on Windows. `host.json` and `identities.json` are non-secret local state.
 
 ## Releases and self-update
 
-The release builder accepts an explicit semantic version and uses fixed product
-identity constants. It creates deterministic binaries and archives for Linux,
-macOS, and Windows. SHA-256 checksums, SPDX SBOMs, SLSA/in-toto provenance, and
-local installers are also generated as standalone operator artifacts.
+GoReleaser cross-compiles binaries for Linux, macOS, and Windows. Kado's release
+finalizer packages and signs those binaries and generates SHA-256 checksums,
+SPDX SBOMs, SLSA/in-toto provenance, and local installers.
 
 Installed release binaries verify the signed metadata, selected platform
 archive, and candidate executable identity before replacement:
@@ -140,17 +140,23 @@ verification, rollback, and publication details.
 
 ## Skill
 
-`skills/kado-search/SKILL.md` contains only guidance for deciding when to
-Search, forming a query, invoking Search, and using the results. Installation,
-authentication, update, release, and uninstall policy live outside the skill.
+`skills/kado-search/SKILL.md` contains the offline Search guidance bundled into
+release builds. `kado skill install` prefers the latest compatible signed skill
+from `kado.so` and falls back to that embedded copy without requiring npm, a
+plugin marketplace, or another package manager. Kado tracks and asynchronously
+updates only the skill copies it owns.
 
 ## Installation
 
-Install the external `kado` CLI before enabling the skill. The canonical CLI
-installation boundary is [kado.so/install](https://kado.so/install).
+The primary installation flow is agent-first: an agent downloads the one
+platform-specific Kado release, verifies and installs it, then asks Kado to
+install its bundled skill. The canonical installation boundary is
+[kado.so/install](https://kado.so/install).
 
 See [installation documentation](docs/INSTALL.md) for the directly
 maintained Agent Skills, Codex, and Claude Code plugin instructions.
+See [CLI distribution plan](docs/CLI_DISTRIBUTION.md) for the agent-first
+bootstrap, bundled skill, package-manager, and Windows update design.
 
 ## Repository layout
 

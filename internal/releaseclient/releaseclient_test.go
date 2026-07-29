@@ -415,6 +415,35 @@ func TestReplacementRejectsAChangedInstalledBinary(t *testing.T) {
 	assertFileContent(t, candidate, []byte("new"))
 }
 
+func TestPostReplacementVerificationFailureRollsBack(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	target := filepath.Join(root, "kado")
+	candidate := filepath.Join(root, ".candidate")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(candidate, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := snapshotExecutable(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = (Manager{}).replaceExpectedAndVerify(
+		candidate,
+		target,
+		expected,
+		func() error { return errors.New("candidate did not start") },
+	)
+	if err == nil {
+		t.Fatal("post-replacement verification failure was ignored")
+	}
+	assertFileContent(t, target, []byte("old"))
+	assertFileContent(t, candidate, []byte("new"))
+}
+
 func TestVerifyMetadataRequiresCanonicalSignedIdentity(t *testing.T) {
 	t.Parallel()
 
