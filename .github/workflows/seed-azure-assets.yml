@@ -3,7 +3,7 @@ name: seed Azure release assets
 on:
   push:
     tags:
-      - "azure-seed-v0.1.0"
+      - "vazure-seed-v0-1-0"
 
 permissions:
   contents: read
