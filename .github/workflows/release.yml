@@ -120,6 +120,14 @@ jobs:
           BINARY: ${{ matrix.binary }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |
+          $ParseTokens = $null
+          $ParseErrors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "release/install.ps1"),
+            [ref]$ParseTokens,
+            [ref]$ParseErrors
+          )
+          if ($ParseErrors.Count -ne 0) { throw "install.ps1 does not parse" }
           Expand-Archive -LiteralPath "release/$env:ARCHIVE" -DestinationPath extracted
           $identity = & "extracted/$env:BINARY" version --json | ConvertFrom-Json
           if ($identity.version -ne $env:VERSION) { throw "version mismatch" }
