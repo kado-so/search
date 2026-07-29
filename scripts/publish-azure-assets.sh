@@ -47,16 +47,26 @@ upload() {
   "${arguments[@]}"
 }
 
+upload_immutable() {
+  local source="$1"
+  local destination="$2"
+  local cache_control="$3"
+  local content_type="$4"
+  if [[ "$(az storage blob exists "${storage[@]}" --name "$destination" \
+    --query exists --output tsv --only-show-errors)" == "true" ]]; then
+    local downloaded
+    downloaded="$(mktemp)"
+    az storage blob download "${storage[@]}" --name "$destination" \
+      --file "$downloaded" --overwrite --only-show-errors
+    cmp "$source" "$downloaded"
+    rm -f "$downloaded"
+    return
+  fi
+  upload "$source" "$destination" false "$cache_control" "$content_type"
+}
+
 case "$operation" in
   upload)
-    existing="$(az storage blob list "${storage[@]}" \
-      --prefix "$release_prefix/" --num-results 1 \
-      --query 'length(@)' --output tsv --only-show-errors)"
-    [[ "$existing" == "0" ]] || {
-      printf 'immutable release prefix already exists: %s\n' "$release_prefix" >&2
-      exit 1
-    }
-
     az storage blob upload-batch "${storage_account[@]}" \
       --destination "$AZURE_STORAGE_CONTAINER" \
       --source "$release_directory" \
@@ -71,19 +81,12 @@ case "$operation" in
       { printf 'skill version is invalid\n' >&2; exit 1; }
     skill_prefix="install/skills/kado-search/$skill_version"
 
-    existing="$(az storage blob list "${storage[@]}" \
-      --prefix "$skill_prefix/" --num-results 1 \
-      --query 'length(@)' --output tsv --only-show-errors)"
-    [[ "$existing" == "0" ]] || {
-      printf 'immutable skill prefix already exists: %s\n' "$skill_prefix" >&2
-      exit 1
-    }
-    upload "$release_directory/kado-search.tar.gz" \
-      "$skill_prefix/kado-search.tar.gz" false "$immutable_cache" application/gzip
-    upload "$release_directory/skill-metadata.json" \
-      "$skill_prefix/metadata.json" false "$immutable_cache" application/json
-    upload "$release_directory/skill-metadata.json.sig" \
-      "$skill_prefix/metadata.json.sig" false "$immutable_cache" application/octet-stream
+    upload_immutable "$release_directory/kado-search.tar.gz" \
+      "$skill_prefix/kado-search.tar.gz" "$immutable_cache" application/gzip
+    upload_immutable "$release_directory/skill-metadata.json" \
+      "$skill_prefix/metadata.json" "$immutable_cache" application/json
+    upload_immutable "$release_directory/skill-metadata.json.sig" \
+      "$skill_prefix/metadata.json.sig" "$immutable_cache" application/octet-stream
 
     verification_directory="$(mktemp -d)"
     trap 'rm -rf "$verification_directory"' EXIT

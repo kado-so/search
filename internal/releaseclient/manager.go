@@ -35,7 +35,8 @@ type Fetcher interface {
 	Fetch(context.Context, string, int64) ([]byte, error)
 }
 
-// HTTPFetcher retrieves HTTPS assets without cookies or redirects.
+// HTTPFetcher retrieves HTTPS assets without cookies. It follows one narrowly
+// validated redirect from kado.so to Kado's private Azure Blob delivery origin.
 type HTTPFetcher struct {
 	Client *http.Client
 }
@@ -55,8 +56,12 @@ func (fetcher HTTPFetcher) Fetch(
 		client = &http.Client{Timeout: 45 * time.Second}
 	}
 	clone := *client
-	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
+	clone.Jar = nil
+	clone.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) != 1 || !allowedAssetRedirect(via[0].URL, request.URL) {
+			return http.ErrUseLastResponse
+		}
+		return nil
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
@@ -77,6 +82,44 @@ func (fetcher HTTPFetcher) Fetch(
 		return nil, errors.New("release download failed")
 	}
 	return value, nil
+}
+
+func allowedAssetRedirect(source, destination *url.URL) bool {
+	if source == nil || destination == nil ||
+		source.Scheme != "https" ||
+		!strings.EqualFold(source.Hostname(), "kado.so") ||
+		source.Port() != "" ||
+		destination.Scheme != "https" ||
+		!strings.EqualFold(
+			destination.Hostname(),
+			"kadoappassets0c29ff3adb.blob.core.windows.net",
+		) ||
+		destination.Port() != "" ||
+		destination.User != nil ||
+		destination.Fragment != "" ||
+		!strings.HasPrefix(destination.EscapedPath(), "/app-assets/") {
+		return false
+	}
+	query := destination.Query()
+	if query.Get("sp") != "r" ||
+		query.Get("spr") != "https" ||
+		query.Get("sig") == "" ||
+		query.Get("se") == "" ||
+		query.Get("sv") == "" ||
+		query.Get("sr") != "b" {
+		return false
+	}
+	allowed := map[string]bool{
+		"se": true, "sig": true, "ske": true, "skoid": true, "sks": true,
+		"skt": true, "sktid": true, "skv": true, "sp": true, "spr": true,
+		"sr": true, "st": true, "sv": true,
+	}
+	for key, values := range query {
+		if !allowed[key] || len(values) != 1 || values[0] == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // CandidateVerifier proves the extracted executable carries expected metadata.

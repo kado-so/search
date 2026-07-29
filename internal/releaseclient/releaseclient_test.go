@@ -11,11 +11,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,6 +159,57 @@ func TestDryRunVerifiesCurrentVersionArtifactsInsteadOfShortCircuiting(t *testin
 	})
 	if !errors.Is(err, ErrChecksum) {
 		t.Fatalf("dry-run error = %v, want checksum failure", err)
+	}
+}
+
+func TestAssetRedirectValidation(t *testing.T) {
+	t.Parallel()
+	source, err := url.Parse(
+		"https://kado.so/install/releases/stable/release-metadata.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := "https://kadoappassets0c29ff3adb.blob.core.windows.net/" +
+		"app-assets/install/releases/stable/release-metadata.json?" +
+		"sp=r&st=2026-07-30T00%3A00%3A00Z&se=2026-07-30T00%3A05%3A00Z&" +
+		"spr=https&sv=2025-11-05&sr=b&skoid=oid&sktid=tid&" +
+		"skt=2026-07-30T00%3A00%3A00Z&ske=2026-07-30T01%3A00%3A00Z&" +
+		"sks=b&skv=2025-11-05&sig=signature"
+	for _, test := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "valid user delegation SAS", raw: valid, want: true},
+		{
+			name: "wrong storage account",
+			raw:  strings.Replace(valid, "kadoappassets0c29ff3adb", "attacker", 1),
+		},
+		{
+			name: "write permission",
+			raw:  strings.Replace(valid, "sp=r", "sp=rw", 1),
+		},
+		{
+			name: "unexpected query field",
+			raw:  valid + "&rscc=public",
+		},
+		{
+			name: "wrong container",
+			raw:  strings.Replace(valid, "/app-assets/", "/other/", 1),
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			destination, parseErr := url.Parse(test.raw)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			if got := allowedAssetRedirect(source, destination); got != test.want {
+				t.Fatalf("allowedAssetRedirect() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 
