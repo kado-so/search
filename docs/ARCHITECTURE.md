@@ -52,13 +52,23 @@ concerns and do not belong in the skill.
 
 ## Distribution
 
-Plugin and marketplace manifests are maintained directly. The release operator
-provides the semantic version explicitly; product identity is fixed in the
-release builder.
+The CLI embeds the Search skill and its assets so an agent can install one
+compatible unit without a plugin manager. Kado-managed skill copies have local
+ownership receipts and are synchronized after a successful direct CLI update.
+Plugin and marketplace manifests remain optional secondary channels.
+
+The release operator provides the semantic version explicitly; product
+identity is fixed in the release builder.
 
 The release builder creates cross-platform binaries, deterministic archives,
 and signed archive metadata for self-update. Checksums, SBOMs, provenance, and
 local install/uninstall scripts are standalone operator artifacts.
+
+Direct installation from `kado.so` is the primary path and must be executable
+by an agent without a package manager or language runtime. Package-manager
+installations remain owned and updated by their package manager. Windows direct
+updates hand replacement to a verified helper process after the running CLI
+exits.
 
 ## Invariants
 
@@ -67,3 +77,4 @@ local install/uninstall scripts are standalone operator artifacts.
 - JSON-LD and schema validation remain local and deterministic.
 - CLI updates verify signed archive metadata and the replacement executable
   identity before installation.
+- Kado never overwrites a skill or executable owned by another installer.

@@ -1,0 +1,148 @@
+name: release CLI
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cli-production-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: depot-ubuntu-24.04
+    environment: cli-release
+    outputs:
+      version: ${{ steps.inputs.outputs.version }}
+      commit: ${{ steps.inputs.outputs.commit }}
+      epoch: ${{ steps.inputs.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          commit="$(git rev-parse "$tag^{commit}")"
+          printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+          printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'
+          git fetch origin main
+          git merge-base --is-ancestor "$commit" origin/main
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub Release $tag already exists" >&2
+            exit 1
+          fi
+          epoch="$(git show -s --format=%ct "$commit")"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+          echo "epoch=$epoch" >>"$GITHUB_OUTPUT"
+      - id: toolchain
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - name: Test release source
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Build twice and compare
+        env:
+          KADO_RELEASE_SIGNING_KEY: ${{ secrets.KADO_RELEASE_SIGNING_KEY }}
+          VERSION: ${{ steps.inputs.outputs.version }}
+          COMMIT: ${{ steps.inputs.outputs.commit }}
+          EPOCH: ${{ steps.inputs.outputs.epoch }}
+        run: |
+          go run ./tools/release \
+            --version "$VERSION" \
+            --commit "$COMMIT" \
+            --source-date-epoch "$EPOCH" \
+            --out dist/release-a
+          go run ./tools/release \
+            --version "$VERSION" \
+            --commit "$COMMIT" \
+            --source-date-epoch "$EPOCH" \
+            --out dist/release-b
+          diff -qr dist/release-a dist/release-b
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kado-${{ steps.inputs.outputs.version }}
+          path: dist/release-a/
+          if-no-files-found: error
+          retention-days: 14
+
+  native-smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-ubuntu-24.04
+            archive: kado_${{ needs.build.outputs.version }}_linux_amd64.tar.gz
+            binary: kado
+          - runner: depot-macos-15
+            archive: kado_${{ needs.build.outputs.version }}_darwin_arm64.tar.gz
+            binary: kado
+          - runner: depot-windows-2025
+            archive: kado_${{ needs.build.outputs.version }}_windows_amd64.zip
+            binary: kado.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kado-${{ needs.build.outputs.version }}
+          path: release
+      - name: Smoke test Unix archive
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+          BINARY: ${{ matrix.binary }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          mkdir extracted
+          tar -xzf "release/$ARCHIVE" -C extracted
+          test "$(./extracted/$BINARY version --json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')" = "$VERSION"
+          ./extracted/$BINARY release verify --directory "$PWD/release"
+      - name: Smoke test Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+          BINARY: ${{ matrix.binary }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          Expand-Archive -LiteralPath "release/$env:ARCHIVE" -DestinationPath extracted
+          $identity = & "extracted/$env:BINARY" version --json | ConvertFrom-Json
+          if ($identity.version -ne $env:VERSION) { throw "version mismatch" }
+          & "extracted/$env:BINARY" release verify --directory "$PWD/release"
+          if ($LASTEXITCODE -ne 0) { throw "release verification failed" }
+
+  publish:
+    needs: [build, native-smoke]
+    runs-on: depot-ubuntu-24.04
+    environment: cli-release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+      COMMIT: ${{ needs.build.outputs.commit }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kado-${{ needs.build.outputs.version }}
+          path: release
+      - name: Publish GitHub Release
+        run: |
+          gh release create "v$VERSION" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$COMMIT" \
+            --title "Kado CLI $VERSION" \
+            --generate-notes

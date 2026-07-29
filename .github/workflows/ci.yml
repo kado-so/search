@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build ./cmd/kado
+      - name: Cross-compile Windows update path
+        run: GOOS=windows GOARCH=amd64 go build -o /tmp/kado.exe ./cmd/kado
+      - name: Check formatting and generated files
+        run: |
+          test -z "$(gofmt -l .)"
+          git diff --exit-code
+
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-macos-15
+          - runner: depot-windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - run: go test ./...

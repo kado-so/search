@@ -124,6 +124,24 @@ func buildRelease(input buildInput) error {
 	if err != nil {
 		return err
 	}
+	skillArchive, skillMetadata, skillSignature, err := makeSkillRelease(
+		input.builtAt,
+		input.source.InstallURL,
+		input.source.Version,
+		input.privateKey,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := add("kado-search.tar.gz", skillArchive, 0o644); err != nil {
+		return err
+	}
+	if _, err := add("skill-metadata.json", skillMetadata, 0o644); err != nil {
+		return err
+	}
+	if _, err := add("skill-metadata.json.sig", skillSignature, 0o644); err != nil {
+		return err
+	}
 
 	targets := make([]releaseclient.Target, 0, len(releaseTargets))
 	for _, target := range releaseTargets {

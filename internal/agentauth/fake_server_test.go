@@ -119,8 +119,8 @@ func (fake *fakeAuthServer) handle(response http.ResponseWriter, request *http.R
 	case request.Method == http.MethodGet &&
 		request.URL.Path == "/.well-known/oauth-protected-resource":
 		fake.sendJSON(response, http.StatusOK, protectedResourceMetadata{
-			Resource:                  fake.issuer(),
-			AuthorizationServers:      []string{fake.issuer()},
+			Resource:             fake.issuer(),
+			AuthorizationServers: []string{fake.issuer()},
 			ScopesSupported: []string{
 				"search:cancel",
 				"search:create",

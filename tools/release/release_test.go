@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kado-so/search/internal/releaseclient"
+	"github.com/kado-so/search/internal/skillclient"
 )
 
 func TestDeterministicArchivesHaveSafePathsAndModes(t *testing.T) {
@@ -53,6 +54,44 @@ func TestDeterministicArchivesHaveSafePathsAndModes(t *testing.T) {
 	}
 }
 
+func TestSkillReleaseIsDeterministicAndSelfVerifying(t *testing.T) {
+	t.Parallel()
+
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatal(err)
+	}
+	private := ed25519.NewKeyFromSeed(seed)
+	builtAt := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	firstArchive, firstMetadata, firstSignature, err := makeSkillRelease(
+		builtAt,
+		"https://kado.so/install",
+		"0.1.0",
+		private,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondArchive, secondMetadata, secondSignature, err := makeSkillRelease(
+		builtAt,
+		"https://kado.so/install",
+		"0.1.0",
+		private,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstArchive, secondArchive) ||
+		!bytes.Equal(firstMetadata, secondMetadata) ||
+		!bytes.Equal(firstSignature, secondSignature) {
+		t.Fatal("skill release output is not deterministic")
+	}
+	files, err := skillclient.ExtractArchive(firstArchive)
+	if err != nil || len(files["SKILL.md"]) == 0 {
+		t.Fatalf("ExtractArchive() = %#v, %v", files, err)
+	}
+}
+
 func TestReleaseIdentityRequiresExplicitSemanticVersion(t *testing.T) {
 	t.Parallel()
 
@@ -69,6 +108,29 @@ func TestReleaseIdentityRequiresExplicitSemanticVersion(t *testing.T) {
 	for _, invalid := range []string{"", "v1.2.3", "01.2.3", "1.2"} {
 		if _, err := newReleaseIdentity(invalid); err == nil {
 			t.Fatalf("newReleaseIdentity(%q) succeeded", invalid)
+		}
+	}
+}
+
+func TestPinnedGoVersionComesFromGoModToolchain(t *testing.T) {
+	t.Parallel()
+
+	version, err := pinnedGoVersion([]byte(
+		"module github.com/kado-so/search\n\ngo 1.26.0\n\ntoolchain go1.26.4\n",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "go1.26.4" {
+		t.Fatalf("pinnedGoVersion() = %q", version)
+	}
+	for _, invalid := range [][]byte{
+		[]byte("module github.com/kado-so/search\ngo 1.26.0\n"),
+		[]byte("toolchain default\n"),
+		[]byte("toolchain go1.26\n"),
+	} {
+		if _, err := pinnedGoVersion(invalid); err == nil {
+			t.Fatalf("pinnedGoVersion(%q) succeeded", invalid)
 		}
 	}
 }
@@ -92,9 +154,6 @@ func TestGeneratedInstallAndUninstallDocumentsEnforcePolicy(t *testing.T) {
 	}
 	for _, document := range documents {
 		for _, forbidden := range []string{
-			"curl ",
-			"wget ",
-			"Invoke-WebRequest",
 			"PRIVATE KEY",
 			"KADO_RELEASE_SIGNING_KEY",
 		} {
@@ -102,6 +161,11 @@ func TestGeneratedInstallAndUninstallDocumentsEnforcePolicy(t *testing.T) {
 				t.Fatalf("generated document contains %q", forbidden)
 			}
 		}
+	}
+	if !strings.Contains(documents[1], "command -v curl") ||
+		!strings.Contains(documents[1], "command -v wget") ||
+		!strings.Contains(documents[2], "Invoke-WebRequest") {
+		t.Fatal("generated installers do not provide direct HTTPS bootstrap")
 	}
 	for _, install := range documents[:3] {
 		if !strings.Contains(install, "credentials") ||

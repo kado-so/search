@@ -178,12 +178,12 @@ func signingKeyFromEnvironment() (ed25519.PrivateKey, error) {
 }
 
 func verifyGoVersion(root, goBinary string) error {
-	configured, err := os.ReadFile(filepath.Join(root, ".prototools"))
+	configured, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
 		return errors.New("pinned Go toolchain configuration is unavailable")
 	}
-	match := regexp.MustCompile(`(?m)^go = "([^"]+)"$`).FindSubmatch(configured)
-	if len(match) != 2 {
+	want, err := pinnedGoVersion(configured)
+	if err != nil {
 		return errors.New("pinned Go toolchain version is invalid")
 	}
 	output, err := commandOutput(root, nil, goBinary, "env", "GOVERSION")
@@ -191,11 +191,20 @@ func verifyGoVersion(root, goBinary string) error {
 		return errors.New("Go toolchain version could not be read")
 	}
 	actual := strings.TrimSpace(string(output))
-	want := "go" + string(match[1])
 	if actual != want {
 		return fmt.Errorf("release requires pinned Go toolchain %s", want)
 	}
 	return nil
+}
+
+func pinnedGoVersion(goMod []byte) (string, error) {
+	match := regexp.MustCompile(
+		`(?m)^toolchain[ \t]+(go[0-9]+\.[0-9]+\.[0-9]+)[ \t]*$`,
+	).FindSubmatch(goMod)
+	if len(match) != 2 {
+		return "", errors.New("go.mod must contain an exact toolchain directive")
+	}
+	return string(match[1]), nil
 }
 
 func replaceOutput(staging, output string) error {

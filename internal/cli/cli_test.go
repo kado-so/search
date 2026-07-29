@@ -20,6 +20,7 @@ import (
 	"github.com/kado-so/search/internal/searchclient"
 	"github.com/kado-so/search/internal/searchcontract/testfixture"
 	"github.com/kado-so/search/internal/searchoutput"
+	"github.com/kado-so/search/internal/skillclient"
 )
 
 func TestHelpFormsAreBoundedAndSilentOnStderr(t *testing.T) {
@@ -794,6 +795,47 @@ func TestUpdateUsesVerifiedReleaseBoundaryAndDeterministicOutput(t *testing.T) {
 	}
 }
 
+func TestSkillInstallDefaultsToDetectedParentAndReportsOtherAgents(t *testing.T) {
+	t.Parallel()
+
+	skills := &fakeSkillCommands{installResult: skillclient.InstallResult{
+		Version: "0.2.0",
+		Installed: []skillclient.Installation{{
+			Agent:   "codex",
+			Path:    "/home/test/.codex/skills/kado-search",
+			Version: "0.2.0",
+		}},
+		OtherAgents: []string{"claude-code"},
+	}}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"skill", "install"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			detectAgent: func(string) (agentidentity.Detection, error) {
+				return agentidentity.Detection{Agent: "codex", Source: "process"}, nil
+			},
+			newSkill: func(buildinfo.Info) (skillCommands, error) {
+				return skills, nil
+			},
+		},
+	)
+	if exitCode != 0 || stderr.Len() != 0 ||
+		skills.installOptions.CurrentAgent != "codex" ||
+		!strings.Contains(stdout.String(), "installed kado-search 0.2.0 for codex") ||
+		!strings.Contains(stdout.String(), "kado skill install --all") {
+		t.Fatalf(
+			"skill install exit=%d options=%#v stdout=%q stderr=%q",
+			exitCode,
+			skills.installOptions,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
 func TestUpdateDowngradeFailureIsSafe(t *testing.T) {
 	t.Parallel()
 
@@ -986,6 +1028,34 @@ type fakeReleaseCommands struct {
 	target       releaseclient.Target
 	directory    string
 	verifyErr    error
+}
+
+type fakeSkillCommands struct {
+	installOptions skillclient.InstallOptions
+	installResult  skillclient.InstallResult
+}
+
+func (commands *fakeSkillCommands) Install(
+	_ context.Context,
+	options skillclient.InstallOptions,
+) (skillclient.InstallResult, error) {
+	commands.installOptions = options
+	return commands.installResult, nil
+}
+
+func (*fakeSkillCommands) Update(context.Context) (skillclient.UpdateResult, error) {
+	return skillclient.UpdateResult{}, nil
+}
+
+func (*fakeSkillCommands) Status() (skillclient.Status, error) {
+	return skillclient.Status{}, nil
+}
+
+func (*fakeSkillCommands) Uninstall(
+	[]string,
+	bool,
+) ([]skillclient.Installation, error) {
+	return nil, nil
 }
 
 func (releases *fakeReleaseCommands) Update(

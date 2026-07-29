@@ -24,11 +24,13 @@ import (
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/keystore"
 	"github.com/kado-so/search/internal/localstate"
+	"github.com/kado-so/search/internal/maintenance"
 	"github.com/kado-so/search/internal/releaseclient"
 	"github.com/kado-so/search/internal/requestmeta"
 	"github.com/kado-so/search/internal/searchclient"
 	"github.com/kado-so/search/internal/searchcontract"
 	"github.com/kado-so/search/internal/searchoutput"
+	"github.com/kado-so/search/internal/skillclient"
 )
 
 const helpText = `Kado Search command-line client
@@ -44,9 +46,10 @@ Commands:
   auth identities  List locally known identities
   agent detect     Show the detected agent
   agent list       List supported agents
+  skill <command>   Manage the Search skill
   update            Install a signed CLI release
   uninstall         Remove the CLI
-  release verify    Verify a release bundle
+  release verify    Verify a release
   help              Show help
   version           Show build information
 
@@ -79,6 +82,17 @@ type releaseCommands interface {
 	VerifyBundle(string) (releaseclient.Metadata, releaseclient.Target, error)
 }
 
+type releaseChecker interface {
+	Check(context.Context, string) (releaseclient.Result, error)
+}
+
+type skillCommands interface {
+	Install(context.Context, skillclient.InstallOptions) (skillclient.InstallResult, error)
+	Update(context.Context) (skillclient.UpdateResult, error)
+	Status() (skillclient.Status, error)
+	Uninstall([]string, bool) ([]skillclient.Installation, error)
+}
+
 type searchRunResult struct {
 	status    string
 	canonical []byte
@@ -91,6 +105,7 @@ type dependencies struct {
 	newAuth        func(string) (authCommands, error)
 	newSearch      func(string) (searchCommands, error)
 	newRelease     func(buildinfo.Info) (releaseCommands, error)
+	newSkill       func(buildinfo.Info) (skillCommands, error)
 }
 
 type defaultAuthCommands struct {
@@ -129,6 +144,7 @@ func Run(args []string, stdout, stderr io.Writer, info buildinfo.Info) int {
 		newAuth:        newDefaultAuthCommands,
 		newSearch:      newDefaultSearchCommands,
 		newRelease:     newDefaultReleaseCommands,
+		newSkill:       newDefaultSkillCommands,
 	})
 }
 
@@ -139,6 +155,7 @@ func runWithDependencies(
 	info buildinfo.Info,
 	dependencies dependencies,
 ) int {
+	maybeScheduleMaintenance(args, stderr, info)
 	err := run(args, stdout, info, dependencies)
 	if err == nil {
 		return 0
@@ -149,6 +166,48 @@ func runWithDependencies(
 	code, message, exitCode := diagnostic.Public(err)
 	_, _ = fmt.Fprintf(stderr, "kado: %s [%s]\n", message, code)
 	return exitCode
+}
+
+func maybeScheduleMaintenance(args []string, stderr io.Writer, info buildinfo.Info) {
+	if info.Version == "" || info.Version == "dev" ||
+		info.ReleasePublicKey == "" || info.ReleaseMetadataURL == "" ||
+		os.Getenv("KADO_MAINTENANCE_CHILD") != "" ||
+		len(args) >= 3 && args[0] == "skill" && args[1] == "update" &&
+			args[2] == "--background" {
+		return
+	}
+	safeConfig, err := config.Load()
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	state, err := maintenance.Read(safeConfig.ConfigDir)
+	if err != nil {
+		return
+	}
+	if maintenance.NoticeDue(state, now) {
+		_, _ = fmt.Fprintf(
+			stderr,
+			"kado: update %s is available; run `kado update`\n",
+			state.LatestCLIVersion,
+		)
+		state.LastNoticeAt = now.Format(time.RFC3339)
+		_ = maintenance.Write(safeConfig.ConfigDir, state)
+	}
+	if !maintenance.Due(state, now) {
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return
+	}
+	// Reserve a short window before spawning so concurrent CLI invocations do
+	// not create duplicate maintenance workers.
+	state.NextCheckAt = now.Add(10 * time.Minute).Format(time.RFC3339)
+	if err := maintenance.Write(safeConfig.ConfigDir, state); err != nil {
+		return
+	}
+	_ = maintenance.Spawn(executable)
 }
 
 func run(
@@ -167,6 +226,11 @@ func run(
 	}
 
 	switch args[0] {
+	case "__update-helper":
+		if err := releaseclient.RunWindowsUpdateHelper(args[1:]); err != nil {
+			return releaseDiagnostic(err)
+		}
+		return nil
 	case "help", "-h", "--help":
 		if len(args) != 1 {
 			return usageError("help does not accept arguments")
@@ -198,6 +262,8 @@ func run(
 		return runSearch(args[1:], stdout, override, dependencies)
 	case "agent":
 		return runAgent(args[1:], stdout, override, dependencies)
+	case "skill":
+		return runSkill(args[1:], stdout, info, override, dependencies)
 	case "update":
 		return runUpdate(args[1:], stdout, info, dependencies)
 	case "uninstall":
@@ -207,6 +273,196 @@ func run(
 	default:
 		return usageError("unknown command; run 'kado help' for usage")
 	}
+}
+
+func runSkill(
+	args []string,
+	stdout io.Writer,
+	info buildinfo.Info,
+	override string,
+	dependencies dependencies,
+) error {
+	if len(args) == 0 {
+		return usageError("usage: kado skill install|status|update|uninstall")
+	}
+	if dependencies.newSkill == nil {
+		return skillDiagnostic(errors.New("skill support unavailable"))
+	}
+	commands, err := dependencies.newSkill(info)
+	if err != nil {
+		return skillDiagnostic(err)
+	}
+	switch args[0] {
+	case "install":
+		detection, err := resolveAgent(override, dependencies)
+		if err != nil {
+			return err
+		}
+		options := skillclient.InstallOptions{CurrentAgent: detection.Agent}
+		for index := 1; index < len(args); index++ {
+			switch args[index] {
+			case "--all":
+				options.All = true
+			case "--agent":
+				if index+1 >= len(args) {
+					return usageError("--agent requires one identity")
+				}
+				index++
+				if !agentidentity.Valid(args[index]) {
+					return usageError("unknown agent identity")
+				}
+				options.Agents = append(options.Agents, args[index])
+			default:
+				return usageError("usage: kado skill install [--all] [--agent <identity>]")
+			}
+		}
+		result, err := commands.Install(context.Background(), options)
+		if err != nil {
+			return skillDiagnostic(err)
+		}
+		for _, installed := range result.Installed {
+			_, _ = fmt.Fprintf(
+				stdout,
+				"installed kado-search %s for %s at %s\n",
+				installed.Version,
+				installed.Agent,
+				installed.Path,
+			)
+		}
+		if !options.All && len(options.Agents) == 0 && len(result.OtherAgents) > 0 {
+			_, _ = fmt.Fprintf(
+				stdout,
+				"also detected %s; install for all detected agents? After approval, run `kado skill install --all`\n",
+				strings.Join(result.OtherAgents, ", "),
+			)
+		}
+		if result.UsedFallback {
+			_, _ = fmt.Fprintln(stdout, "installed the bundled offline skill fallback")
+		}
+		return nil
+	case "status":
+		if len(args) != 1 {
+			return usageError("usage: kado skill status")
+		}
+		status, err := commands.Status()
+		if err != nil {
+			return skillDiagnostic(err)
+		}
+		if len(status.Installations) == 0 {
+			_, _ = fmt.Fprintln(stdout, "no Kado-managed skills are installed")
+			return nil
+		}
+		for _, installed := range status.Installations {
+			_, _ = fmt.Fprintf(
+				stdout,
+				"kado-search %s agent=%s path=%s\n",
+				installed.Version,
+				installed.Agent,
+				installed.Path,
+			)
+		}
+		return nil
+	case "update":
+		background := len(args) == 2 && args[1] == "--background"
+		if len(args) != 1 && !background {
+			return usageError("usage: kado skill update")
+		}
+		result, err := commands.Update(context.Background())
+		if err != nil {
+			return skillDiagnostic(err)
+		}
+		if background {
+			latest := info.Version
+			available := false
+			if dependencies.newRelease != nil {
+				if releases, releaseErr := dependencies.newRelease(info); releaseErr == nil {
+					if checker, ok := releases.(releaseChecker); ok {
+						check, checkErr := checker.Check(context.Background(), info.Version)
+						if checkErr == nil {
+							latest = check.ToVersion
+							available = check.Changed
+						}
+					}
+				}
+			}
+			if safeConfig, configErr := config.Load(); configErr == nil {
+				state, _ := maintenance.Read(safeConfig.ConfigDir)
+				state = maintenance.Complete(
+					state,
+					time.Now(),
+					info.Version,
+					latest,
+					available,
+				)
+				_ = maintenance.Write(safeConfig.ConfigDir, state)
+			}
+			return nil
+		}
+		for _, updated := range result.Updated {
+			_, _ = fmt.Fprintf(
+				stdout,
+				"updated kado-search to %s for %s\n",
+				updated.Version,
+				updated.Agent,
+			)
+		}
+		if len(result.Updated) == 0 && len(result.Failures) == 0 {
+			_, _ = fmt.Fprintln(stdout, "Kado-managed skills are up to date")
+		}
+		for path, code := range result.Failures {
+			_, _ = fmt.Fprintf(stdout, "could not update %s (%s)\n", path, code)
+		}
+		return nil
+	case "uninstall":
+		all := false
+		agents := []string(nil)
+		for index := 1; index < len(args); index++ {
+			switch args[index] {
+			case "--all":
+				all = true
+			case "--agent":
+				if index+1 >= len(args) {
+					return usageError("--agent requires one identity")
+				}
+				index++
+				agents = append(agents, args[index])
+			default:
+				return usageError("usage: kado skill uninstall [--all] [--agent <identity>]")
+			}
+		}
+		if !all && len(agents) == 0 {
+			detection, err := resolveAgent(override, dependencies)
+			if err != nil {
+				return err
+			}
+			agents = []string{detection.Agent}
+		}
+		removed, err := commands.Uninstall(agents, all)
+		if err != nil {
+			return skillDiagnostic(err)
+		}
+		for _, item := range removed {
+			_, _ = fmt.Fprintf(stdout, "removed kado-search for %s\n", item.Agent)
+		}
+		return nil
+	default:
+		return usageError("usage: kado skill install|status|update|uninstall")
+	}
+}
+
+func skillDiagnostic(cause error) error {
+	message := "could not install or update the Kado Search skill"
+	switch {
+	case errors.Is(cause, skillclient.ErrUnsupportedAgent):
+		message = "the detected agent does not have a supported skill location"
+	case errors.Is(cause, skillclient.ErrExternallyManaged):
+		message = "the skill destination is managed by another installer"
+	case errors.Is(cause, skillclient.ErrLocallyModified):
+		message = "the Kado-managed skill was modified locally"
+	case errors.Is(cause, skillclient.ErrUnsupportedCLI):
+		message = "the latest skill requires a newer Kado CLI"
+	}
+	return diagnostic.New("skill_failed", message, diagnostic.ExitFailure, cause)
 }
 
 func parseGlobalOptions(args []string) (string, []string, error) {
@@ -351,7 +607,14 @@ func runUpdate(
 			result.ToVersion,
 			result.Target,
 		)
+	case result.Pending:
+		_, _ = fmt.Fprintf(
+			stdout,
+			"verified kado %s; Windows will finish the update after this process exits\n",
+			result.ToVersion,
+		)
 	case result.Changed:
+		scheduleMaintenanceNow()
 		_, _ = fmt.Fprintf(
 			stdout,
 			"updated kado %s to %s for %s\n",
@@ -363,6 +626,22 @@ func runUpdate(
 		_, _ = fmt.Fprintf(stdout, "kado %s is already current\n", result.ToVersion)
 	}
 	return nil
+}
+
+func scheduleMaintenanceNow() {
+	safeConfig, err := config.Load()
+	if err != nil {
+		return
+	}
+	state, _ := maintenance.Read(safeConfig.ConfigDir)
+	state.NextCheckAt = time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
+	if err := maintenance.Write(safeConfig.ConfigDir, state); err != nil {
+		return
+	}
+	executable, err := os.Executable()
+	if err == nil {
+		_ = maintenance.Spawn(executable)
+	}
 }
 
 func runUninstall(
@@ -947,6 +1226,27 @@ func newDefaultReleaseCommands(info buildinfo.Info) (releaseCommands, error) {
 	}, nil
 }
 
+func newDefaultSkillCommands(info buildinfo.Info) (skillCommands, error) {
+	safeConfig, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	return &skillclient.Manager{
+		ConfigDir:      safeConfig.ConfigDir,
+		HomeDir:        home,
+		BaseURL:        strings.TrimSuffix(safeConfig.BaseURL.String(), "/"),
+		PublicKey:      info.ReleasePublicKey,
+		CurrentVersion: info.Version,
+		Fetcher: releaseclient.HTTPFetcher{
+			Client: boundedHTTPClient(15*time.Second, 64*1024),
+		},
+	}, nil
+}
+
 func boundedHTTPClient(timeout time.Duration, maxResponseHeaderBytes int64) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxResponseHeaderBytes = maxResponseHeaderBytes
@@ -1038,6 +1338,13 @@ func (commands *defaultReleaseCommands) Update(
 	options.TargetPath = commands.executable
 	options.CurrentVersion = commands.info.Version
 	return commands.manager.Update(ctx, options)
+}
+
+func (commands *defaultReleaseCommands) Check(
+	ctx context.Context,
+	currentVersion string,
+) (releaseclient.Result, error) {
+	return commands.manager.Check(ctx, currentVersion)
 }
 
 func (commands *defaultReleaseCommands) Uninstall() error {
