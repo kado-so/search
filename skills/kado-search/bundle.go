@@ -16,6 +16,11 @@ import (
 //go:embed SKILL.md assets/* agents/*
 var Files embed.FS
 
+// MinimumCLIVersion is the oldest CLI version compatible with this skill
+// release. It changes only when the skill starts relying on newer CLI
+// behavior, not whenever the CLI itself is released.
+const MinimumCLIVersion = "0.1.0"
+
 // Bundle returns the embedded regular files in stable path order.
 func Bundle() (map[string][]byte, error) {
 	output := make(map[string][]byte)
