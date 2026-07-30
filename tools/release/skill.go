@@ -15,9 +15,7 @@ import (
 )
 
 func makeSkillRelease(
-	builtAt time.Time,
 	baseURL string,
-	cliVersion string,
 	private ed25519.PrivateKey,
 ) (archive, metadata, signature []byte, err error) {
 	files, err := kadoskill.Bundle()
@@ -28,7 +26,7 @@ func makeSkillRelease(
 	if version == "" {
 		return nil, nil, nil, errors.New("bundled skill version is invalid")
 	}
-	archive, err = makeSkillArchive(builtAt, files)
+	archive, err = makeSkillArchive(files)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -36,7 +34,7 @@ func makeSkillRelease(
 		SchemaVersion:     skillclient.SchemaVersion,
 		Name:              skillclient.SkillName,
 		Version:           version,
-		MinimumCLIVersion: cliVersion,
+		MinimumCLIVersion: kadoskill.MinimumCLIVersion,
 		Archive: skillclient.Archive{
 			URL:    baseURL + "/skills/kado-search/latest/kado-search.tar.gz",
 			Size:   int64(len(archive)),
@@ -60,15 +58,17 @@ func makeSkillRelease(
 }
 
 func makeSkillArchive(
-	builtAt time.Time,
 	files map[string][]byte,
 ) ([]byte, error) {
+	// The skill is independently versioned from the CLI. Keep its archive
+	// bytes stable when an unchanged skill is included in later CLI releases.
+	archivedAt := time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC)
 	var output bytes.Buffer
 	compressed, err := gzip.NewWriterLevel(&output, gzip.BestCompression)
 	if err != nil {
 		return nil, err
 	}
-	compressed.Header.ModTime = builtAt
+	compressed.Header.ModTime = archivedAt
 	compressed.Header.OS = 255
 	archive := tar.NewWriter(compressed)
 	for _, name := range sortedSkillNames(files) {
@@ -77,7 +77,7 @@ func makeSkillArchive(
 			Name:       "kado-search/" + name,
 			Mode:       0o644,
 			Size:       int64(len(value)),
-			ModTime:    builtAt,
+			ModTime:    archivedAt,
 			AccessTime: time.Time{},
 			ChangeTime: time.Time{},
 			Typeflag:   tar.TypeReg,

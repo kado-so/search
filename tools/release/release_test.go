@@ -48,11 +48,8 @@ func TestSkillReleaseIsSelfVerifying(t *testing.T) {
 		t.Fatal(err)
 	}
 	private := ed25519.NewKeyFromSeed(seed)
-	builtAt := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
 	archive, _, _, err := makeSkillRelease(
-		builtAt,
 		"https://kado.so/install",
-		"0.1.0",
 		private,
 	)
 	if err != nil {
@@ -61,6 +58,35 @@ func TestSkillReleaseIsSelfVerifying(t *testing.T) {
 	files, err := skillclient.ExtractArchive(archive)
 	if err != nil || len(files["SKILL.md"]) == 0 {
 		t.Fatalf("ExtractArchive() = %#v, %v", files, err)
+	}
+}
+
+func TestSkillReleaseIsIndependentOfCLIBuild(t *testing.T) {
+	t.Parallel()
+
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatal(err)
+	}
+	private := ed25519.NewKeyFromSeed(seed)
+	firstArchive, firstMetadata, firstSignature, err := makeSkillRelease(
+		"https://kado.so/install",
+		private,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondArchive, secondMetadata, secondSignature, err := makeSkillRelease(
+		"https://kado.so/install",
+		private,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstArchive, secondArchive) ||
+		!bytes.Equal(firstMetadata, secondMetadata) ||
+		!bytes.Equal(firstSignature, secondSignature) {
+		t.Fatal("unchanged skill release is not reproducible")
 	}
 }
 

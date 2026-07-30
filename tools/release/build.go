@@ -124,9 +124,7 @@ func buildRelease(input buildInput) error {
 		return err
 	}
 	skillArchive, skillMetadata, skillSignature, err := makeSkillRelease(
-		input.builtAt,
 		input.source.InstallURL,
-		input.source.Version,
 		input.privateKey,
 	)
 	if err != nil {
