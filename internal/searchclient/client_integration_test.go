@@ -188,7 +188,7 @@ func TestRunPollsProductDocumentThroughPrivateLifecycleEndpoint(t *testing.T) {
 	}
 }
 
-func TestRunRestartsOnceWhenSharedLifecycleIsUnavailable(t *testing.T) {
+func TestRunDoesNotRestartNonRetryableUnavailableLifecycle(t *testing.T) {
 	t.Parallel()
 
 	initialCalls := 0
@@ -204,21 +204,11 @@ func TestRunRestartsOnceWhenSharedLifecycleIsUnavailable(t *testing.T) {
 			return
 		}
 		initialCalls++
-		if initialCalls == 1 {
-			writeDocument(response, lifecycleDocument(
-				serverURL(request)+"/search/search_shared/opaque_token_1",
-				"shared lifecycle",
-				"search_shared",
-				StatusRunning,
-			))
-			return
-		}
-		writeDocument(response, completeDocument(
-			serverURL(request),
-			"shared lifecycle",
-			"search_replacement",
-			"",
-			"",
+		writeDocument(response, lifecycleDocument(
+			serverURL(request)+"/search/search_private/opaque_token_1",
+			"private lifecycle",
+			"search_private",
+			StatusRunning,
 		))
 	}))
 	defer server.Close()
@@ -227,16 +217,16 @@ func TestRunRestartsOnceWhenSharedLifecycleIsUnavailable(t *testing.T) {
 	client.wait = noWait
 	options := DefaultRunOptions()
 	options.FollowPages = false
-	result, err := client.Run(context.Background(), "shared lifecycle", options)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if result.Document.Status != StatusComplete ||
-		result.Document.SearchID != "search_replacement" ||
-		initialCalls != 2 || statusCalls != 1 {
+	result, err := client.Run(context.Background(), "private lifecycle", options)
+	var remote *Error
+	if !errors.As(err, &remote) ||
+		remote.Code() != "invalid_search_operation" ||
+		remote.Retryable() ||
+		result.Document.SearchID != "search_private" ||
+		initialCalls != 1 || statusCalls != 1 {
 		t.Fatalf(
-			"status=%s id=%s initial=%d status_calls=%d",
-			result.Document.Status,
+			"error=%v result_id=%s initial=%d status_calls=%d",
+			err,
 			result.Document.SearchID,
 			initialCalls,
 			statusCalls,
