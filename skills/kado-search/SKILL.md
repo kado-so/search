@@ -4,7 +4,7 @@ description: "Find current external solutions to a user's problem with Kado. Use
 license: "MIT"
 metadata:
   author: "Kado"
-  version: "0.1.1"
+  version: "0.2.0"
   homepage: "https://kado.so"
 ---
 
@@ -39,7 +39,27 @@ proceed.
 
 ## Search
 
-Perform one bounded Kado Search using the problem statement.
+Prefer the installed `kado` binary. It calls only the hosted `/api/agent/*`
+app contract. Run one bounded Search:
+
+```bash
+kado search "find invoice approval automation" --json --wait
+```
+
+Set `KADO_SEARCH_APP_URL` or pass `--base-url` only when the hosted app URL is
+not already configured. Authenticate with an existing CLI identity or
+`KADO_API_KEY`; never print credentials.
+
+JSON output is compact `agent-cli-json.v1`. Use `best_matches` first, then
+`stretch_matches` and `later_matches`. Continue with the exact
+`continuation.next_command` when it is present. Common continuations are:
+
+```bash
+kado search status <search-id> --json
+kado search refine <search-id> --dimension budget_monthly_usd=200 --json --wait
+kado search answer <search-id> <question-id> "About 750 leads per month" --json --wait
+kado search cancel <search-id>
+```
 
 If Search requests clarification, use an answer already established in the
 conversation. If the answer is consequential and unknown, ask the user one
@@ -57,5 +77,5 @@ For each option:
   build choices when that affects the decision.
 
 Do not expose internal ranking labels or infer claims absent from the results.
-Do not paste raw JSONL unless the user asks for machine output. Say that Kado
+Do not paste raw JSON unless the user asks for machine output. Say that Kado
 was used when its results materially inform the answer.

@@ -3,23 +3,19 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 	"unicode"
 
+	"github.com/kado-so/search/internal/agentapi"
 	"github.com/kado-so/search/internal/agentauth"
 	"github.com/kado-so/search/internal/agentidentity"
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/releaseclient"
-	"github.com/kado-so/search/internal/searchclient"
-	"github.com/kado-so/search/internal/searchcontract/testfixture"
-	"github.com/kado-so/search/internal/searchoutput"
 	"github.com/kado-so/search/internal/skillclient"
 )
 
@@ -384,378 +380,103 @@ func TestNonAuthAndInvalidAuthCommandsDoNotInitializeCredentialAccess(t *testing
 	}
 }
 
-func TestSearchRunsLifecycleWithBoundedOptionsAndSafeSummary(t *testing.T) {
+func TestSearchStartUsesKadoAppContractOptions(t *testing.T) {
 	t.Parallel()
-
-	canonical, err := testfixture.Load("complete")
-	if err != nil {
-		t.Fatalf("testfixture.Load(complete) error = %v", err)
-	}
-	search := &fakeSearchCommands{
-		result: searchRunResult{
-			status:    searchclient.StatusComplete,
-			canonical: canonical,
-			pages:     [][]byte{canonical},
-		},
-	}
+	search := &fakeSearchCommands{response: completedAgentResponse()}
+	var connection searchConnectionOptions
 	var stdout, stderr bytes.Buffer
 	exitCode := runWithDependencies(
-		[]string{
-			"search",
-			"--timeout",
-			"45s",
-			"--answer",
-			"Web",
-			"--first-page",
-			"--retry",
-			"find",
-			"agent",
-			"tools",
-		},
-		&stdout,
-		&stderr,
-		buildinfo.Info{},
-		dependencies{
-			newSearch: func(string) (searchCommands, error) {
-				return search, nil
-			},
-		},
-	)
-	if exitCode != 0 || stderr.Len() != 0 {
-		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
-	}
-	expected, err := searchoutput.Render(
-		canonical,
-		[][]byte{canonical},
-		searchoutput.Options{Mode: searchoutput.ModeHuman},
-	)
-	if err != nil {
-		t.Fatalf("Render(expected human) error = %v", err)
-	}
-	if !bytes.Equal(stdout.Bytes(), expected) {
-		t.Fatalf("stdout = %q", stdout.String())
-	}
-	if search.query != "find agent tools" ||
-		search.options.Timeout != 45*time.Second ||
-		search.options.FollowPages ||
-		!search.options.RetryFailure ||
-		search.options.Clarify == nil {
-		t.Fatalf("query=%q options=%#v", search.query, search.options)
-	}
-	answer, err := search.options.Clarify(
-		context.Background(),
-		searchclient.Question{ID: "question_1"},
-	)
-	if err != nil || answer != "Web" {
-		t.Fatalf("clarifier answer=%q error=%v", answer, err)
-	}
-}
-
-func TestSearchFailuresAreBoundedAndNeverRenderPrivateCauses(t *testing.T) {
-	t.Parallel()
-
-	secret := "Bearer private-access-token /private/keychain/path"
-	for _, test := range []struct {
-		name     string
-		err      error
-		wantCode string
-		wantText string
-	}{
-		{
-			name:     "clarification",
-			err:      &searchclient.NeedsInputError{},
-			wantCode: "search_needs_input",
-			wantText: "Search requires clarification",
-		},
-		{
-			name: "structured failure",
-			err: &searchclient.FailureError{Failure: searchclient.Failure{
-				Code:      "source_unavailable",
-				Message:   "A source was unavailable.",
-				Retryable: true,
-			}},
-			wantCode: "source_unavailable",
-			wantText: "A source was unavailable.",
-		},
-		{
-			name:     "private cause",
-			err:      errors.New(secret),
-			wantCode: "search_failed",
-			wantText: "Could not complete the Search",
-		},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			search := &fakeSearchCommands{err: test.err}
-			var stdout, stderr bytes.Buffer
-			exitCode := runWithDependencies(
-				[]string{"search", "agent tools"},
-				&stdout,
-				&stderr,
-				buildinfo.Info{},
-				dependencies{
-					newSearch: func(string) (searchCommands, error) {
-						return search, nil
-					},
-				},
-			)
-			if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 ||
-				!strings.Contains(stderr.String(), test.wantCode) ||
-				!strings.Contains(stderr.String(), test.wantText) ||
-				strings.Contains(stderr.String(), secret) {
-				t.Fatalf(
-					"exit=%d stdout=%q stderr=%q",
-					exitCode,
-					stdout.String(),
-					stderr.String(),
-				)
-			}
-		})
-	}
-}
-
-func TestSearchFailureStderrRemovesTerminalControlsAndPreservesUnicode(t *testing.T) {
-	t.Parallel()
-
-	search := &fakeSearchCommands{
-		err: &searchclient.FailureError{Failure: searchclient.Failure{
-			Code: "source_unavailable",
-			Message: "before\u001b\u0085\u009b\u2028\u2029\u202e\u2066after " +
-				"Café 世界 🧭",
-			Retryable: true,
-		}},
-	}
-	var stdout, stderr bytes.Buffer
-	exitCode := runWithDependencies(
-		[]string{"search", "agent tools"},
-		&stdout,
-		&stderr,
-		buildinfo.Info{},
-		dependencies{
-			newSearch: func(string) (searchCommands, error) {
-				return search, nil
-			},
-		},
-	)
-	if exitCode != diagnostic.ExitFailure ||
-		stdout.Len() != 0 ||
-		!strings.Contains(stderr.String(), "before after Café 世界 🧭") ||
-		strings.ContainsFunc(stderr.String(), unsafeTerminalRune) {
-		t.Fatalf(
-			"exit=%d stdout=%q stderr=%q",
-			exitCode,
-			stdout.String(),
-			stderr.String(),
-		)
-	}
-}
-
-func TestSearchOutputModesUseValidatedCanonicalBytesAndProjections(t *testing.T) {
-	t.Parallel()
-
-	canonical, err := testfixture.Load("complete")
-	if err != nil {
-		t.Fatalf("testfixture.Load(complete) error = %v", err)
-	}
-	for _, test := range []struct {
-		name    string
-		args    []string
-		options searchoutput.Options
-	}{
-		{
-			name:    "canonical JSON",
-			args:    []string{"search", "--json", "example query"},
-			options: searchoutput.Options{Mode: searchoutput.ModeJSON},
-		},
-		{
-			name:    "JSONL",
-			args:    []string{"search", "--jsonl", "example query"},
-			options: searchoutput.Options{Mode: searchoutput.ModeJSONL},
-		},
-		{
-			name:    "narrow human",
-			args:    []string{"search", "--width", "52", "example query"},
-			options: searchoutput.Options{Mode: searchoutput.ModeHuman, Width: 52},
-		},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			search := &fakeSearchCommands{result: searchRunResult{
-				status:    searchclient.StatusComplete,
-				canonical: canonical,
-				pages:     [][]byte{canonical},
-			}}
-			var stdout, stderr bytes.Buffer
-			exitCode := runWithDependencies(
-				test.args,
-				&stdout,
-				&stderr,
-				buildinfo.Info{},
-				dependencies{newSearch: func(string) (searchCommands, error) {
-					return search, nil
-				}},
-			)
-			want, err := searchoutput.Render(canonical, [][]byte{canonical}, test.options)
-			if err != nil {
-				t.Fatalf("Render(expected %s) error = %v", test.name, err)
-			}
-			if exitCode != 0 ||
-				stderr.Len() != 0 ||
-				!bytes.Equal(stdout.Bytes(), want) {
-				t.Fatalf(
-					"%s exit=%d stdout=%q stderr=%q",
-					test.name,
-					exitCode,
-					stdout.String(),
-					stderr.String(),
-				)
-			}
-			if test.options.Mode == searchoutput.ModeJSON && search.options.FollowPages {
-				t.Fatal("--json followed pagination despite emitting one canonical document")
-			}
-		})
-	}
-}
-
-func TestSearchFailureModesEmitValidatedLifecycleDocumentBeforeSafeDiagnostic(t *testing.T) {
-	t.Parallel()
-
-	canonical, err := testfixture.Load("failed")
-	if err != nil {
-		t.Fatalf("testfixture.Load(failed) error = %v", err)
-	}
-	search := &fakeSearchCommands{
-		result: searchRunResult{
-			status:    searchclient.StatusFailed,
-			canonical: canonical,
-		},
-		err: &searchclient.FailureError{Failure: searchclient.Failure{
-			Code:      "source_unavailable",
-			Message:   "A required public source was unavailable.",
-			Retryable: true,
-		}},
-	}
-	var stdout, stderr bytes.Buffer
-	exitCode := runWithDependencies(
-		[]string{"search", "--json", "example query"},
-		&stdout,
-		&stderr,
-		buildinfo.Info{},
-		dependencies{newSearch: func(string) (searchCommands, error) {
+		[]string{"search", "--json", "--wait", "--timeout", "45s", "--poll-interval-ms", "500", "--base-url", "https://search.kado.test", "--api-key", "secret", "find", "agent", "tools"},
+		&stdout, &stderr, buildinfo.Info{Version: "0.1.3"},
+		dependencies{newSearch: func(_ string, options searchConnectionOptions) (searchCommands, error) {
+			connection = options
 			return search, nil
 		}},
 	)
-	if exitCode != diagnostic.ExitFailure ||
-		!bytes.Equal(stdout.Bytes(), canonical) ||
-		!strings.Contains(stderr.String(), "source_unavailable") {
-		t.Fatalf(
-			"failure exit=%d stdout=%q stderr=%q",
-			exitCode,
-			stdout.String(),
-			stderr.String(),
-		)
+	if exitCode != 0 || stderr.Len() != 0 || stdout.String() != string(search.response.ResultJSON) {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if search.operation != "start" || search.start.Query != "find agent tools" || !search.start.Wait.Enabled || search.start.Wait.TimeoutMS != 45_000 || search.start.Wait.PollIntervalMS != 500 || search.start.Version != "0.1.3" {
+		t.Fatalf("start=%#v operation=%q", search.start, search.operation)
+	}
+	if connection.baseURL != "https://search.kado.test" || connection.apiKey != "secret" {
+		t.Fatalf("connection=%#v", connection)
+	}
+}
+
+func TestSearchSubcommandsMapToAgentAPI(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		args      []string
+		operation string
+	}{
+		{[]string{"search", "status", "app_search_1", "--json", "--wait"}, "status"},
+		{[]string{"search", "refine", "app_search_1", "--dimension", "budget_monthly_usd=200", "--json"}, "refine"},
+		{[]string{"search", "answer", "app_search_1", "lead_volume", "About 750 leads", "--json"}, "answer"},
+		{[]string{"search", "cancel", "app_search_1", "--reason", "done", "--json"}, "cancel"},
+	}
+	for _, test := range tests {
+		search := &fakeSearchCommands{response: completedAgentResponse()}
+		var stdout, stderr bytes.Buffer
+		exitCode := runWithDependencies(test.args, &stdout, &stderr, buildinfo.Info{}, dependencies{newSearch: func(string, searchConnectionOptions) (searchCommands, error) { return search, nil }})
+		if exitCode != 0 || stderr.Len() != 0 || search.operation != test.operation {
+			t.Fatalf("args=%v exit=%d operation=%q stderr=%q", test.args, exitCode, search.operation, stderr.String())
+		}
+	}
+}
+
+func TestSearchHumanOutputAndJSONErrorsStayBounded(t *testing.T) {
+	t.Parallel()
+	completed := &fakeSearchCommands{response: completedAgentResponse()}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies([]string{"search", "agent tools"}, &stdout, &stderr, buildinfo.Info{}, dependencies{newSearch: func(string, searchConnectionOptions) (searchCommands, error) { return completed, nil }})
+	if exitCode != 0 || !strings.Contains(stdout.String(), "Search completed: app_search_1") || !strings.Contains(stdout.String(), "1. Kado Match") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+
+	secret := "Bearer private-access-token /private/path"
+	failed := &fakeSearchCommands{err: errors.New(secret)}
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithDependencies([]string{"search", "--json", "agent tools"}, &stdout, &stderr, buildinfo.Info{}, dependencies{newSearch: func(string, searchConnectionOptions) (searchCommands, error) { return failed, nil }})
+	if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 || strings.Contains(stderr.String(), secret) || !strings.Contains(stderr.String(), "search_failed") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+
+	apiFailure := completedAgentResponse()
+	apiFailure.ResultJSON = []byte("{\"schema_version\":\"agent-cli-json.v1\",\"state\":\"failed\"}\n")
+	remote := &fakeSearchCommands{response: apiFailure, err: &agentapi.Error{Code: "agent.rate_limited", Message: "Try later.", StatusCode: 429}}
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithDependencies([]string{"search", "--json", "agent tools"}, &stdout, &stderr, buildinfo.Info{}, dependencies{newSearch: func(string, searchConnectionOptions) (searchCommands, error) { return remote, nil }})
+	if exitCode != diagnostic.ExitFailure || stdout.String() != string(apiFailure.ResultJSON) || !strings.Contains(stderr.String(), "agent_rate_limited") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
 	}
 }
 
 func TestSearchBrokenPipeStopsSilently(t *testing.T) {
 	t.Parallel()
-
-	canonical, err := testfixture.Load("complete")
-	if err != nil {
-		t.Fatalf("testfixture.Load(complete) error = %v", err)
-	}
-	search := &fakeSearchCommands{result: searchRunResult{
-		status:    searchclient.StatusComplete,
-		canonical: canonical,
-		pages:     [][]byte{canonical},
-	}}
+	search := &fakeSearchCommands{response: completedAgentResponse()}
 	var stderr bytes.Buffer
-	exitCode := runWithDependencies(
-		[]string{"search", "--jsonl", "example query"},
-		closedPipeWriter{},
-		&stderr,
-		buildinfo.Info{},
-		dependencies{newSearch: func(string) (searchCommands, error) {
-			return search, nil
-		}},
-	)
+	exitCode := runWithDependencies([]string{"search", "--json", "example query"}, closedPipeWriter{}, &stderr, buildinfo.Info{}, dependencies{newSearch: func(string, searchConnectionOptions) (searchCommands, error) { return search, nil }})
 	if exitCode != 0 || stderr.Len() != 0 {
 		t.Fatalf("broken pipe exit=%d stderr=%q", exitCode, stderr.String())
 	}
 }
 
-func TestSearchUnsupportedMajorFailsClearlyBeforeOutput(t *testing.T) {
-	t.Parallel()
-
-	var value map[string]any
-	if err := json.Unmarshal(mustFixture(t, "complete"), &value); err != nil {
-		t.Fatalf("json.Unmarshal(complete) error = %v", err)
-	}
-	value["schema_version"] = "kado.search-document.v8"
-	value["search"].(map[string]any)["query"] = "Bearer must-not-appear"
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatalf("json.Marshal(v8) error = %v", err)
-	}
-	search := &fakeSearchCommands{result: searchRunResult{
-		status:    searchclient.StatusComplete,
-		canonical: encoded,
-		pages:     [][]byte{encoded},
-	}}
-	var stdout, stderr bytes.Buffer
-	exitCode := runWithDependencies(
-		[]string{"search", "--json", "example query"},
-		&stdout,
-		&stderr,
-		buildinfo.Info{},
-		dependencies{newSearch: func(string) (searchCommands, error) {
-			return search, nil
-		}},
-	)
-	if exitCode != diagnostic.ExitFailure ||
-		stdout.Len() != 0 ||
-		!strings.Contains(stderr.String(), "search_document_version_unsupported") ||
-		!strings.Contains(stderr.String(), "v8") ||
-		strings.Contains(stderr.String(), "Bearer") ||
-		strings.Contains(stderr.String(), "must-not-appear") {
-		t.Fatalf(
-			"unsupported exit=%d stdout=%q stderr=%q",
-			exitCode,
-			stdout.String(),
-			stderr.String(),
-		)
-	}
-}
-
 func TestInvalidSearchUsageDoesNotInitializeAuthentication(t *testing.T) {
 	t.Parallel()
-
-	dependencies := dependencies{
-		newSearch: func(string) (searchCommands, error) {
-			t.Fatal("Search authentication initialized")
-			return nil, nil
-		},
-	}
+	dependencies := dependencies{newSearch: func(string, searchConnectionOptions) (searchCommands, error) {
+		t.Fatal("Search authentication initialized")
+		return nil, nil
+	}}
 	for _, args := range [][]string{
-		{"search"},
-		{"search", "--unknown", "query"},
-		{"search", "--timeout", "forever", "query"},
-		{"search", "--answer", "one", "--answer", "two", "query"},
-		{"search", "--json", "--jsonl", "query"},
-		{"search", "--width", "39", "query"},
-		{"search", "--width", "161", "query"},
+		{"search"}, {"search", "--unknown", "query"}, {"search", "--timeout", "forever", "query"},
+		{"search", "answer", "missing"}, {"search", "refine", "app_search_1"},
+		{"search", "cancel", "app_search_1", "--wait"}, {"search", "status", "bad/id"},
 	} {
 		var stdout, stderr bytes.Buffer
-		exitCode := runWithDependencies(
-			args,
-			&stdout,
-			&stderr,
-			buildinfo.Info{},
-			dependencies,
-		)
-		if exitCode != diagnostic.ExitUsage {
+		if exitCode := runWithDependencies(args, &stdout, &stderr, buildinfo.Info{}, dependencies); exitCode != diagnostic.ExitUsage {
 			t.Fatalf("Run(%q) exit=%d stderr=%q", args, exitCode, stderr.String())
 		}
 	}
@@ -986,15 +707,6 @@ func (closedPipeWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
-func mustFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	value, err := testfixture.Load(name)
-	if err != nil {
-		t.Fatalf("testfixture.Load(%s) error = %v", name, err)
-	}
-	return value
-}
-
 type fakeAuthCommands struct {
 	status      agentauth.CredentialStatus
 	revoked     agentauth.CredentialStatus
@@ -1012,10 +724,14 @@ type fakeCreateAuthCommands struct {
 }
 
 type fakeSearchCommands struct {
-	result  searchRunResult
-	err     error
-	query   string
-	options searchclient.RunOptions
+	response  agentapi.Response
+	err       error
+	operation string
+	start     agentapi.StartRequest
+	statusID  string
+	refine    agentapi.RefineRequest
+	answer    agentapi.AnswerRequest
+	cancel    agentapi.CancelRequest
 }
 
 type fakeReleaseCommands struct {
@@ -1078,14 +794,40 @@ func (releases *fakeReleaseCommands) VerifyBundle(
 	return releases.metadata, releases.target, releases.verifyErr
 }
 
-func (search *fakeSearchCommands) Run(
-	_ context.Context,
-	query string,
-	options searchclient.RunOptions,
-) (searchRunResult, error) {
-	search.query = query
-	search.options = options
-	return search.result, search.err
+func (search *fakeSearchCommands) Start(_ context.Context, request agentapi.StartRequest) (agentapi.Response, error) {
+	search.operation, search.start = "start", request
+	return search.response, search.err
+}
+func (search *fakeSearchCommands) Status(_ context.Context, id string, _ agentapi.WaitOptions, _ agentapi.ResultLimits) (agentapi.Response, error) {
+	search.operation, search.statusID = "status", id
+	return search.response, search.err
+}
+func (search *fakeSearchCommands) Refine(_ context.Context, request agentapi.RefineRequest) (agentapi.Response, error) {
+	search.operation, search.refine = "refine", request
+	return search.response, search.err
+}
+func (search *fakeSearchCommands) Answer(_ context.Context, request agentapi.AnswerRequest) (agentapi.Response, error) {
+	search.operation, search.answer = "answer", request
+	return search.response, search.err
+}
+func (search *fakeSearchCommands) Cancel(_ context.Context, request agentapi.CancelRequest) (agentapi.Response, error) {
+	search.operation, search.cancel = "cancel", request
+	return search.response, search.err
+}
+
+func completedAgentResponse() agentapi.Response {
+	searchID := "app_search_1"
+	searchURL := "https://kado.so/search?q=agent+tools"
+	result := agentapi.Result{
+		SchemaVersion:  agentapi.JSONSchemaVersion,
+		SearchID:       &searchID,
+		SearchURL:      &searchURL,
+		State:          "completed",
+		BestMatches:    []agentapi.Match{{Rank: 1, SolutionID: "solution_1", Name: "Kado Match", Summary: "A strong match.", SolutionURL: "https://example.com", Why: []string{}, Constraints: agentapi.Constraints{Satisfied: []string{}, Violated: []string{}}, RequiredIntegrations: []string{}}},
+		StretchMatches: []agentapi.Match{}, LaterMatches: []agentapi.Match{},
+		Questions: []agentapi.Question{}, Dimensions: []agentapi.Dimension{},
+	}
+	return agentapi.Response{StatusCode: 200, Result: result, ResultJSON: []byte("{\"schema_version\":\"agent-cli-json.v1\",\"search_id\":\"app_search_1\",\"search_url\":\"https://kado.so/search?q=agent+tools\",\"state\":\"completed\",\"best_matches\":[],\"stretch_matches\":[],\"later_matches\":[],\"questions\":[],\"dimensions\":[],\"error\":null,\"pagination\":{},\"continuation\":{}}\n")}
 }
 
 func (auth *fakeAuthCommands) Status(

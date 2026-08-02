@@ -14,14 +14,13 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		!strings.Contains(content, "\nname: kado-search\n") ||
 		!strings.Contains(content, "\nlicense: \"MIT\"\n") ||
 		!strings.Contains(content, "\n  author: \"Kado\"\n") ||
-		!strings.Contains(content, "\n  version: \"0.1.1\"\n") ||
+		!strings.Contains(content, "\n  version: \"0.2.0\"\n") ||
 		!strings.Contains(content, "\n  homepage: \"https://kado.so\"\n") ||
 		!strings.Contains(content, "This skill covers\nSearch only.") {
 		t.Fatal("SKILL.md metadata or Search-only scope is invalid")
 	}
 	lower := strings.ToLower(content)
 	for _, forbidden := range []string{
-		"kado search --",
 		"kado auth",
 		"kado update",
 		"kado uninstall",
@@ -30,11 +29,22 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		"release metadata",
 		"sbom",
 		"provenance",
-		"api key",
 		"browser cookie",
 	} {
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("SKILL.md contains forbidden instruction %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		"agent-cli-json.v1",
+		"/api/agent/",
+		"kado search status",
+		"kado search refine",
+		"kado search answer",
+		"kado search cancel",
+	} {
+		if !strings.Contains(lower, required) {
+			t.Fatalf("SKILL.md is missing contract guidance %q", required)
 		}
 	}
 }
