@@ -42,6 +42,7 @@ func (client *Client) Run(
 	lifecycleOperations := 1
 	clarificationSubmissions := 0
 	retriedFailure := false
+	restartedUnavailableLifecycle := false
 	for {
 		switch document.Status {
 		case StatusComplete:
@@ -61,6 +62,13 @@ func (client *Client) Run(
 			lifecycleOperations++
 			next, err := client.Status(runContext, document)
 			if err != nil {
+				if !restartedUnavailableLifecycle && unavailableLifecycle(err) {
+					restartedUnavailableLifecycle = true
+					document, err = client.Search(runContext, document.Query)
+					if err == nil {
+						continue
+					}
+				}
 				if errors.Is(err, context.DeadlineExceeded) ||
 					errors.Is(err, context.Canceled) {
 					client.cancelAfterInterruption(ctx, document, options.CancelOnTimeout)
@@ -142,6 +150,11 @@ func (client *Client) Run(
 			return Result{Document: document}, protocolError()
 		}
 	}
+}
+
+func unavailableLifecycle(err error) bool {
+	var remote *Error
+	return errors.As(err, &remote) && remote.Code() == "invalid_search_operation"
 }
 
 func (client *Client) followPages(

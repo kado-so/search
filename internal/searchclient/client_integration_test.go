@@ -188,6 +188,62 @@ func TestRunPollsProductDocumentThroughPrivateLifecycleEndpoint(t *testing.T) {
 	}
 }
 
+func TestRunRestartsOnceWhenSharedLifecycleIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	initialCalls := 0
+	statusCalls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		assertMachineRequest(t, request, "Bearer token-one")
+		if request.URL.Query().Get("operation") == "status" {
+			statusCalls++
+			writeProblem(response, http.StatusConflict, "invalid_search_operation", false)
+			return
+		}
+		initialCalls++
+		if initialCalls == 1 {
+			writeDocument(response, lifecycleDocument(
+				serverURL(request)+"/search/search_shared/opaque_token_1",
+				"shared lifecycle",
+				"search_shared",
+				StatusRunning,
+			))
+			return
+		}
+		writeDocument(response, completeDocument(
+			serverURL(request),
+			"shared lifecycle",
+			"search_replacement",
+			"",
+			"",
+		))
+	}))
+	defer server.Close()
+
+	client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
+	client.wait = noWait
+	options := DefaultRunOptions()
+	options.FollowPages = false
+	result, err := client.Run(context.Background(), "shared lifecycle", options)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Document.Status != StatusComplete ||
+		result.Document.SearchID != "search_replacement" ||
+		initialCalls != 2 || statusCalls != 1 {
+		t.Fatalf(
+			"status=%s id=%s initial=%d status_calls=%d",
+			result.Document.Status,
+			result.Document.SearchID,
+			initialCalls,
+			statusCalls,
+		)
+	}
+}
+
 func TestRunSubmitsBoundedClarification(t *testing.T) {
 	t.Parallel()
 

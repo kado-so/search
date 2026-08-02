@@ -4,7 +4,7 @@ description: "Find current external solutions to a user's problem with Kado. Use
 license: "MIT"
 metadata:
   author: "Kado"
-  version: "0.2.1"
+  version: "0.2.2"
   homepage: "https://kado.so"
 ---
 
