@@ -60,6 +60,40 @@ func TestRunSuccessAndGloballyCachedRepeatAreObservable(t *testing.T) {
 	}
 }
 
+func TestSearchCanonicalizesUnicodeAndHumanWhitespaceLikeKadoApp(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		assertMachineRequest(t, request, "Bearer token-one")
+		if query := request.URL.Query().Get("q"); query != "café tools for agents" {
+			t.Fatalf("query = %q", query)
+		}
+		writeDocument(response, completeDocument(
+			serverURL(request),
+			"café tools for agents",
+			"search_canonical_query",
+			"",
+			"",
+		))
+	}))
+	defer server.Close()
+
+	client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
+	document, err := client.Search(
+		context.Background(),
+		"\u00a0cafe\u0301\ttools\nfor\u3000agents  ",
+	)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if document.Query != "café tools for agents" {
+		t.Fatalf("document query = %q", document.Query)
+	}
+}
+
 func TestRunPollsLifecycleThroughServerSelfLink(t *testing.T) {
 	t.Parallel()
 
@@ -100,6 +134,56 @@ func TestRunPollsLifecycleThroughServerSelfLink(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if result.Document.Status != StatusComplete || statusCalls != 2 {
+		t.Fatalf("status=%s calls=%d", result.Document.Status, statusCalls)
+	}
+}
+
+func TestRunPollsProductDocumentThroughPrivateLifecycleEndpoint(t *testing.T) {
+	t.Parallel()
+
+	statusCalls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		assertMachineRequest(t, request, "Bearer token-one")
+		publicSelf := serverURL(request) +
+			"/search/search_public_lifecycle/opaque_token_1"
+		if request.URL.Query().Get("operation") == "" {
+			writeDocument(response, lifecycleDocument(
+				publicSelf,
+				"lifecycle path",
+				"search_public_lifecycle",
+				StatusQueued,
+			))
+			return
+		}
+		if request.URL.Path != "/search" ||
+			request.URL.Query().Get("q") != "lifecycle path" ||
+			request.URL.Query().Get("operation") != "status" ||
+			request.URL.Query().Get("search_id") != "search_public_lifecycle" {
+			t.Fatalf("status request URL = %q", request.URL.String())
+		}
+		statusCalls++
+		writeDocument(response, completeDocument(
+			serverURL(request),
+			"lifecycle path",
+			"search_public_lifecycle",
+			"",
+			"",
+		))
+	}))
+	defer server.Close()
+
+	client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
+	client.wait = noWait
+	options := DefaultRunOptions()
+	options.FollowPages = false
+	result, err := client.Run(context.Background(), "lifecycle path", options)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Document.Status != StatusComplete || statusCalls != 1 {
 		t.Fatalf("status=%s calls=%d", result.Document.Status, statusCalls)
 	}
 }
@@ -185,6 +269,48 @@ func TestRunFollowsOpaquePaginationLinkExactly(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	want := "/search?q=page+tools&cursor=opaque_2"
+	if len(result.Pages) != 2 || followed != want {
+		t.Fatalf("pages=%d followed=%q want=%q", len(result.Pages), followed, want)
+	}
+}
+
+func TestRunFollowsCanonicalPublicPaginationLinkExactly(t *testing.T) {
+	t.Parallel()
+
+	var followed string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		assertMachineRequest(t, request, "Bearer token-one")
+		if request.URL.Path == "/search" {
+			next := serverURL(request) + "/search/public_ref_2/page%20tools?page=2"
+			writeDocument(response, completeDocument(
+				serverURL(request),
+				"page tools",
+				"search_public_pages",
+				next,
+				"",
+			))
+			return
+		}
+		followed = request.URL.String()
+		writeDocument(response, completeDocument(
+			serverURL(request),
+			"page tools",
+			"search_public_pages",
+			"",
+			"",
+		))
+	}))
+	defer server.Close()
+
+	client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
+	result, err := client.Run(context.Background(), "page tools", DefaultRunOptions())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := "/search/public_ref_2/page%20tools?page=2"
 	if len(result.Pages) != 2 || followed != want {
 		t.Fatalf("pages=%d followed=%q want=%q", len(result.Pages), followed, want)
 	}

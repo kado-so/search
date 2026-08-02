@@ -8,31 +8,38 @@ vendors, agencies, and architecture options for real workflows.
 
 ## Search
 
-The CLI calls the public `kado-app` Agent API and supports concise human output
-or compact `agent-cli-json.v1` JSON:
+The CLI runs an authenticated Search lifecycle and supports human, canonical
+JSON, and paginated JSONL output:
 
 ```bash
 kado search "find an agent-native support platform"
-kado search "find an agent-native support platform" --json --wait
-kado search status app_search_123 --json
-kado search refine app_search_123 --dimension budget_monthly_usd=200 --json --wait
-kado search answer app_search_123 lead_volume "About 750 leads per month" --json --wait
-kado search cancel app_search_123
+kado search --json "find an agent-native support platform"
+kado search --jsonl "find an agent-native support platform"
+kado search --width 72 "find an agent-native support platform"
+kado search --timeout 45s --first-page "current retrieval tools"
 ```
 
-Set `KADO_SEARCH_APP_URL` or use `--base-url` to select a non-default hosted
-app. `KADO_API_KEY` and `--api-key` use the app's `X-API-Key` boundary;
-otherwise the CLI obtains a short-lived bearer token through autonomous-agent
-authentication. Requests, response bodies, redirects, identifiers, wait
-windows, result limits, and credential refresh are bounded.
+`--jsonl` is intended for agent synthesis and follows server-provided
+pagination links. `--json` returns one canonical Search Document byte-for-byte.
+The default human renderer strips terminal control characters, wraps Unicode
+by display width, and bounds result previews.
+
+The client starts and manages Search through kado-app's authenticated `/search`
+resource. It accepts the app's same-origin product-execution and pinned public
+Search links, keeps lifecycle mutations on the private resource, and never
+reconstructs opaque cursors. Requests, response bodies, retries, clarification,
+cancellation, and lifecycle operations are bounded.
 
 ## Contract validation
 
-The public contract is owned by `kado-app`. The CLI sends `agent-api.v1`
-requests only to `/api/agent/*`, requires the complete `agent-api.v1` envelope,
-and emits its compact `agent-cli-json.v1` result. It rejects legacy engine
-responses, missing required fields, mismatched search IDs or states, unknown
-states, redirects, oversized bodies, and responses that reflect credentials.
+Every Search Document is validated before output against pinned copies of the
+released JSON Schema, JSON-LD context, semantic rules, and conformance
+fixtures. Checksums are verified when the embedded contract assets load, and
+JSON-LD context resolution is local-only. Unsupported major versions fail
+without being partially rendered.
+
+The public Search contract is owned by `kado-app`. This repository contains
+only the generated assets and runtime validation required by the CLI.
 
 ## Authentication
 
@@ -59,8 +66,9 @@ kado auth identities
 kado --agent codex auth status
 ```
 
-`auth create` creates the selected identity if it does not exist; an
-authenticated Search also creates it transparently when needed.
+`auth create` creates the selected identity if it does not exist and completes
+mandatory admission when kado-app requires it; an authenticated Search also
+creates the identity transparently when needed.
 
 ## Local metadata
 
@@ -163,7 +171,9 @@ internal/agentidentity/   local-only calling-agent detection
 internal/keystore/        OS and permission-restricted file stores
 internal/localstate/      host ID and known identity registry
 internal/releaseclient/   signed self-update and uninstall
-internal/agentapi/        kado-app Agent API client and contract validation
+internal/searchclient/    Search lifecycle client
+internal/searchcontract/  JSON Schema, JSON-LD, and semantic validation
+internal/searchoutput/    human, JSON, and JSONL rendering
 skills/kado-search/       Search-only agent skill
 tools/release/            deterministic release builder
 docs/                     installation, architecture, and release operations

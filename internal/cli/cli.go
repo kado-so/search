@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kado-so/search/internal/agentapi"
 	"github.com/kado-so/search/internal/agentauth"
 	"github.com/kado-so/search/internal/agentidentity"
 	"github.com/kado-so/search/internal/buildinfo"
@@ -28,6 +27,9 @@ import (
 	"github.com/kado-so/search/internal/maintenance"
 	"github.com/kado-so/search/internal/releaseclient"
 	"github.com/kado-so/search/internal/requestmeta"
+	"github.com/kado-so/search/internal/searchclient"
+	"github.com/kado-so/search/internal/searchcontract"
+	"github.com/kado-so/search/internal/searchoutput"
 	"github.com/kado-so/search/internal/skillclient"
 )
 
@@ -37,7 +39,7 @@ Usage:
   kado [--agent <identity>] <command>
 
 Commands:
-  search <command> Run or manage an authenticated Search
+  search <query>   Run an authenticated Search
   auth create      Create or authenticate an identity
   auth status      Show identity state
   auth revoke      Revoke an identity
@@ -53,7 +55,9 @@ Commands:
 
 Options:
   --agent identity   Explicitly select the calling agent identity
-  --json            Emit compact agent-cli-json.v1 JSON
+  --json            Emit one canonical Search Document
+  --jsonl           Emit result and pagination records
+  --width columns   Human output width (40 to 160)
   -h, --help        Show this help
   -v, --version     Show bounded build information
   version --json    Show executable provenance
@@ -69,11 +73,7 @@ type authCreator interface {
 }
 
 type searchCommands interface {
-	Start(context.Context, agentapi.StartRequest) (agentapi.Response, error)
-	Status(context.Context, string, agentapi.WaitOptions, agentapi.ResultLimits) (agentapi.Response, error)
-	Refine(context.Context, agentapi.RefineRequest) (agentapi.Response, error)
-	Answer(context.Context, agentapi.AnswerRequest) (agentapi.Response, error)
-	Cancel(context.Context, agentapi.CancelRequest) (agentapi.Response, error)
+	Run(context.Context, string, searchclient.RunOptions) (searchRunResult, error)
 }
 
 type releaseCommands interface {
@@ -93,24 +93,45 @@ type skillCommands interface {
 	Uninstall([]string, bool) ([]skillclient.Installation, error)
 }
 
+type searchRunResult struct {
+	status    string
+	canonical []byte
+	pages     [][]byte
+}
+
 type dependencies struct {
 	detectAgent    func(string) (agentidentity.Detection, error)
 	listIdentities func() ([]string, error)
 	newAuth        func(string) (authCommands, error)
-	newSearch      func(string, searchConnectionOptions) (searchCommands, error)
+	newSearch      func(string) (searchCommands, error)
 	newRelease     func(buildinfo.Info) (releaseCommands, error)
 	newSkill       func(buildinfo.Info) (skillCommands, error)
 }
 
 type defaultAuthCommands struct {
-	client    *agentauth.Client
+	client    autonomousAgentClient
 	store     keystore.Store
 	configDir string
 	agent     string
 }
 
+type autonomousAgentClient interface {
+	AuthenticateOrEnroll(
+		context.Context,
+		keystore.Store,
+		agentauth.Request,
+	) (agentauth.Result, error)
+	AcquireToken(
+		context.Context,
+		keystore.Store,
+		agentauth.Request,
+	) (agentauth.SessionToken, error)
+	CredentialStatus(context.Context, keystore.Store) (agentauth.CredentialStatus, error)
+	RevokeCurrentCredential(context.Context, keystore.Store) (agentauth.CredentialStatus, error)
+}
+
 type defaultSearchCommands struct {
-	client *agentapi.Client
+	client *searchclient.Client
 }
 
 type defaultReleaseCommands struct {
@@ -253,7 +274,7 @@ func run(
 	case "auth":
 		return runAuth(args[1:], stdout, override, dependencies)
 	case "search":
-		return runSearch(args[1:], stdout, override, info, dependencies)
+		return runSearch(args[1:], stdout, override, dependencies)
 	case "agent":
 		return runAgent(args[1:], stdout, override, dependencies)
 	case "skill":
@@ -722,10 +743,9 @@ func runSearch(
 	args []string,
 	stdout io.Writer,
 	override string,
-	info buildinfo.Info,
 	dependencies dependencies,
 ) error {
-	request, err := parseSearchArguments(args)
+	query, options, outputOptions, err := parseSearchArguments(args)
 	if err != nil {
 		return err
 	}
@@ -736,310 +756,127 @@ func runSearch(
 	if err != nil {
 		return usageError(err.Error())
 	}
-	search, err := dependencies.newSearch(detection.Agent, request.connection)
+	search, err := dependencies.newSearch(detection.Agent)
 	if err != nil {
 		return searchDiagnostic(err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	var response agentapi.Response
-	switch request.operation {
-	case searchStart:
-		response, err = search.Start(ctx, agentapi.StartRequest{
-			Query: request.query, Wait: request.wait, Limits: request.limits,
-			Version: info.Version,
-		})
-	case searchStatus:
-		response, err = search.Status(ctx, request.searchID, request.wait, request.limits)
-	case searchRefine:
-		response, err = search.Refine(ctx, agentapi.RefineRequest{
-			SearchID: request.searchID, Dimensions: request.dimensions,
-			Wait: request.wait, Limits: request.limits,
-		})
-	case searchAnswer:
-		response, err = search.Answer(ctx, agentapi.AnswerRequest{
-			SearchID: request.searchID, Answers: request.answers,
-			Wait: request.wait, Limits: request.limits,
-		})
-	case searchCancel:
-		response, err = search.Cancel(ctx, agentapi.CancelRequest{
-			SearchID: request.searchID, Reason: request.reason,
-		})
-	default:
-		return searchDiagnostic(agentapi.ErrProtocol)
-	}
-	if len(response.ResultJSON) > 0 {
-		output := response.ResultJSON
-		if !request.json {
-			output = renderAgentResult(response.Result)
-		}
-		if writeErr := writeOutput(stdout, output); writeErr != nil {
-			return writeErr
-		}
-	}
+	result, err := search.Run(ctx, query, options)
 	if err != nil {
+		if len(result.canonical) > 0 {
+			rendered, renderErr := searchoutput.Render(
+				result.canonical,
+				result.pages,
+				outputOptions,
+			)
+			if renderErr != nil {
+				return searchOutputDiagnostic(renderErr)
+			}
+			if writeErr := writeOutput(stdout, rendered); writeErr != nil {
+				return writeErr
+			}
+		}
 		return searchDiagnostic(err)
 	}
-	if len(response.ResultJSON) == 0 {
-		return searchDiagnostic(agentapi.ErrProtocol)
+	if result.status != searchclient.StatusComplete ||
+		len(result.canonical) == 0 ||
+		len(result.pages) < 1 {
+		return searchDiagnostic(searchclient.ErrProtocol)
 	}
-	return nil
+	rendered, err := searchoutput.Render(
+		result.canonical,
+		result.pages,
+		outputOptions,
+	)
+	if err != nil {
+		return searchOutputDiagnostic(err)
+	}
+	return writeOutput(stdout, rendered)
 }
 
-type searchOperation uint8
-
-const (
-	searchStart searchOperation = iota
-	searchStatus
-	searchRefine
-	searchAnswer
-	searchCancel
-)
-
-type searchConnectionOptions struct {
-	baseURL string
-	apiKey  string
-}
-
-type searchRequest struct {
-	operation  searchOperation
-	query      string
-	searchID   string
-	dimensions []agentapi.DimensionUpdate
-	answers    []agentapi.Answer
-	reason     string
-	json       bool
-	wait       agentapi.WaitOptions
-	limits     agentapi.ResultLimits
-	connection searchConnectionOptions
-}
-
-func parseSearchArguments(args []string) (searchRequest, error) {
-	request := searchRequest{
-		operation: searchStart,
-		reason:    "agent_no_longer_needs_result",
-		wait:      agentapi.WaitOptions{TimeoutMS: 120_000, PollIntervalMS: 2_000},
-	}
-	if len(args) > 0 {
-		switch args[0] {
-		case "status":
-			request.operation, args = searchStatus, args[1:]
-		case "refine":
-			request.operation, args = searchRefine, args[1:]
-		case "answer":
-			request.operation, args = searchAnswer, args[1:]
-		case "cancel":
-			request.operation, args = searchCancel, args[1:]
-		}
-	}
-	var positionals []string
+func parseSearchArguments(
+	args []string,
+) (string, searchclient.RunOptions, searchoutput.Options, error) {
+	options := searchclient.DefaultRunOptions()
+	outputOptions := searchoutput.Options{Mode: searchoutput.ModeHuman}
+	var queryParts []string
+	var answer string
+	answerSet := false
+	modeSet := false
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		switch argument {
 		case "--":
-			positionals = append(positionals, args[index+1:]...)
+			queryParts = append(queryParts, args[index+1:]...)
 			index = len(args)
-		case "--json":
-			request.json = true
-		case "--wait":
-			if request.operation == searchCancel {
-				return request, usageError("search cancel does not accept --wait")
-			}
-			request.wait.Enabled = true
 		case "--timeout":
 			index++
 			if index >= len(args) {
-				return request, usageError("search --timeout requires a duration")
+				return "", options, outputOptions, usageError("search --timeout requires a duration")
 			}
 			timeout, err := time.ParseDuration(args[index])
-			if err != nil || timeout < 0 || timeout > 2*time.Minute {
-				return request, usageError("search timeout must be between 0s and 2m")
+			if err != nil || timeout <= 0 || timeout > 30*time.Minute {
+				return "", options, outputOptions, usageError("search timeout must be between 1ns and 30m")
 			}
-			request.wait.TimeoutMS = int(timeout / time.Millisecond)
-		case "--timeout-ms":
-			value, next, err := integerOption(args, index, argument, 0, 120_000)
-			if err != nil {
-				return request, err
+			options.Timeout = timeout
+		case "--answer":
+			index++
+			if index >= len(args) || answerSet {
+				return "", options, outputOptions, usageError("search --answer requires one value")
 			}
-			index = next
-			request.wait.TimeoutMS = value
-		case "--poll-interval":
+			answer = args[index]
+			answerSet = true
+		case "--first-page":
+			options.FollowPages = false
+		case "--retry":
+			options.RetryFailure = true
+		case "--json", "--jsonl":
+			if modeSet {
+				return "", options, outputOptions, usageError(
+					"search output accepts only one of --json or --jsonl",
+				)
+			}
+			modeSet = true
+			if argument == "--json" {
+				outputOptions.Mode = searchoutput.ModeJSON
+				options.FollowPages = false
+			} else {
+				outputOptions.Mode = searchoutput.ModeJSONL
+			}
+		case "--width":
 			index++
 			if index >= len(args) {
-				return request, usageError("search --poll-interval requires a duration")
+				return "", options, outputOptions, usageError(
+					"search --width requires a column count",
+				)
 			}
-			value, err := time.ParseDuration(args[index])
-			if err != nil || value < 100*time.Millisecond || value > 2*time.Minute {
-				return request, usageError("search poll interval must be between 100ms and 2m")
+			width, err := strconv.Atoi(args[index])
+			if err != nil || width < 40 || width > 160 {
+				return "", options, outputOptions, usageError(
+					"search width must be between 40 and 160 columns",
+				)
 			}
-			request.wait.PollIntervalMS = int(value / time.Millisecond)
-		case "--poll-interval-ms":
-			value, next, err := integerOption(args, index, argument, 100, 120_000)
-			if err != nil {
-				return request, err
-			}
-			index = next
-			request.wait.PollIntervalMS = value
-		case "--base-url":
-			index++
-			if index >= len(args) || request.connection.baseURL != "" {
-				return request, usageError("search --base-url requires one value")
-			}
-			request.connection.baseURL = args[index]
-		case "--api-key":
-			index++
-			if index >= len(args) || request.connection.apiKey != "" {
-				return request, usageError("search --api-key requires one value")
-			}
-			request.connection.apiKey = args[index]
-		case "--dimension":
-			if request.operation != searchRefine {
-				return request, usageError("--dimension is valid only for search refine")
-			}
-			index++
-			if index >= len(args) {
-				return request, usageError("search --dimension requires name=value")
-			}
-			name, value, ok := strings.Cut(args[index], "=")
-			name, value = strings.TrimSpace(name), strings.TrimSpace(value)
-			if !ok || name == "" || value == "" {
-				return request, usageError("search --dimension requires name=value")
-			}
-			request.dimensions = append(request.dimensions, agentapi.DimensionUpdate{ID: name, Value: value})
-		case "--reason":
-			if request.operation != searchCancel {
-				return request, usageError("--reason is valid only for search cancel")
-			}
-			index++
-			if index >= len(args) {
-				return request, usageError("search --reason requires one value")
-			}
-			request.reason = args[index]
-		case "--max-best-matches", "--max-stretch-matches", "--max-later-matches", "--later-offset":
-			value, next, err := integerOption(args, index, argument, 0, 100)
-			if err != nil {
-				return request, err
-			}
-			index = next
-			switch argument {
-			case "--max-best-matches":
-				request.limits.BestMatches = value
-			case "--max-stretch-matches":
-				request.limits.StretchMatches = value
-			case "--max-later-matches":
-				request.limits.LaterMatches = value
-			case "--later-offset":
-				request.limits.LaterOffset = value
-			}
+			outputOptions.Width = width
 		default:
 			if strings.HasPrefix(argument, "-") {
-				return request, usageError("unknown search option")
+				return "", options, outputOptions, usageError("unknown search option")
 			}
-			positionals = append(positionals, argument)
+			queryParts = append(queryParts, argument)
 		}
 	}
-	if request.operation == searchCancel && request.wait.Enabled {
-		return request, usageError("search cancel does not accept --wait")
+	query := strings.Join(queryParts, " ")
+	if query == "" {
+		return "", options, outputOptions, usageError(
+			"usage: kado search [--json|--jsonl] [--width columns] [--timeout duration] [--answer value] [--first-page] [--retry] <query>",
+		)
 	}
-	switch request.operation {
-	case searchStart:
-		request.query = strings.TrimSpace(strings.Join(positionals, " "))
-		if len(request.query) < 3 || len(request.query) > 4000 {
-			return request, usageError("Search query must be between 3 and 4000 characters")
-		}
-	case searchStatus, searchRefine, searchCancel:
-		if len(positionals) != 1 || !validSearchIdentifier(positionals[0]) {
-			return request, usageError("search command requires one valid search ID")
-		}
-		request.searchID = positionals[0]
-		if request.operation == searchRefine && (len(request.dimensions) < 1 || len(request.dimensions) > 50) {
-			return request, usageError("search refine requires 1 to 50 --dimension name=value flags")
-		}
-	case searchAnswer:
-		if len(positionals) < 3 || !validSearchIdentifier(positionals[0]) || !validSearchIdentifier(positionals[1]) {
-			return request, usageError("search answer requires <search-id> <question-id> <answer>")
-		}
-		answer := strings.TrimSpace(strings.Join(positionals[2:], " "))
-		if answer == "" || len(answer) > 4000 {
-			return request, usageError("search answer must be between 1 and 4000 characters")
-		}
-		request.searchID = positionals[0]
-		request.answers = []agentapi.Answer{{QuestionID: positionals[1], Answer: answer}}
-	}
-	return request, nil
-}
-
-func integerOption(args []string, index int, name string, minimum, maximum int) (int, int, error) {
-	if index+1 >= len(args) {
-		return 0, index, usageError(name + " requires an integer")
-	}
-	value, err := strconv.Atoi(args[index+1])
-	if err != nil || value < minimum || value > maximum {
-		return 0, index, usageError(fmt.Sprintf("%s must be between %d and %d", name, minimum, maximum))
-	}
-	return value, index + 1, nil
-}
-
-func validSearchIdentifier(value string) bool {
-	if value == "" || len(value) > 128 {
-		return false
-	}
-	for index, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && strings.ContainsRune("._~-", character) {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func renderAgentResult(result agentapi.Result) []byte {
-	var output strings.Builder
-	id := ""
-	if result.SearchID != nil {
-		id = *result.SearchID
-	}
-	if result.Error != nil {
-		_, _ = fmt.Fprintf(&output, "Search failed: %s\n", result.Error.Message)
-		if id != "" {
-			_, _ = fmt.Fprintf(&output, "Search ID: %s\n", id)
-		}
-		return []byte(output.String())
-	}
-	switch result.State {
-	case "completed":
-		_, _ = fmt.Fprintf(&output, "Search completed: %s\n", id)
-		if result.SearchURL != nil && *result.SearchURL != "" {
-			_, _ = fmt.Fprintf(&output, "Kado search: %s\n", *result.SearchURL)
-		}
-		for _, match := range result.BestMatches {
-			_, _ = fmt.Fprintf(&output, "%d. %s", match.Rank, match.Name)
-			if match.Score > 0 {
-				_, _ = fmt.Fprintf(&output, " (score %d)", match.Score)
-			}
-			output.WriteByte('\n')
-			if match.SolutionURL != "" {
-				_, _ = fmt.Fprintf(&output, "   Link: %s\n", match.SolutionURL)
-			}
-			if match.Summary != "" {
-				_, _ = fmt.Fprintf(&output, "   %s\n", match.Summary)
-			}
-		}
-		if len(result.Questions) > 0 {
-			output.WriteString("Questions:\n")
-			for _, question := range result.Questions {
-				_, _ = fmt.Fprintf(&output, "- %s: %s\n", question.ID, question.Prompt)
-			}
-		}
-	case "canceled":
-		_, _ = fmt.Fprintf(&output, "Search canceled: %s\n", id)
-	default:
-		_, _ = fmt.Fprintf(&output, "Search %s is %s.\n", id, result.State)
-		if result.Continuation.NextCommand != nil && *result.Continuation.NextCommand != "" {
-			_, _ = fmt.Fprintf(&output, "Next: %s\n", *result.Continuation.NextCommand)
+	if answerSet {
+		options.Clarify = func(context.Context, searchclient.Question) (string, error) {
+			return answer, nil
 		}
 	}
-	return []byte(output.String())
+	return query, options, outputOptions, nil
 }
 
 func writeOutput(output io.Writer, value []byte) error {
@@ -1058,6 +895,24 @@ func writeOutput(output io.Writer, value []byte) error {
 		"could not write Search output",
 		diagnostic.ExitFailure,
 		err,
+	)
+}
+
+func searchOutputDiagnostic(cause error) error {
+	var unsupported *searchcontract.UnsupportedVersionError
+	if errors.As(cause, &unsupported) {
+		return diagnostic.New(
+			"search_document_version_unsupported",
+			unsupported.Error(),
+			diagnostic.ExitFailure,
+			cause,
+		)
+	}
+	return diagnostic.New(
+		"search_output_invalid",
+		"Search output could not be validated or rendered",
+		diagnostic.ExitFailure,
+		cause,
 	)
 }
 
@@ -1195,34 +1050,53 @@ func authDiagnostic(operation string, cause error) error {
 }
 
 func searchDiagnostic(cause error) error {
+	var needsInput *searchclient.NeedsInputError
+	if errors.As(cause, &needsInput) {
+		return diagnostic.New(
+			"search_needs_input",
+			"Search requires clarification; rerun with --answer <value>",
+			diagnostic.ExitFailure,
+			cause,
+		)
+	}
+	var failure *searchclient.FailureError
+	if errors.As(cause, &failure) {
+		return diagnostic.New(
+			failure.Failure.Code,
+			failure.Failure.Message,
+			diagnostic.ExitFailure,
+			cause,
+		)
+	}
+	if errors.Is(cause, searchclient.ErrCanceled) {
+		return diagnostic.New(
+			"search_canceled",
+			"Search was canceled",
+			diagnostic.ExitFailure,
+			cause,
+		)
+	}
 	if errors.Is(cause, context.Canceled) {
 		return diagnostic.New(
 			"search_interrupted",
-			"Search was interrupted",
+			"Search was interrupted and cancellation was requested",
 			diagnostic.ExitFailure,
 			cause,
 		)
 	}
-	var remote *agentapi.Error
+	if errors.Is(cause, searchclient.ErrTimeout) {
+		return diagnostic.New(
+			"search_timeout",
+			"Search did not complete before the timeout",
+			diagnostic.ExitFailure,
+			cause,
+		)
+	}
+	var remote *searchclient.Error
 	if errors.As(cause, &remote) {
-		code := remote.Code
-		if code == "" {
-			code = "agent_api_failed"
-		}
-		return diagnostic.New(code, remote.Error(), diagnostic.ExitFailure, cause)
-	}
-	if errors.Is(cause, agentapi.ErrAuthentication) {
 		return diagnostic.New(
-			"agent_auth_required",
-			"Search authentication is unavailable; create an identity or set KADO_API_KEY",
-			diagnostic.ExitFailure,
-			cause,
-		)
-	}
-	if errors.Is(cause, agentapi.ErrProtocol) {
-		return diagnostic.New(
-			"agent_contract_invalid",
-			"kado-app returned an invalid agent-api.v1 response",
+			remote.Code(),
+			remote.Error(),
 			diagnostic.ExitFailure,
 			cause,
 		)
@@ -1271,57 +1145,46 @@ func newDefaultAuthCommands(agent string) (authCommands, error) {
 	}, nil
 }
 
-func newDefaultSearchCommands(agent string, options searchConnectionOptions) (searchCommands, error) {
+func newDefaultSearchCommands(agent string) (searchCommands, error) {
 	safeConfig, err := config.Load()
 	if err != nil {
 		return nil, err
-	}
-	baseURL := safeConfig.BaseURL
-	rawBaseURL := strings.TrimSpace(options.baseURL)
-	if rawBaseURL == "" {
-		rawBaseURL = strings.TrimSpace(os.Getenv("KADO_SEARCH_APP_URL"))
-	}
-	if rawBaseURL == "" {
-		rawBaseURL = strings.TrimSpace(os.Getenv("KADO_BASE_URL"))
-	}
-	if rawBaseURL != "" {
-		baseURL, err = config.ParseBaseURL(rawBaseURL)
-		if err != nil {
-			return nil, err
-		}
 	}
 	host, err := localstate.EnsureHost(safeConfig.ConfigDir)
 	if err != nil {
 		return nil, err
 	}
+	store, err := selectCredentialStore(safeConfig, agent)
+	if err != nil {
+		return nil, err
+	}
 	httpClient := serviceHTTPClient(
-		130*time.Second,
+		30*time.Second,
 		agentauth.DefaultLimits().MaxResponseHeaderBytes,
 		agent,
 		host.ID,
 	)
-	apiKey := options.apiKey
-	if apiKey == "" {
-		apiKey = os.Getenv("KADO_API_KEY")
+	authClient, err := agentauth.NewClient(
+		safeConfig.BaseURL,
+		httpClient,
+		agentauth.DefaultLimits(),
+		rand.Reader,
+	)
+	if err != nil {
+		return nil, err
 	}
-	var authorization agentapi.AuthorizationSource
-	if apiKey == "" {
-		store, storeErr := selectCredentialStore(safeConfig, agent)
-		if storeErr != nil {
-			return nil, storeErr
-		}
-		authClient, authErr := agentauth.NewClient(baseURL, httpClient, agentauth.DefaultLimits(), rand.Reader)
-		if authErr != nil {
-			return nil, authErr
-		}
-		authorization = &agentAuthorizationSource{
-			client: authClient, store: store, configDir: safeConfig.ConfigDir, agent: agent,
-		}
+	authorization := &agentAuthorizationSource{
+		client:    authClient,
+		store:     store,
+		configDir: safeConfig.ConfigDir,
+		agent:     agent,
 	}
-	search, err := agentapi.New(agentapi.Options{
-		BaseURL: baseURL, HTTPClient: httpClient, Authorization: authorization,
-		APIKey: apiKey, UserAgent: "kado-cli",
-	})
+	search, err := searchclient.New(
+		safeConfig.BaseURL,
+		httpClient,
+		authorization,
+		searchclient.DefaultLimits(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1430,6 +1293,26 @@ func (commands *defaultAuthCommands) Create(
 		commands.store,
 		agentauth.Request{Mode: agentauth.CreateIfMissing},
 	)
+	if errors.Is(err, agentauth.ErrAdmissionRequired) {
+		token, tokenErr := commands.client.AcquireToken(
+			ctx,
+			commands.store,
+			agentauth.Request{Mode: agentauth.CreateIfMissing},
+		)
+		if tokenErr != nil {
+			return agentauth.CredentialStatus{}, tokenErr
+		}
+		result, err = commands.client.AuthenticateOrEnroll(
+			ctx,
+			commands.store,
+			agentauth.Request{Mode: agentauth.AuthenticateOnly},
+		)
+		if err == nil && (result.PrincipalID != token.PrincipalID ||
+			result.CredentialID != token.CredentialID ||
+			result.ClientID != token.ClientID) {
+			return agentauth.CredentialStatus{}, agentauth.ErrAuthentication
+		}
+	}
 	if err != nil {
 		return agentauth.CredentialStatus{}, err
 	}
@@ -1466,20 +1349,21 @@ func (commands *defaultAuthCommands) Revoke(
 	return status, err
 }
 
-func (commands *defaultSearchCommands) Start(ctx context.Context, request agentapi.StartRequest) (agentapi.Response, error) {
-	return commands.client.Start(ctx, request)
-}
-func (commands *defaultSearchCommands) Status(ctx context.Context, id string, wait agentapi.WaitOptions, limits agentapi.ResultLimits) (agentapi.Response, error) {
-	return commands.client.Status(ctx, id, wait, limits)
-}
-func (commands *defaultSearchCommands) Refine(ctx context.Context, request agentapi.RefineRequest) (agentapi.Response, error) {
-	return commands.client.Refine(ctx, request)
-}
-func (commands *defaultSearchCommands) Answer(ctx context.Context, request agentapi.AnswerRequest) (agentapi.Response, error) {
-	return commands.client.Answer(ctx, request)
-}
-func (commands *defaultSearchCommands) Cancel(ctx context.Context, request agentapi.CancelRequest) (agentapi.Response, error) {
-	return commands.client.Cancel(ctx, request)
+func (commands *defaultSearchCommands) Run(
+	ctx context.Context,
+	query string,
+	options searchclient.RunOptions,
+) (searchRunResult, error) {
+	result, err := commands.client.Run(ctx, query, options)
+	output := searchRunResult{
+		status:    result.Document.Status,
+		canonical: result.Document.Bytes(),
+		pages:     make([][]byte, 0, len(result.Pages)),
+	}
+	for _, page := range result.Pages {
+		output.pages = append(output.pages, page.Bytes())
+	}
+	return output, err
 }
 
 func (commands *defaultReleaseCommands) Update(

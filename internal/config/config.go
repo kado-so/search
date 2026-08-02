@@ -193,12 +193,6 @@ func parseBaseURL(raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
-// ParseBaseURL validates an explicit per-invocation service URL with the same
-// rules as config.json.
-func ParseBaseURL(raw string) (*url.URL, error) {
-	return parseBaseURL(raw)
-}
-
 func validateBasePath(parsed *url.URL) error {
 	path := parsed.Path
 	if path == "" || path == "/" {

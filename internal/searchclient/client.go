@@ -18,6 +18,7 @@ import (
 
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/searchcontract"
+	"golang.org/x/text/unicode/norm"
 )
 
 type Client struct {
@@ -71,7 +72,8 @@ func New(
 
 // Search starts or reuses the globally cached canonical query.
 func (client *Client) Search(ctx context.Context, query string) (Document, error) {
-	if err := validateQuery(query); err != nil {
+	query, err := canonicalizeQuery(query)
+	if err != nil {
 		return Document{}, err
 	}
 	endpoint := *client.base
@@ -86,11 +88,11 @@ func (client *Client) Search(ctx context.Context, query string) (Document, error
 			ErrProtocol,
 		)
 	}
-	return client.get(ctx, &endpoint, query)
+	return client.get(ctx, &endpoint, query, "")
 }
 
-// Status follows the document's self link and performs a lifecycle status
-// operation for the exact opaque Search ID.
+// Status performs a lifecycle status operation on the private Search endpoint
+// for the exact opaque Search ID represented by the document.
 func (client *Client) Status(ctx context.Context, document Document) (Document, error) {
 	if err := client.validateDocumentIdentity(document); err != nil {
 		return Document{}, err
@@ -102,7 +104,7 @@ func (client *Client) Status(ctx context.Context, document Document) (Document, 
 	parameters.Set("operation", "status")
 	parameters.Set("search_id", document.SearchID)
 	endpoint.RawQuery = parameters.Encode()
-	return client.get(ctx, &endpoint, document.Query)
+	return client.get(ctx, &endpoint, document.Query, document.SearchID)
 }
 
 // Clarify submits one answer to the exact Search represented by document.
@@ -176,7 +178,7 @@ func (client *Client) Next(ctx context.Context, document Document) (Document, er
 	if document.Status != StatusComplete || document.next == nil {
 		return Document{}, lifecycleError("Search has no next page.")
 	}
-	return client.get(ctx, document.next, document.Query)
+	return client.get(ctx, document.next, document.Query, document.SearchID)
 }
 
 func (client *Client) post(
@@ -189,15 +191,32 @@ func (client *Client) post(
 	endpoint.ForceQuery = false
 	body := []byte(values.Encode())
 	defer clear(body)
-	return client.do(ctx, http.MethodPost, &endpoint, body, false, document.Query)
+	return client.do(
+		ctx,
+		http.MethodPost,
+		&endpoint,
+		body,
+		false,
+		document.Query,
+		document.SearchID,
+	)
 }
 
 func (client *Client) get(
 	ctx context.Context,
 	endpoint *url.URL,
 	expectedQuery string,
+	expectedSearchID string,
 ) (Document, error) {
-	return client.do(ctx, http.MethodGet, endpoint, nil, true, expectedQuery)
+	return client.do(
+		ctx,
+		http.MethodGet,
+		endpoint,
+		nil,
+		true,
+		expectedQuery,
+		expectedSearchID,
+	)
 }
 
 func (client *Client) do(
@@ -207,8 +226,14 @@ func (client *Client) do(
 	body []byte,
 	safeRetry bool,
 	expectedQuery string,
+	expectedSearchID string,
 ) (Document, error) {
-	if err := client.validateRequestURL(endpoint, method, expectedQuery); err != nil {
+	if err := client.validateRequestURL(
+		endpoint,
+		method,
+		expectedQuery,
+		expectedSearchID,
+	); err != nil {
 		return Document{}, err
 	}
 	attempts := 1
@@ -518,20 +543,22 @@ func (client *Client) decodeDocument(
 	if validated.Search.Query != expectedQuery {
 		return Document{}, protocolError()
 	}
-	self, err := client.validateDocumentLink(
+	if _, err := client.validateDocumentLink(
 		validated.Links.Self,
 		false,
 		expectedQuery,
-	)
-	if err != nil {
+		validated.Search.ID,
+	); err != nil {
 		return Document{}, err
 	}
+	self := client.lifecycleLink(expectedQuery)
 	var next, previous *url.URL
 	if validated.ResultSet != nil {
 		if _, err := client.validateDocumentLink(
 			validated.ResultSet.Links.Self,
 			false,
 			expectedQuery,
+			validated.Search.ID,
 		); err != nil {
 			return Document{}, err
 		}
@@ -540,6 +567,7 @@ func (client *Client) decodeDocument(
 				*validated.ResultSet.Links.Next,
 				true,
 				expectedQuery,
+				validated.Search.ID,
 			)
 			if err != nil {
 				return Document{}, err
@@ -550,6 +578,7 @@ func (client *Client) decodeDocument(
 				*validated.ResultSet.Links.Previous,
 				true,
 				expectedQuery,
+				validated.Search.ID,
 			)
 			if err != nil {
 				return Document{}, err
@@ -587,15 +616,18 @@ func (client *Client) decodeDocument(
 }
 
 func (client *Client) validateDocumentIdentity(document Document) error {
+	canonicalQuery, queryErr := canonicalizeQuery(document.Query)
 	if document.self == nil ||
 		!validOpaqueID(document.SearchID) ||
-		!validPublicText(document.Query, 2_000) {
+		queryErr != nil ||
+		canonicalQuery != document.Query {
 		return protocolError()
 	}
 	if _, err := client.validateDocumentLink(
 		document.self.String(),
 		false,
 		document.Query,
+		document.SearchID,
 	); err != nil {
 		return err
 	}
@@ -607,6 +639,7 @@ func (client *Client) validateDocumentIdentity(document Document) error {
 			relation.String(),
 			true,
 			document.Query,
+			document.SearchID,
 		); err != nil {
 			return err
 		}
@@ -618,18 +651,29 @@ func (client *Client) validateDocumentLink(
 	raw string,
 	pageRelation bool,
 	expectedQuery string,
+	expectedSearchID string,
 ) (*url.URL, error) {
 	parsed, err := client.validateServerLink(raw)
 	if err != nil {
 		return nil, err
 	}
 	parameters := parsed.Query()
-	if parameters.Get("q") != expectedQuery ||
-		parameters.Has("operation") ||
-		parameters.Has("search_id") {
-		return nil, protocolError()
+	if client.sameSearchEndpoint(parsed) {
+		if parameters.Get("q") != expectedQuery ||
+			parameters.Has("operation") ||
+			parameters.Has("search_id") {
+			return nil, protocolError()
+		}
+		if pageRelation && parameters.Has("cursor") == parameters.Has("page") {
+			return nil, protocolError()
+		}
+		return parsed, nil
 	}
-	if pageRelation && parameters.Has("cursor") == parameters.Has("page") {
+	if !client.sameDocumentSearchPath(
+		parsed,
+		expectedQuery,
+		expectedSearchID,
+	) || !validPathPageParameters(parameters, pageRelation) {
 		return nil, protocolError()
 	}
 	return parsed, nil
@@ -639,6 +683,7 @@ func (client *Client) validateRequestURL(
 	endpoint *url.URL,
 	method string,
 	expectedQuery string,
+	expectedSearchID string,
 ) error {
 	if endpoint == nil || !validPublicText(expectedQuery, 2_000) {
 		return protocolError()
@@ -654,6 +699,18 @@ func (client *Client) validateRequestURL(
 	validated, err := client.validateServerLink(endpoint.String())
 	if err != nil {
 		return err
+	}
+	if !client.sameSearchEndpoint(validated) {
+		if method != http.MethodGet ||
+			!client.sameDocumentSearchPath(
+				validated,
+				expectedQuery,
+				expectedSearchID,
+			) ||
+			!validPathPageParameters(validated.Query(), false) {
+			return protocolError()
+		}
+		return nil
 	}
 	parameters := validated.Query()
 	if parameters.Get("q") != expectedQuery {
@@ -679,7 +736,13 @@ func (client *Client) validateServerLink(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil ||
 		parsed.String() != raw ||
-		!client.sameSearchEndpoint(parsed) {
+		parsed.Scheme != client.base.Scheme ||
+		parsed.Host != client.base.Host ||
+		parsed.User != nil ||
+		parsed.Opaque != "" ||
+		parsed.Fragment != "" ||
+		(!client.sameSearchEndpoint(parsed) &&
+			!strings.HasPrefix(parsed.EscapedPath(), client.searchPath+"/")) {
 		return nil, newError(
 			"search_link_rejected",
 			"Search server returned an untrusted link.",
@@ -687,6 +750,12 @@ func (client *Client) validateServerLink(raw string) (*url.URL, error) {
 			false,
 			ErrProtocol,
 		)
+	}
+	if !client.sameSearchEndpoint(parsed) {
+		if !validPathPageParameters(parametersForPath(parsed), false) {
+			return nil, protocolError()
+		}
+		return parsed, nil
 	}
 	parameters := parsed.Query()
 	if len(parameters["q"]) != 1 ||
@@ -729,6 +798,102 @@ func (client *Client) sameSearchEndpoint(endpoint *url.URL) bool {
 		endpoint.Fragment == "" &&
 		endpoint.RawPath == "" &&
 		endpoint.Path == client.searchPath
+}
+
+func (client *Client) lifecycleLink(query string) *url.URL {
+	endpoint := *client.base
+	endpoint.Path = client.searchPath
+	endpoint.RawPath = ""
+	endpoint.RawQuery = url.Values{"q": {query}}.Encode()
+	return &endpoint
+}
+
+func (client *Client) sameDocumentSearchPath(
+	endpoint *url.URL,
+	query string,
+	searchID string,
+) bool {
+	if endpoint == nil || endpoint.ForceQuery ||
+		endpoint.Scheme != client.base.Scheme || endpoint.Host != client.base.Host ||
+		endpoint.User != nil || endpoint.Opaque != "" || endpoint.Fragment != "" {
+		return false
+	}
+	escaped := endpoint.EscapedPath()
+	prefix := client.searchPath + "/"
+	if !strings.HasPrefix(escaped, prefix) {
+		return false
+	}
+	remainder := strings.TrimPrefix(escaped, prefix)
+	separator := strings.IndexByte(remainder, '/')
+	if separator < 1 || separator == len(remainder)-1 ||
+		strings.Contains(remainder[separator+1:], "/") {
+		return false
+	}
+	reference, err := url.PathUnescape(remainder[:separator])
+	if err != nil || !validOpaqueID(reference) {
+		return false
+	}
+	selector, err := url.PathUnescape(remainder[separator+1:])
+	if err != nil {
+		return false
+	}
+	if searchID != "" && reference == searchID && validOpaqueID(selector) {
+		return escaped == client.searchPath+"/"+reference+"/"+selector
+	}
+	return escaped == canonicalPublicSearchPath(client.searchPath, reference, query)
+}
+
+func parametersForPath(endpoint *url.URL) url.Values {
+	if endpoint == nil {
+		return nil
+	}
+	return endpoint.Query()
+}
+
+func validPathPageParameters(parameters url.Values, pageRelation bool) bool {
+	if len(parameters) == 0 {
+		return !pageRelation
+	}
+	if len(parameters) != 1 {
+		return false
+	}
+	if cursor, exists := parameters["cursor"]; exists {
+		return len(cursor) == 1 && validOpaqueID(cursor[0])
+	}
+	if page, exists := parameters["page"]; exists {
+		return len(page) == 1 && validPage(page[0])
+	}
+	return false
+}
+
+func canonicalPublicSearchPath(searchPath, reference, query string) string {
+	prefix := searchPath + "/" + reference + "/"
+	if query == "." || query == ".." {
+		return prefix + ":" + query + ":"
+	}
+	var encoded strings.Builder
+	for _, character := range query {
+		component := encodeRFC3986Character(character)
+		if len(prefix)+encoded.Len()+len(component) > 2_048 {
+			break
+		}
+		encoded.WriteString(component)
+	}
+	return prefix + encoded.String()
+}
+
+func encodeRFC3986Character(character rune) string {
+	if character >= 'a' && character <= 'z' ||
+		character >= 'A' && character <= 'Z' ||
+		character >= '0' && character <= '9' ||
+		character == '-' || character == '.' || character == '_' || character == '~' {
+		return string(character)
+	}
+	var encoded strings.Builder
+	for _, value := range []byte(string(character)) {
+		_, _ = fmt.Fprintf(&encoded, "%%%02X", value)
+	}
+	return encoded.String()
 }
 
 func validateBase(input *url.URL) (*url.URL, error) {
@@ -829,17 +994,41 @@ func validCharset(parameters map[string]string) bool {
 	return len(parameters) == 1 && strings.EqualFold(parameters["charset"], "utf-8")
 }
 
-func validateQuery(query string) error {
-	if !validPublicText(query, 2_000) {
-		return newError(
-			"search_query_invalid",
-			"Search query must be valid UTF-8 between 1 and 2000 bytes.",
-			0,
-			false,
-			ErrProtocol,
-		)
+func canonicalizeQuery(input string) (string, error) {
+	if !utf8.ValidString(input) || len(input) > 8_000 {
+		return "", invalidQueryError()
 	}
-	return nil
+	var canonical strings.Builder
+	pendingSpace := false
+	for _, character := range norm.NFC.String(input) {
+		if unicode.IsSpace(character) || character == '\uFEFF' {
+			pendingSpace = canonical.Len() > 0
+			continue
+		}
+		if unicode.IsControl(character) {
+			return "", invalidQueryError()
+		}
+		if pendingSpace {
+			canonical.WriteByte(' ')
+			pendingSpace = false
+		}
+		canonical.WriteRune(character)
+	}
+	query := canonical.String()
+	if query == "" || len(query) > 2_000 {
+		return "", invalidQueryError()
+	}
+	return query, nil
+}
+
+func invalidQueryError() error {
+	return newError(
+		"search_query_invalid",
+		"Search query must contain between 1 and 2000 bytes after normalization.",
+		0,
+		false,
+		ErrProtocol,
+	)
 }
 
 func validPublicText(value string, maximum int) bool {

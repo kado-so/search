@@ -6,12 +6,12 @@ This repository owns:
 
 - the Go `kado` CLI;
 - autonomous-agent authentication and credential storage;
-- the kado-app Agent API client and output renderers;
+- the Search lifecycle client and output renderers;
 - the `kado-search` skill and direct plugin manifests; and
 - signed CLI release construction and self-update.
 
-`kado-app` owns the public service, authentication server, `agent-api.v1` and
-`agent-cli-json.v1` contracts, and website. The repositories remain independent.
+`kado-app` owns the public service, authentication server, Search Document
+contract, and website. The repositories remain independent.
 
 ## Client boundary
 
@@ -20,9 +20,11 @@ The CLI calls only public canonical `kado.so` resources. It:
 - discovers authentication metadata;
 - enrolls or authenticates a stable autonomous-agent principal;
 - keeps long-lived keys outside model-visible state;
-- calls only the app-owned `/api/agent/*` Search routes;
-- validates every Agent API envelope and compact result; and
-- emits `agent-cli-json.v1` or bounded human output.
+- performs authenticated Search against kado-app's `/search` resource;
+- validates product-execution and pinned public Search links while keeping
+  lifecycle operations on the private authenticated resource;
+- validates every Search Document; and
+- emits canonical JSON, paginated JSONL, or bounded human output.
 
 Each canonical calling agent has an independent management key. Ordinary CLI
 use stores it in the operating-system credential store. A configurable,
@@ -37,10 +39,10 @@ process and environment data, Git identity, and browser state are never sent.
 
 ## Contract consumption
 
-The Agent API and CLI JSON contracts are owned and published by `kado-app`.
-This repository mirrors their request types and required response fields in
-runtime validation and conformance tests. Unsupported versions and incomplete
-or inconsistent results fail closed.
+The Search Document JSON Schema, JSON-LD context, semantic rules, and fixtures
+are owned and published by `kado-app`. This repository embeds the three runtime
+contract artifacts and keeps conformance fixtures in test-only data.
+Unsupported major versions fail clearly.
 
 ## Skill boundary
 
@@ -73,7 +75,7 @@ exits.
 
 - The skill invokes the CLI instead of handling credentials or HTTP.
 - Private keys and tokens never enter model context or ordinary logs.
-- Agent API envelope and result validation remain local and deterministic.
+- JSON-LD and schema validation remain local and deterministic.
 - CLI updates verify signed archive metadata and the replacement executable
   identity before installation.
 - Kado never overwrites a skill or executable owned by another installer.
