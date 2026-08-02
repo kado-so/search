@@ -15,11 +15,11 @@ or install directly from the canonical Kado HTTPS boundary.
 
 On Linux or macOS:
 
-    curl -fsSL https://kado.so/install.sh | sh
+    curl -fsSL https://kado.so/install/install.sh | sh
 
 or:
 
-    wget -qO- https://kado.so/install.sh | sh
+    wget -qO- https://kado.so/install/install.sh | sh
 
 On Windows:
 

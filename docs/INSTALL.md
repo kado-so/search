@@ -8,7 +8,7 @@ Homebrew, npm, WinGet, or another package manager.
 macOS and Linux:
 
 ```sh
-curl -fsSL https://kado.so/install.sh | sh
+curl -fsSL https://kado.so/install/install.sh | sh
 ```
 
 An agent may use `wget -qO-` instead. Windows:

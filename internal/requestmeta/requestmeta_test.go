@@ -23,7 +23,7 @@ func (capture *captureTransport) RoundTrip(request *http.Request) (*http.Respons
 	}, nil
 }
 
-func TestEnrollmentIncludesOnlyHostnameAndUsername(t *testing.T) {
+func TestEnrollmentIncludesBoundedInstallationMetadata(t *testing.T) {
 	capture := &captureTransport{}
 	transport := newTransport(
 		capture,
@@ -31,6 +31,7 @@ func TestEnrollmentIncludesOnlyHostnameAndUsername(t *testing.T) {
 		"host_0123456789012345678901",
 		"workstation",
 		"local-user",
+		"design_partner",
 	)
 	request, err := http.NewRequest(
 		http.MethodPost,
@@ -53,6 +54,7 @@ func TestEnrollmentIncludesOnlyHostnameAndUsername(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
+		"cohort_id":      "design_partner",
 		"host_id":        "host_0123456789012345678901",
 		"hostname":       "workstation",
 		"local_username": "local-user",
@@ -79,6 +81,7 @@ func TestMetadataIsRemovedFromOtherRequests(t *testing.T) {
 		"host_0123456789012345678901",
 		"workstation",
 		"local-user",
+		"",
 	)
 	request, err := http.NewRequest(http.MethodGet, "https://kado.so/search", nil)
 	if err != nil {
@@ -93,6 +96,64 @@ func TestMetadataIsRemovedFromOtherRequests(t *testing.T) {
 	}
 	if value := capture.request.Header.Get(HeaderAgent); value != "claude-code" {
 		t.Fatalf("agent header = %q", value)
+	}
+}
+
+func TestNewTransportCapturesOnlyBoundedCohortFromEnvironment(t *testing.T) {
+	t.Setenv(EnvironmentCohort, "not a cohort")
+	capture := &captureTransport{}
+	transport := NewTransport(capture, "codex", "host_0123456789012345678901")
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://kado.so/api/auth/agent/enroll",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(request); err != nil {
+		t.Fatal(err)
+	}
+	encoded := capture.request.Header.Get(HeaderInstallation)
+	payload, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal(payload, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := metadata["cohort_id"]; exists {
+		t.Fatalf("invalid cohort included in installation metadata: %#v", metadata)
+	}
+}
+
+func TestNewTransportIncludesValidCohortFromEnvironment(t *testing.T) {
+	t.Setenv(EnvironmentCohort, "campaign_2026")
+	capture := &captureTransport{}
+	transport := NewTransport(capture, "codex", "host_0123456789012345678901")
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://kado.so/api/auth/agent/enroll",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(request); err != nil {
+		t.Fatal(err)
+	}
+	encoded := capture.request.Header.Get(HeaderInstallation)
+	payload, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal(payload, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["cohort_id"] != "campaign_2026" {
+		t.Fatalf("cohort_id = %q", metadata["cohort_id"])
 	}
 }
 

@@ -15,10 +15,12 @@ import (
 const (
 	HeaderInstallation = "Kado-Installation-Metadata"
 	HeaderAgent        = "X-Kado-Agent"
+	EnvironmentCohort  = "KADO_INSTALL_COHORT"
 	maxLocalValueSize  = 254
 )
 
 type installationMetadata struct {
+	CohortID      string `json:"cohort_id,omitempty"`
 	HostID        string `json:"host_id"`
 	Hostname      string `json:"hostname,omitempty"`
 	LocalUsername string `json:"local_username,omitempty"`
@@ -39,14 +41,15 @@ func NewTransport(base http.RoundTripper, agent, hostID string) *Transport {
 	if current, err := user.Current(); err == nil {
 		username = current.Username
 	}
-	return newTransport(base, agent, hostID, hostname, username)
+	return newTransport(base, agent, hostID, hostname, username, os.Getenv(EnvironmentCohort))
 }
 
-func newTransport(base http.RoundTripper, agent, hostID, hostname, username string) *Transport {
+func newTransport(base http.RoundTripper, agent, hostID, hostname, username, cohortID string) *Transport {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	installation, _ := json.Marshal(installationMetadata{
+		CohortID:      boundedCohortID(cohortID),
 		HostID:        boundedLocalValue(hostID),
 		Hostname:      boundedLocalValue(hostname),
 		LocalUsername: boundedLocalValue(username),
@@ -57,6 +60,22 @@ func newTransport(base http.RoundTripper, agent, hostID, hostname, username stri
 		agent:                agent,
 		installationMetadata: base64.RawURLEncoding.EncodeToString(installation),
 	}
+}
+
+func boundedCohortID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) == 0 || len(value) > 64 {
+		return ""
+	}
+	for index, character := range []byte(value) {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			(index > 0 && (character == '_' || character == '-')) {
+			continue
+		}
+		return ""
+	}
+	return value
 }
 
 func (transport *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
