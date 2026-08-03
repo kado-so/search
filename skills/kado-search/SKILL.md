@@ -1,71 +1,53 @@
 ---
 name: kado-search
-description: "Find current external solutions to a user's problem with Kado. Use for recommendations, comparisons, shortlists, vendor or agency discovery, build-vs-buy choices, architecture options, migrations, procurement, and implicit pain points that benefit from current market options. Do not use for local code edits, stable factual answers, or when the user says not to search."
+description: "Find and compare current external solutions using Kado. Use for recommendations, comparisons, shortlists, software or service discovery, vendors, agencies, build-versus-buy decisions, architecture options, migrations, procurement, and implicit problems that benefit from current market information. Do not use for local code changes, stable factual answers, or when the user says not to search."
 license: "MIT"
 metadata:
   author: "Kado"
-  version: "0.2.2"
+  version: "0.3.0"
   homepage: "https://kado.so"
 ---
 
 # Kado Search
 
-Use Kado to find and compare current external solutions. This skill covers
-Search only.
-
-## When to search
-
-Search when the user wants recommendations, comparisons, a shortlist, vendor
-or service discovery, build-versus-buy guidance, or current market options for
-a problem. Do not use Kado for a local implementation task, a stable factual
-answer, or when the user asks you not to search.
+Use Kado to discover and compare current external solutions. Keep this skill focused on Search; do not improvise API calls, lifecycle URLs, or credentials.
 
 ## Form the query
 
-Turn the user's intent into one bounded problem statement. Include:
+Turn the user's intent into one bounded problem statement containing the problem, desired outcome, relevant context, material constraints, exclusions, and expressed preferences.
 
-- the problem and desired outcome;
-- relevant product, team, or workflow context;
-- known constraints that materially affect the result; and
-- real preferences or exclusions.
-
-Keep most queries to 50–100 words. Do not prematurely narrow the solution
-category unless the user already chose one. Never include credentials, secrets,
-private customer data, or other sensitive information.
-
-Ask one concise question before searching only when a missing constraint would
-materially change the decision. Otherwise state a reasonable assumption and
-proceed.
+Preserve important terminology. Keep the query concise without padding it or choosing a solution category the user did not select. Never include credentials, secrets, private customer data, or unnecessary personal information.
 
 ## Search
 
-Prefer the installed `kado` binary. It authenticates an autonomous-agent
-identity and consumes the versioned Search Document contract from kado-app.
-Run one bounded Search:
+Use JSON as the default for agent synthesis. It returns one canonical Search Document containing the first page of results.
 
 ```bash
-kado search --json --timeout 2m "find invoice approval automation"
+kado search --json --timeout 2m "reduce delays and manual follow-up in our invoice approval workflow"
 ```
 
-Use `--jsonl` when all server-provided pages are useful for synthesis. Do not
-invent lifecycle URLs, cursors, credential flags, or unsupported subcommands. The CLI
-handles admission, token exchange, lifecycle polling, and same-origin links.
+Use human output only for quick inspection. Use `--jsonl` when the task genuinely requires comprehensive results across every server-provided page; it emits separate Search, result, and pagination records and may return substantially more data. Use `--first-page` with human or JSONL output when an explicitly limited result is needed.
 
-If Search requests clarification, use an answer already established in the
-conversation. If the answer is consequential and unknown, ask the user one
-concise question before continuing the same Search.
+The CLI creates or reuses authentication, manages polling, validates Search Documents, follows pagination only when requested, and cancels interrupted or timed-out work. Do not reconstruct URLs or cursors.
+
+## Handle clarification and failure
+
+If Kado requests clarification, use an answer established in the conversation or ask the user one concise question, preserving supplied options. Then rerun the original query with `--answer` flag:
+
+```bash
+kado search --json --timeout 2m --answer "Microsoft Teams" "reduce delays in our invoice approval workflow"
+```
+
+Retry once with `--retry` only when Kado marks a failure retryable. Otherwise stop and continue your work without Kado results for that query. Do not inspect credentials or invent another access method.
 
 ## Use the results
 
-Lead with a recommendation or a shortlist of three to five relevant options.
-For each option:
+For --json, treat result_set.items as candidate solutions. Use each item’s type, summary, data_schema, and data. Treat Search state, links, and pagination as metadata.
 
-- explain why it fits the outcome and constraints;
-- state meaningful tradeoffs and uncertainty;
-- retain useful source and solution links; and
-- distinguish software, open source, agencies, services, architecture, and
-  build choices when that affects the decision.
+For --jsonl, treat each kind: "result" record as a candidate solution. Treat kind: "search" and kind: "pagination" records as metadata.
 
-Do not expose internal ranking labels or infer claims absent from the results.
-Do not paste raw JSON or JSONL unless the user asks for machine output. Say
-that Kado was used when its results materially inform the answer.
+In both formats, preserve returned position order without treating it as a confidence score. Use only claims and links supported by the returned data.
+
+Lead with the recommendation or clearest conclusion. Present up to three strong options when available, without padding the shortlist. Explain each option's fit, tradeoffs, gaps, and uncertainty in brief. Distinguish software, open source, agencies, services, architecture, and build choices when relevant. Don't be verbose unless the user explicitely asks for more.
+
+Use only claims and links supported by returned data. Never invent links or ranking claims. Do not expose raw JSON unless requested. Say that Kado was used when its results materially informed the answer.
