@@ -92,10 +92,11 @@ The generated `INSTALL-CLI.md`, `install.sh`, and `install.ps1` implement the
 agent-first bootstrap from canonical `kado.so` HTTPS endpoints. They select the
 host target, download stable signed metadata and the immutable versioned
 archive, run verification through the candidate, install into a user-owned
-directory, configure user PATH when needed, and install the signed Search
-skill. `kado update` verifies the signed archive descriptor, safely extracts
-the candidate, checks its stamped release identity, retains the existing
-executable as a rollback file, and only then performs the replacement.
+directory, configure user PATH when needed, install the signed Search skill,
+and create or reuse and verify authentication. `kado update` verifies the
+signed archive descriptor, safely extracts the candidate, checks its stamped
+release identity, retains the existing executable as a rollback file, and only
+then performs the replacement.
 
 ## Runtime update and removal policy
 

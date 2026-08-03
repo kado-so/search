@@ -75,8 +75,10 @@ An agent:
 3. places the candidate in a private temporary directory;
 4. verifies the downloaded release;
 5. installs into a user-writable destination;
-6. executes `kado skill install`; and
-7. reports the installed CLI and skill versions.
+6. executes `kado skill install`;
+7. creates or reuses authentication and verifies it with `kado auth status`;
+   and
+8. reports installation completion.
 
 The bootstrap is the root-of-trust transition. The install descriptor and
 public key must be served from canonical HTTPS without redirects. Once the

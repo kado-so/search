@@ -28,7 +28,8 @@ On Windows:
 The installers require no superuser privileges. They authenticate canonical
 metadata with the downloaded candidate, verify its archive and stamped release
 identity, install into a user-owned directory, configure the user PATH when
-needed, and install the latest compatible signed Search skill. Set
+needed, install the latest compatible signed Search skill, and create or reuse
+an authenticated Kado identity. Set
 KADO_INSTALL_DIR to choose another user-owned executable directory or
 KADO_NO_MODIFY_PATH=1 to leave shell configuration unchanged.
 
@@ -78,6 +79,14 @@ download() {
   fi
 }
 
+executable_mode() {
+  binary_path="$1"
+  case "$target_os" in
+    darwin) stat -f '%%Lp' "$binary_path" ;;
+    linux) stat -c '%%a' "$binary_path" ;;
+  esac
+}
+
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/kado-install.XXXXXX")"
 cleanup() { rm -rf "$temporary"; }
 trap cleanup EXIT HUP INT TERM
@@ -100,7 +109,7 @@ INSTALL-CLI.md" || {
 }
 tar -xzf "$temporary/$archive" -C "$temporary"
 test -f "$temporary/kado" && test ! -L "$temporary/kado"
-test "$(stat -f '%%Lp' "$temporary/kado" 2>/dev/null || stat -c '%%a' "$temporary/kado")" = "755"
+test "$(executable_mode "$temporary/kado")" = "755"
 identity="$("$temporary/kado" version --json)"
 printf '%%s\n' "$identity" | grep -F "\"version\":\"${version}\"" >/dev/null
 printf '%%s\n' "$identity" | grep -F "\"target\":\"${target_os}/${target_arch}\"" >/dev/null
@@ -144,7 +153,15 @@ esac
 if ! "$destination" skill install; then
   printf 'kado was installed; run kado skill install to finish skill setup\n' >&2
 fi
-printf 'installed kado %%s at %%s; credentials were unchanged\n' "$version" "$destination"
+if ! "$destination" auth create; then
+  printf 'kado was installed, but authentication setup failed; run kado auth create to retry\n' >&2
+  exit 1
+fi
+if ! "$destination" auth status; then
+  printf 'kado was installed and authentication was configured, but verification failed; run kado auth status to retry\n' >&2
+  exit 1
+fi
+printf 'installed kado %%s at %%s; authentication configured and verified\n' "$version" "$destination"
 `, source.InstallURL)
 }
 
@@ -236,7 +253,15 @@ try {
   if ($LASTEXITCODE -ne 0) {
     Write-Warning "Kado was installed; run 'kado skill install' to finish skill setup"
   }
-  Write-Output "installed kado $Version at $Destination; credentials were unchanged"
+  & $Destination auth create
+  if ($LASTEXITCODE -ne 0) {
+    throw "Kado was installed, but authentication setup failed; run 'kado auth create' to retry"
+  }
+  & $Destination auth status
+  if ($LASTEXITCODE -ne 0) {
+    throw "Kado was installed and authentication was configured, but verification failed; run 'kado auth status' to retry"
+  }
+  Write-Output "installed kado $Version at $Destination; authentication configured and verified"
 } finally {
   Remove-Item -LiteralPath $Temporary -Recurse -Force -ErrorAction SilentlyContinue
 }

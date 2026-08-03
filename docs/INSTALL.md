@@ -26,8 +26,10 @@ release descriptor an agent can use to:
    identity;
 4. install the executable in a user-writable directory;
 5. run `kado skill install` to install the latest compatible signed Search
-   skill, with the bundled copy as an offline fallback; and
-6. run `kado auth status` to confirm the installation.
+   skill, with the bundled copy as an offline fallback;
+6. run idempotent `kado auth create` to create an identity or reuse an active
+   existing credential; and
+7. run `kado auth status` to verify the configured identity.
 
 The agent must not need a language runtime or third-party package manager.
 Initial bootstrap uses operating-system facilities or the agent's own HTTPS

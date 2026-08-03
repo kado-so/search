@@ -1288,6 +1288,27 @@ func serviceHTTPClient(
 func (commands *defaultAuthCommands) Create(
 	ctx context.Context,
 ) (agentauth.CredentialStatus, error) {
+	status, statusErr := commands.client.CredentialStatus(ctx, commands.store)
+	if statusErr == nil {
+		switch status.Status {
+		case agentauth.StatusActive:
+			if err := localstate.AddIdentity(commands.configDir, commands.agent); err != nil {
+				return agentauth.CredentialStatus{}, err
+			}
+			return status, nil
+		case agentauth.StatusRevoked:
+			return agentauth.CredentialStatus{}, agentauth.ErrCredentialRevoked
+		case agentauth.StatusNotConfigured:
+			// Continue to enrollment. The concrete client normally represents this
+			// state as ErrCredentialNotFound, but accepting the explicit status keeps
+			// the command safe for other client implementations.
+		default:
+			return agentauth.CredentialStatus{}, agentauth.ErrProtocol
+		}
+	} else if !errors.Is(statusErr, agentauth.ErrCredentialNotFound) {
+		return agentauth.CredentialStatus{}, statusErr
+	}
+
 	result, err := commands.client.AuthenticateOrEnroll(
 		ctx,
 		commands.store,
