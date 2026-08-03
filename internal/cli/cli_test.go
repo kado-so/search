@@ -174,6 +174,69 @@ func TestDefaultAuthCreateCompletesRequiredAdmissionAndFinalizesEnrollment(t *te
 	}
 }
 
+func TestDefaultAuthCreateReturnsExistingActiveCredentialWithoutEnrollment(t *testing.T) {
+	t.Parallel()
+
+	existing := agentauth.CredentialStatus{
+		Status:       agentauth.StatusActive,
+		PrincipalID:  "agt_existing",
+		CredentialID: "acred_existing",
+		ClientID:     "clt_existing",
+	}
+	client := &scriptedAgentAuthClient{status: existing}
+	configDir := t.TempDir()
+	commands := &defaultAuthCommands{
+		client: client, configDir: configDir, agent: "codex",
+	}
+
+	status, err := commands.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if status != existing {
+		t.Fatalf("Create() status = %#v, want %#v", status, existing)
+	}
+	if client.statusCalls != 1 || len(client.authenticateRequests) != 0 ||
+		len(client.acquireRequests) != 0 {
+		t.Fatalf(
+			"status calls = %d; authenticate requests = %#v; acquire requests = %#v",
+			client.statusCalls,
+			client.authenticateRequests,
+			client.acquireRequests,
+		)
+	}
+	identities, err := localstate.ListIdentities(configDir)
+	if err != nil || len(identities) != 1 || identities[0] != "codex" {
+		t.Fatalf("ListIdentities() = %v, %v", identities, err)
+	}
+}
+
+func TestDefaultAuthCreateDoesNotReplaceRevokedCredential(t *testing.T) {
+	t.Parallel()
+
+	client := &scriptedAgentAuthClient{status: agentauth.CredentialStatus{
+		Status:       agentauth.StatusRevoked,
+		PrincipalID:  "agt_revoked",
+		CredentialID: "acred_revoked",
+		ClientID:     "clt_revoked",
+	}}
+	commands := &defaultAuthCommands{
+		client: client, configDir: t.TempDir(), agent: "codex",
+	}
+
+	_, err := commands.Create(context.Background())
+	if !errors.Is(err, agentauth.ErrCredentialRevoked) {
+		t.Fatalf("Create() error = %v, want ErrCredentialRevoked", err)
+	}
+	if len(client.authenticateRequests) != 0 || len(client.acquireRequests) != 0 {
+		t.Fatalf(
+			"authenticate requests = %#v; acquire requests = %#v",
+			client.authenticateRequests,
+			client.acquireRequests,
+		)
+	}
+}
+
 func TestDefaultAuthCreateRejectsIdentityChangeAfterAdmission(t *testing.T) {
 	t.Parallel()
 
@@ -1191,6 +1254,9 @@ type scriptedAgentAuthClient struct {
 	acquireRequests      []agentauth.Request
 	token                agentauth.SessionToken
 	tokenError           error
+	status               agentauth.CredentialStatus
+	statusError          error
+	statusCalls          int
 }
 
 func (client *scriptedAgentAuthClient) AuthenticateOrEnroll(
@@ -1212,11 +1278,18 @@ func (client *scriptedAgentAuthClient) AcquireToken(
 	return client.token, client.tokenError
 }
 
-func (*scriptedAgentAuthClient) CredentialStatus(
+func (client *scriptedAgentAuthClient) CredentialStatus(
 	context.Context,
 	keystore.Store,
 ) (agentauth.CredentialStatus, error) {
-	return agentauth.CredentialStatus{}, nil
+	client.statusCalls++
+	if client.statusError != nil {
+		return agentauth.CredentialStatus{}, client.statusError
+	}
+	if client.status.Status == "" {
+		return agentauth.CredentialStatus{}, agentauth.ErrCredentialNotFound
+	}
+	return client.status, nil
 }
 
 func (*scriptedAgentAuthClient) RevokeCurrentCredential(

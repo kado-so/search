@@ -45,6 +45,40 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 	}
 }
 
+func TestVersionParsesMetadataWithLFAndCRLF(t *testing.T) {
+	t.Parallel()
+
+	content := "---\nname: kado-search\nmetadata:\n  version: \"0.2.2\"\n---\n"
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{name: "lf", content: content},
+		{name: "crlf", content: strings.ReplaceAll(content, "\n", "\r\n")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := versionFromSkill([]byte(test.content)); got != "0.2.2" {
+				t.Fatalf("versionFromSkill() = %q, want 0.2.2", got)
+			}
+		})
+	}
+}
+
+func TestVersionRejectsMissingOrMalformedMetadata(t *testing.T) {
+	t.Parallel()
+
+	for _, content := range []string{
+		"metadata:\n  version: \"0.2.2\"\n",
+		"---\nmetadata:\n  version: [\n---\n",
+		"---\nname: kado-search\n---\n",
+	} {
+		if got := versionFromSkill([]byte(content)); got != "" {
+			t.Fatalf("versionFromSkill(%q) = %q, want empty", content, got)
+		}
+	}
+}
+
 func TestSkillAssetsAndAgentMetadata(t *testing.T) {
 	metadata := readText(t, filepath.Join("agents", "openai.yaml"))
 	for _, required := range []string{
@@ -97,7 +131,7 @@ func readText(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatalf("read %q: %v", path, err)
 	}
-	return string(encoded)
+	return strings.ReplaceAll(string(encoded), "\r\n", "\n")
 }
 
 func readJSON(t *testing.T, path string) map[string]any {

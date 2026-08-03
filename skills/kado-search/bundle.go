@@ -2,12 +2,16 @@
 package kado_search
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"io/fs"
-	"regexp"
 	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Files is the offline fallback used when the authoritative signed skill
@@ -64,9 +68,38 @@ func Version() string {
 	if err != nil {
 		return ""
 	}
-	match := regexp.MustCompile(`(?m)^  version: "([^"]+)"$`).FindSubmatch(value)
-	if len(match) != 2 {
+	return versionFromSkill(value)
+}
+
+func versionFromSkill(value []byte) string {
+	frontmatter, ok := skillFrontmatter(value)
+	if !ok {
 		return ""
 	}
-	return string(match[1])
+	var document struct {
+		Metadata struct {
+			Version string `yaml:"version"`
+		} `yaml:"metadata"`
+	}
+	if err := yaml.Unmarshal(frontmatter, &document); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(document.Metadata.Version)
+}
+
+func skillFrontmatter(value []byte) ([]byte, bool) {
+	scanner := bufio.NewScanner(bytes.NewReader(value))
+	if !scanner.Scan() || scanner.Text() != "---" {
+		return nil, false
+	}
+	var frontmatter bytes.Buffer
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "---" {
+			return frontmatter.Bytes(), true
+		}
+		frontmatter.WriteString(line)
+		frontmatter.WriteByte('\n')
+	}
+	return nil, false
 }

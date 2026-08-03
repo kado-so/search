@@ -165,8 +165,15 @@ func TestGeneratedInstallAndUninstallDocumentsEnforcePolicy(t *testing.T) {
 		!strings.Contains(documents[2], "Invoke-WebRequest") {
 		t.Fatal("generated installers do not provide direct HTTPS bootstrap")
 	}
+	for _, install := range documents[1:3] {
+		if !strings.Contains(install, "auth create") ||
+			!strings.Contains(install, "auth status") ||
+			!strings.Contains(install, "authentication configured and verified") {
+			t.Fatalf("generated installer does not configure and verify authentication: %q", install)
+		}
+	}
 	for _, install := range documents[:3] {
-		if !strings.Contains(install, "credentials") ||
+		if !strings.Contains(strings.ToLower(install), "authenticat") ||
 			!strings.Contains(install, "identity") {
 			t.Fatalf("install description lost security policy: %q", install)
 		}
