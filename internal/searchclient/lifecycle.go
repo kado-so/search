@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// Run executes a Search through terminal state, optionally answers one or more
-// server questions, and follows opaque next-page relations.
+// Run executes a Search through terminal state and follows opaque next-page
+// relations.
 func (client *Client) Run(
 	ctx context.Context,
 	query string,
@@ -40,7 +40,6 @@ func (client *Client) Run(
 		return Result{}, timeoutResult(err)
 	}
 	lifecycleOperations := 1
-	clarificationSubmissions := 0
 	retriedFailure := false
 	for {
 		switch document.Status {
@@ -60,48 +59,6 @@ func (client *Client) Run(
 			}
 			lifecycleOperations++
 			next, err := client.Status(runContext, document)
-			if err != nil {
-				if errors.Is(err, context.DeadlineExceeded) ||
-					errors.Is(err, context.Canceled) {
-					client.cancelAfterInterruption(ctx, document, options.CancelOnTimeout)
-				}
-				return Result{Document: document}, timeoutResult(err)
-			}
-			if err := validateTransition(document, next); err != nil {
-				return Result{Document: document}, err
-			}
-			document = next
-		case StatusNeedsInput:
-			if document.Question == nil {
-				return Result{Document: document}, protocolError()
-			}
-			if options.Clarify == nil {
-				return Result{Document: document}, &NeedsInputError{
-					Question: cloneQuestion(*document.Question),
-				}
-			}
-			if clarificationSubmissions >= client.limits.MaxClarifications {
-				return Result{Document: document}, clarificationLimitError()
-			}
-			answer, err := awaitClarification(
-				runContext,
-				options.Clarify,
-				cloneQuestion(*document.Question),
-			)
-			if err != nil {
-				if runContext.Err() != nil ||
-					errors.Is(err, context.DeadlineExceeded) ||
-					errors.Is(err, context.Canceled) {
-					client.cancelAfterInterruption(ctx, document, options.CancelOnTimeout)
-				}
-				return Result{Document: document}, timeoutResult(err)
-			}
-			if lifecycleOperations >= client.limits.MaxLifecycleOperations {
-				return Result{Document: document}, lifecycleLimitError()
-			}
-			lifecycleOperations++
-			clarificationSubmissions++
-			next, err := client.Clarify(runContext, document, answer)
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) ||
 					errors.Is(err, context.Canceled) {
@@ -199,45 +156,11 @@ func (client *Client) cancelAfterInterruption(
 	_, _ = client.Cancel(cleanup, document)
 }
 
-type clarificationResult struct {
-	answer string
-	err    error
-}
-
-func awaitClarification(
-	ctx context.Context,
-	clarifier Clarifier,
-	question Question,
-) (string, error) {
-	result := make(chan clarificationResult, 1)
-	go func() {
-		answer, err := clarifier(ctx, question)
-		result <- clarificationResult{answer: answer, err: err}
-	}()
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case completed := <-result:
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		return completed.answer, completed.err
-	}
-}
-
 func validateTransition(previous, next Document) error {
 	if previous.SearchID != next.SearchID || previous.Query != next.Query {
 		return protocolError()
 	}
 	return nil
-}
-
-func cloneQuestion(question Question) Question {
-	return Question{
-		ID:      question.ID,
-		Prompt:  question.Prompt,
-		Options: append([]string(nil), question.Options...),
-	}
 }
 
 func timeoutResult(err error) error {
@@ -251,16 +174,6 @@ func lifecycleLimitError() error {
 	return newError(
 		"search_lifecycle_limit",
 		"Search exceeded the local lifecycle operation limit.",
-		0,
-		false,
-		ErrProtocol,
-	)
-}
-
-func clarificationLimitError() error {
-	return newError(
-		"search_clarification_limit",
-		"Search exceeded the local clarification limit.",
 		0,
 		false,
 		ErrProtocol,

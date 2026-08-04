@@ -106,6 +106,9 @@ func validatePages(primary []byte, pages [][]byte) ([]validatedPage, error) {
 		if err != nil {
 			return nil, err
 		}
+		if document.State.Question != nil || !supportedStatus(document.State.Status) {
+			return nil, ErrOutput
+		}
 		var raw rawDocument
 		if err := json.Unmarshal(encoded, &raw); err != nil {
 			return nil, ErrOutput
@@ -144,18 +147,6 @@ func renderHuman(pages []validatedPage, width int) ([]byte, error) {
 				first.State.Progress.Message,
 				width,
 			)
-		}
-	case "needs_input":
-		if first.State.Question != nil {
-			writeWrapped(&output, "Question: ", first.State.Question.Prompt, width)
-			for index, option := range first.State.Question.Options {
-				writeWrapped(
-					&output,
-					fmt.Sprintf("  %d. ", index+1),
-					option,
-					width,
-				)
-			}
 		}
 	case "failed":
 		if first.State.Error != nil {
@@ -239,6 +230,15 @@ func renderHuman(pages []validatedPage, width int) ([]byte, error) {
 		return nil, ErrOutput
 	}
 	return append([]byte(nil), output.Bytes()...), nil
+}
+
+func supportedStatus(status string) bool {
+	switch status {
+	case "queued", "running", "complete", "failed", "canceled":
+		return true
+	default:
+		return false
+	}
 }
 
 type jsonlSearch struct {

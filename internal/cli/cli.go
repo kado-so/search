@@ -801,8 +801,6 @@ func parseSearchArguments(
 	options := searchclient.DefaultRunOptions()
 	outputOptions := searchoutput.Options{Mode: searchoutput.ModeHuman}
 	var queryParts []string
-	var answer string
-	answerSet := false
 	modeSet := false
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
@@ -820,13 +818,6 @@ func parseSearchArguments(
 				return "", options, outputOptions, usageError("search timeout must be between 1ns and 30m")
 			}
 			options.Timeout = timeout
-		case "--answer":
-			index++
-			if index >= len(args) || answerSet {
-				return "", options, outputOptions, usageError("search --answer requires one value")
-			}
-			answer = args[index]
-			answerSet = true
 		case "--first-page":
 			options.FollowPages = false
 		case "--retry":
@@ -868,13 +859,8 @@ func parseSearchArguments(
 	query := strings.Join(queryParts, " ")
 	if query == "" {
 		return "", options, outputOptions, usageError(
-			"usage: kado search [--json|--jsonl] [--width columns] [--timeout duration] [--answer value] [--first-page] [--retry] <query>",
+			"usage: kado search [--json|--jsonl] [--width columns] [--timeout duration] [--first-page] [--retry] <query>",
 		)
-	}
-	if answerSet {
-		options.Clarify = func(context.Context, searchclient.Question) (string, error) {
-			return answer, nil
-		}
 	}
 	return query, options, outputOptions, nil
 }
@@ -1050,15 +1036,6 @@ func authDiagnostic(operation string, cause error) error {
 }
 
 func searchDiagnostic(cause error) error {
-	var needsInput *searchclient.NeedsInputError
-	if errors.As(cause, &needsInput) {
-		return diagnostic.New(
-			"search_needs_input",
-			"Search requires clarification; rerun with --answer <value>",
-			diagnostic.ExitFailure,
-			cause,
-		)
-	}
 	var failure *searchclient.FailureError
 	if errors.As(cause, &failure) {
 		return diagnostic.New(

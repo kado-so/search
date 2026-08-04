@@ -27,7 +27,7 @@ by display width, and bounds result previews.
 The client starts and manages Search through kado-app's authenticated `/search`
 resource. It accepts the app's same-origin product-execution and pinned public
 Search links, keeps lifecycle mutations on the private resource, and never
-reconstructs opaque cursors. Requests, response bodies, retries, clarification,
+reconstructs opaque cursors. Requests, response bodies, retries,
 cancellation, and lifecycle operations are bounded.
 
 ## Contract validation
