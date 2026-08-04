@@ -19,18 +19,16 @@ const (
 )
 
 const (
-	StatusQueued     = "queued"
-	StatusRunning    = "running"
-	StatusNeedsInput = "needs_input"
-	StatusComplete   = "complete"
-	StatusFailed     = "failed"
-	StatusCanceled   = "canceled"
+	StatusQueued   = "queued"
+	StatusRunning  = "running"
+	StatusComplete = "complete"
+	StatusFailed   = "failed"
+	StatusCanceled = "canceled"
 )
 
 var (
 	ErrProtocol           = errors.New("search response protocol failed")
 	ErrAuthentication     = errors.New("search authentication failed")
-	ErrNeedsInput         = errors.New("search needs input")
 	ErrFailed             = errors.New("search failed")
 	ErrCanceled           = errors.New("search canceled")
 	ErrTimeout            = errors.New("search timed out")
@@ -48,15 +46,14 @@ type AuthorizationSource interface {
 }
 
 // Limits bounds remote input, retries, lifecycle work, pages, and request
-// duration. Lifecycle operations include the initial Search plus status,
-// clarification, and retry requests; pagination has its own independent bound.
+// duration. Lifecycle operations include the initial Search plus status and
+// retry requests; pagination has its own independent bound.
 type Limits struct {
 	MaxDocumentBytes       int64
 	MaxErrorBytes          int64
 	MaxPages               int
 	MaxGETAttempts         int
 	MaxLifecycleOperations int
-	MaxClarifications      int
 	MaxRequestTime         time.Duration
 }
 
@@ -67,16 +64,8 @@ func DefaultLimits() Limits {
 		MaxPages:               100,
 		MaxGETAttempts:         2,
 		MaxLifecycleOperations: 256,
-		MaxClarifications:      8,
 		MaxRequestTime:         30 * time.Second,
 	}
-}
-
-// Question is the bounded clarification request in a needs_input document.
-type Question struct {
-	ID      string
-	Prompt  string
-	Options []string
 }
 
 // Failure is the bounded public failure in a failed Search Document.
@@ -98,7 +87,6 @@ type Document struct {
 	SearchID      string
 	Query         string
 	Status        string
-	Question      *Question
 	Failure       *Failure
 }
 
@@ -119,15 +107,10 @@ type Result struct {
 	Pages    []Document
 }
 
-// Clarifier supplies an answer for a bounded server question. It must not
-// receive credentials or raw response bytes.
-type Clarifier func(context.Context, Question) (string, error)
-
 // RunOptions controls lifecycle behavior without changing the server contract.
 type RunOptions struct {
 	Timeout         time.Duration
 	PollInterval    time.Duration
-	Clarify         Clarifier
 	FollowPages     bool
 	RetryFailure    bool
 	CancelOnTimeout bool
@@ -192,16 +175,6 @@ func (failure *Error) StatusCode() int {
 func (failure *Error) Retryable() bool {
 	return failure.retryable
 }
-
-// NeedsInputError is returned when the server asks a question and no
-// clarifier was configured.
-type NeedsInputError struct {
-	Question Question
-}
-
-func (*NeedsInputError) Error() string    { return "Search requires clarification." }
-func (*NeedsInputError) GoString() string { return "searchclient.NeedsInputError{redacted}" }
-func (*NeedsInputError) Unwrap() error    { return ErrNeedsInput }
 
 // FailureError reports a structured terminal Search failure.
 type FailureError struct {

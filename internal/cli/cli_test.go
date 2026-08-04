@@ -542,8 +542,6 @@ func TestSearchRunsLifecycleWithBoundedOptionsAndSafeSummary(t *testing.T) {
 			"search",
 			"--timeout",
 			"45s",
-			"--answer",
-			"Web",
 			"--first-page",
 			"--retry",
 			"find",
@@ -576,16 +574,8 @@ func TestSearchRunsLifecycleWithBoundedOptionsAndSafeSummary(t *testing.T) {
 	if search.query != "find agent tools" ||
 		search.options.Timeout != 45*time.Second ||
 		search.options.FollowPages ||
-		!search.options.RetryFailure ||
-		search.options.Clarify == nil {
+		!search.options.RetryFailure {
 		t.Fatalf("query=%q options=%#v", search.query, search.options)
-	}
-	answer, err := search.options.Clarify(
-		context.Background(),
-		searchclient.Question{ID: "question_1"},
-	)
-	if err != nil || answer != "Web" {
-		t.Fatalf("clarifier answer=%q error=%v", answer, err)
 	}
 }
 
@@ -599,12 +589,6 @@ func TestSearchFailuresAreBoundedAndNeverRenderPrivateCauses(t *testing.T) {
 		wantCode string
 		wantText string
 	}{
-		{
-			name:     "clarification",
-			err:      &searchclient.NeedsInputError{},
-			wantCode: "search_needs_input",
-			wantText: "Search requires clarification",
-		},
 		{
 			name: "structured failure",
 			err: &searchclient.FailureError{Failure: searchclient.Failure{
@@ -880,7 +864,7 @@ func TestInvalidSearchUsageDoesNotInitializeAuthentication(t *testing.T) {
 		{"search"},
 		{"search", "--unknown", "query"},
 		{"search", "--timeout", "forever", "query"},
-		{"search", "--answer", "one", "--answer", "two", "query"},
+		{"search", "--answer", "Web", "query"},
 		{"search", "--json", "--jsonl", "query"},
 		{"search", "--width", "39", "query"},
 		{"search", "--width", "161", "query"},

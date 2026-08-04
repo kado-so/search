@@ -234,53 +234,32 @@ func TestRunDoesNotRestartNonRetryableUnavailableLifecycle(t *testing.T) {
 	}
 }
 
-func TestRunSubmitsBoundedClarification(t *testing.T) {
+func TestRunRejectsQuestionsWithoutSubmittingAnotherRequest(t *testing.T) {
 	t.Parallel()
 
-	clarifications := 0
+	var requests atomic.Int32
 	server := httptest.NewTLSServer(http.HandlerFunc(func(
 		response http.ResponseWriter,
 		request *http.Request,
 	) {
+		requests.Add(1)
 		assertMachineRequest(t, request, "Bearer token-one")
-		self := serverURL(request) + "/search?q=clarify+tools"
-		if request.Method == http.MethodGet {
-			writeDocument(response, needsInputDocument(self, "clarify tools", "search_clarify"))
-			return
+		if request.Method != http.MethodGet {
+			t.Fatalf("unexpected request method = %s", request.Method)
 		}
-		if err := request.ParseForm(); err != nil {
-			t.Fatalf("ParseForm() error = %v", err)
-		}
-		clarifications++
-		if request.Header.Get("Content-Type") != "application/x-www-form-urlencoded" ||
-			request.PostForm.Get("operation") != "clarify" ||
-			request.PostForm.Get("q") != "clarify tools" ||
-			request.PostForm.Get("search_id") != "search_clarify" ||
-			request.PostForm.Get("question_id") != "question_platform" ||
-			request.PostForm.Get("answer") != "Web" {
-			t.Fatalf("clarification form = %#v", request.PostForm)
-		}
-		writeDocument(response, completeDocument(serverURL(request), "clarify tools", "search_clarify", "", ""))
+		self := serverURL(request) + "/search?q=question+tools"
+		writeDocument(response, questionDocument(self, "question tools", "search_question"))
 	}))
 	defer server.Close()
 
 	client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
-	options := DefaultRunOptions()
-	options.FollowPages = false
-	options.Clarify = func(_ context.Context, question Question) (string, error) {
-		if question.ID != "question_platform" ||
-			question.Prompt != "Which platform?" ||
-			len(question.Options) != 3 {
-			t.Fatalf("question = %#v", question)
-		}
-		return "Web", nil
-	}
-	result, err := client.Run(context.Background(), "clarify tools", options)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if result.Document.Status != StatusComplete || clarifications != 1 {
-		t.Fatalf("status=%s clarifications=%d", result.Document.Status, clarifications)
+	result, err := client.Run(context.Background(), "question tools", DefaultRunOptions())
+	var failure *Error
+	if !errors.As(err, &failure) ||
+		failure.Code() != "search_protocol_failed" ||
+		result.Document.Status != "" ||
+		requests.Load() != 1 {
+		t.Fatalf("Run() result=%#v error=%T %v requests=%d", result, err, err, requests.Load())
 	}
 }
 
@@ -487,7 +466,14 @@ func TestSearchRetriesOnlySafeGETFailures(t *testing.T) {
 				return
 			}
 			self := serverURL(request) + "/search?q=retry+tools"
-			writeDocument(response, needsInputDocument(self, "retry tools", "search_retry"))
+			writeDocument(response, failedDocument(
+				self,
+				"retry tools",
+				"search_retry",
+				"SOURCE_UNAVAILABLE",
+				"A source was unavailable.",
+				true,
+			))
 			return
 		}
 		postCalls++
@@ -498,16 +484,16 @@ func TestSearchRetriesOnlySafeGETFailures(t *testing.T) {
 	client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
 	client.wait = noWait
 	document, err := client.Search(context.Background(), "retry tools")
-	if err != nil || document.Status != StatusNeedsInput || getCalls != 2 {
+	if err != nil || document.Status != StatusFailed || getCalls != 2 {
 		t.Fatalf("Search() status=%s error=%v get calls=%d", document.Status, err, getCalls)
 	}
-	_, err = client.Clarify(context.Background(), document, "Web")
+	_, err = client.Retry(context.Background(), document)
 	var remote *Error
 	if !errors.As(err, &remote) ||
 		remote.Code() != "temporarily_unavailable" ||
 		!remote.Retryable() ||
 		postCalls != 1 {
-		t.Fatalf("Clarify() error=%v post calls=%d", err, postCalls)
+		t.Fatalf("Retry() error=%v post calls=%d", err, postCalls)
 	}
 }
 
@@ -556,29 +542,6 @@ func TestRunCanRetryOneStructuredRetryableFailure(t *testing.T) {
 	result, err := client.Run(context.Background(), "recover tools", options)
 	if err != nil || result.Document.Status != StatusComplete || retryCalls != 1 {
 		t.Fatalf("Run() status=%s error=%v retry calls=%d", result.Document.Status, err, retryCalls)
-	}
-}
-
-func TestRunNeedsInputIsStructuredWhenNoClarifierExists(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewTLSServer(http.HandlerFunc(func(
-		response http.ResponseWriter,
-		request *http.Request,
-	) {
-		assertMachineRequest(t, request, "Bearer token-one")
-		self := serverURL(request) + "/search?q=question+tools"
-		writeDocument(response, needsInputDocument(self, "question tools", "search_question"))
-	}))
-	defer server.Close()
-
-	client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
-	result, err := client.Run(context.Background(), "question tools", DefaultRunOptions())
-	var needsInput *NeedsInputError
-	if !errors.As(err, &needsInput) ||
-		result.Document.Status != StatusNeedsInput ||
-		needsInput.Question.ID != "question_platform" {
-		t.Fatalf("Run() result=%#v error=%T %v", result, err, err)
 	}
 }
 
@@ -1132,64 +1095,6 @@ func TestRunBoundsLifecycleWorkWithoutALocalTimeout(t *testing.T) {
 		}
 	})
 
-	t.Run("clarification", func(t *testing.T) {
-		t.Parallel()
-		var requests atomic.Int32
-		var clarifications atomic.Int32
-		server := httptest.NewTLSServer(http.HandlerFunc(func(
-			response http.ResponseWriter,
-			request *http.Request,
-		) {
-			requests.Add(1)
-			if err := request.ParseForm(); err != nil {
-				t.Fatalf("ParseForm() error = %v", err)
-			}
-			query := request.URL.Query().Get("q")
-			if request.Method == http.MethodPost {
-				query = request.Form.Get("q")
-				if request.Form.Get("operation") != "clarify" {
-					t.Fatalf("operation = %q", request.Form.Get("operation"))
-				}
-			}
-			self := serverURL(request) + "/search?q=" + url.QueryEscape(query)
-			writeDocument(
-				response,
-				needsInputDocument(self, query, "search_bounded_clarification"),
-			)
-		}))
-		defer server.Close()
-
-		limits := DefaultLimits()
-		limits.MaxLifecycleOperations = 10
-		limits.MaxClarifications = 2
-		client := newIntegrationClientWithLimits(
-			t,
-			server,
-			&fakeAuthorizationSource{},
-			limits,
-		)
-		options := DefaultRunOptions()
-		options.Timeout = 0
-		options.FollowPages = false
-		options.Clarify = func(context.Context, Question) (string, error) {
-			clarifications.Add(1)
-			return "Web", nil
-		}
-		_, err := client.Run(context.Background(), "bounded clarification", options)
-		var failure *Error
-		if !errors.As(err, &failure) ||
-			failure.Code() != "search_clarification_limit" ||
-			requests.Load() != 3 ||
-			clarifications.Load() != 2 {
-			t.Fatalf(
-				"Run() error=%T %v requests=%d clarifications=%d",
-				err,
-				err,
-				requests.Load(),
-				clarifications.Load(),
-			)
-		}
-	})
 }
 
 func TestClientBindsDocumentsAndRelationsToTheExactRequestedQuery(t *testing.T) {
@@ -1302,135 +1207,6 @@ func TestClientBindsDocumentsAndRelationsToTheExactRequestedQuery(t *testing.T) 
 	})
 }
 
-func TestRunCancelsWithoutHangingWhenClarificationIsInterrupted(t *testing.T) {
-	t.Parallel()
-
-	t.Run("parent_interrupt_during_clarifier", func(t *testing.T) {
-		t.Parallel()
-		var cancels atomic.Int32
-		clarifierStarted := make(chan struct{})
-		releaseClarifier := make(chan struct{})
-		server := httptest.NewTLSServer(http.HandlerFunc(func(
-			response http.ResponseWriter,
-			request *http.Request,
-		) {
-			if request.Method == http.MethodGet {
-				query := request.URL.Query().Get("q")
-				self := serverURL(request) + "/search?q=" + url.QueryEscape(query)
-				writeDocument(
-					response,
-					needsInputDocument(self, query, "search_interrupt_clarifier"),
-				)
-				return
-			}
-			if err := request.ParseForm(); err != nil {
-				t.Fatalf("ParseForm() error = %v", err)
-			}
-			if request.Form.Get("operation") != "cancel" {
-				t.Fatalf("operation = %q", request.Form.Get("operation"))
-			}
-			cancels.Add(1)
-			query := request.Form.Get("q")
-			self := serverURL(request) + "/search?q=" + url.QueryEscape(query)
-			writeDocument(
-				response,
-				lifecycleDocument(self, query, "search_interrupt_clarifier", StatusCanceled),
-			)
-		}))
-		defer server.Close()
-
-		client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
-		options := DefaultRunOptions()
-		options.Timeout = 0
-		options.FollowPages = false
-		options.Clarify = func(context.Context, Question) (string, error) {
-			close(clarifierStarted)
-			<-releaseClarifier
-			return "Web", nil
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		completed := make(chan error, 1)
-		go func() {
-			_, err := client.Run(ctx, "interrupt clarifier", options)
-			completed <- err
-		}()
-		<-clarifierStarted
-		cancel()
-		select {
-		case err := <-completed:
-			close(releaseClarifier)
-			if !errors.Is(err, context.Canceled) || cancels.Load() != 1 {
-				t.Fatalf("Run() error=%v cancels=%d", err, cancels.Load())
-			}
-		case <-time.After(2 * time.Second):
-			close(releaseClarifier)
-			t.Fatal("Run() hung after its clarifier context was canceled")
-		}
-	})
-
-	t.Run("deadline_during_clarify_request", func(t *testing.T) {
-		t.Parallel()
-		var cancels atomic.Int32
-		clarifyStarted := make(chan struct{})
-		var started sync.Once
-		server := httptest.NewTLSServer(http.HandlerFunc(func(
-			response http.ResponseWriter,
-			request *http.Request,
-		) {
-			if request.Method == http.MethodGet {
-				query := request.URL.Query().Get("q")
-				self := serverURL(request) + "/search?q=" + url.QueryEscape(query)
-				writeDocument(
-					response,
-					needsInputDocument(self, query, "search_timeout_clarify"),
-				)
-				return
-			}
-			if err := request.ParseForm(); err != nil {
-				t.Fatalf("ParseForm() error = %v", err)
-			}
-			query := request.Form.Get("q")
-			self := serverURL(request) + "/search?q=" + url.QueryEscape(query)
-			switch request.Form.Get("operation") {
-			case "clarify":
-				started.Do(func() { close(clarifyStarted) })
-				<-request.Context().Done()
-			case "cancel":
-				cancels.Add(1)
-				writeDocument(
-					response,
-					lifecycleDocument(self, query, "search_timeout_clarify", StatusCanceled),
-				)
-			default:
-				t.Fatalf("operation = %q", request.Form.Get("operation"))
-			}
-		}))
-		defer server.Close()
-
-		client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
-		options := DefaultRunOptions()
-		options.Timeout = 100 * time.Millisecond
-		options.FollowPages = false
-		options.Clarify = func(context.Context, Question) (string, error) {
-			return "Web", nil
-		}
-		completed := make(chan error, 1)
-		go func() {
-			_, err := client.Run(context.Background(), "timeout clarify", options)
-			completed <- err
-		}()
-		<-clarifyStarted
-		select {
-		case err := <-completed:
-			if !errors.Is(err, ErrTimeout) || cancels.Load() != 1 {
-				t.Fatalf("Run() error=%v cancels=%d", err, cancels.Load())
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("Run() hung after its clarify request deadline elapsed")
-		}
-	})
-}
-
 func TestClientRejectsCredentialReflectionBeforeRefreshOrRetry(t *testing.T) {
 	t.Parallel()
 
@@ -1516,12 +1292,6 @@ func TestNewRejectsUnsafeLifecycleLimits(t *testing.T) {
 		},
 		"excessive_operations": func(limits *Limits) {
 			limits.MaxLifecycleOperations = 10_001
-		},
-		"zero_clarifications": func(limits *Limits) {
-			limits.MaxClarifications = 0
-		},
-		"excessive_clarifications": func(limits *Limits) {
-			limits.MaxClarifications = 65
 		},
 	} {
 		name := name
@@ -1697,9 +1467,9 @@ func lifecycleDocument(
 	return baseDocument(self, query, searchID, state)
 }
 
-func needsInputDocument(self, query, searchID string) map[string]any {
+func questionDocument(self, query, searchID string) map[string]any {
 	return baseDocument(self, query, searchID, map[string]any{
-		"status": StatusNeedsInput,
+		"status": "needs_input",
 		"question": map[string]any{
 			"id":      "question_platform",
 			"prompt":  "Which platform?",

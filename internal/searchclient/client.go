@@ -107,44 +107,13 @@ func (client *Client) Status(ctx context.Context, document Document) (Document, 
 	return client.get(ctx, &endpoint, document.Query, document.SearchID)
 }
 
-// Clarify submits one answer to the exact Search represented by document.
-func (client *Client) Clarify(
-	ctx context.Context,
-	document Document,
-	answer string,
-) (Document, error) {
-	if err := client.validateDocumentIdentity(document); err != nil {
-		return Document{}, err
-	}
-	if document.Status != StatusNeedsInput || document.Question == nil {
-		return Document{}, lifecycleError("Search is not waiting for clarification.")
-	}
-	if !validPublicText(answer, 200) {
-		return Document{}, newError(
-			"search_answer_invalid",
-			"Search clarification answer is invalid.",
-			0,
-			false,
-			ErrProtocol,
-		)
-	}
-	return client.post(ctx, document, url.Values{
-		"operation":   {"clarify"},
-		"q":           {document.Query},
-		"search_id":   {document.SearchID},
-		"question_id": {document.Question.ID},
-		"answer":      {answer},
-	})
-}
-
 // Cancel requests cancellation for the exact in-flight Search.
 func (client *Client) Cancel(ctx context.Context, document Document) (Document, error) {
 	if err := client.validateDocumentIdentity(document); err != nil {
 		return Document{}, err
 	}
 	if document.Status != StatusQueued &&
-		document.Status != StatusRunning &&
-		document.Status != StatusNeedsInput {
+		document.Status != StatusRunning {
 		return Document{}, lifecycleError("Search is not cancelable in its current state.")
 	}
 	return client.post(ctx, document, url.Values{
@@ -585,13 +554,13 @@ func (client *Client) decodeDocument(
 			}
 		}
 	}
-	var question *Question
 	if validated.State.Question != nil {
-		question = &Question{
-			ID:      validated.State.Question.ID,
-			Prompt:  validated.State.Question.Prompt,
-			Options: append([]string(nil), validated.State.Question.Options...),
-		}
+		return Document{}, protocolError()
+	}
+	switch validated.State.Status {
+	case StatusQueued, StatusRunning, StatusComplete, StatusFailed, StatusCanceled:
+	default:
+		return Document{}, protocolError()
 	}
 	var failure *Failure
 	if validated.State.Error != nil {
@@ -610,7 +579,6 @@ func (client *Client) decodeDocument(
 		SearchID:      validated.Search.ID,
 		Query:         validated.Search.Query,
 		Status:        validated.State.Status,
-		Question:      question,
 		Failure:       failure,
 	}, nil
 }
@@ -970,8 +938,6 @@ func validLimits(limits Limits) bool {
 		limits.MaxGETAttempts <= 3 &&
 		limits.MaxLifecycleOperations >= 1 &&
 		limits.MaxLifecycleOperations <= 10_000 &&
-		limits.MaxClarifications >= 1 &&
-		limits.MaxClarifications <= 64 &&
 		limits.MaxRequestTime > 0 &&
 		limits.MaxRequestTime <= 2*time.Minute
 }

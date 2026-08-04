@@ -159,7 +159,6 @@ func TestEveryLifecycleFixtureRendersDeterministically(t *testing.T) {
 	for _, name := range []string{
 		"queued",
 		"running",
-		"needs_input",
 		"complete",
 		"complete_page",
 		"failed",
@@ -184,6 +183,17 @@ func TestEveryLifecycleFixtureRendersDeterministically(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestQuestionDocumentsAreRejectedInEveryOutputMode(t *testing.T) {
+	t.Parallel()
+
+	canonical := releasedFixture(t, "needs_input")
+	for _, mode := range []Mode{ModeHuman, ModeJSON, ModeJSONL} {
+		if output, err := Render(canonical, nil, Options{Mode: mode, Width: 64}); err == nil || len(output) != 0 {
+			t.Fatalf("Render(needs_input, %s) output=%q error=%v", mode, output, err)
+		}
 	}
 }
 
