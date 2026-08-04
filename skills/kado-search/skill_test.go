@@ -14,9 +14,9 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		!strings.Contains(content, "\nname: kado-search\n") ||
 		!strings.Contains(content, "\nlicense: \"MIT\"\n") ||
 		!strings.Contains(content, "\n  author: \"Kado\"\n") ||
-		!strings.Contains(content, "\n  version: \"0.2.2\"\n") ||
+		!strings.Contains(content, "\n  version: \"0.3.0\"\n") ||
 		!strings.Contains(content, "\n  homepage: \"https://kado.so\"\n") ||
-		!strings.Contains(content, "This skill covers\nSearch only.") ||
+		!strings.Contains(content, "Keep this skill focused on Search") ||
 		!strings.Contains(content, "kado search --json --timeout 2m") {
 		t.Fatal("SKILL.md metadata or Search-only scope is invalid")
 	}
@@ -48,7 +48,7 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 func TestVersionParsesMetadataWithLFAndCRLF(t *testing.T) {
 	t.Parallel()
 
-	content := "---\nname: kado-search\nmetadata:\n  version: \"0.2.2\"\n---\n"
+	content := "---\nname: kado-search\nmetadata:\n  version: \"0.3.0\"\n---\n"
 	for _, test := range []struct {
 		name    string
 		content string
@@ -58,8 +58,8 @@ func TestVersionParsesMetadataWithLFAndCRLF(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if got := versionFromSkill([]byte(test.content)); got != "0.2.2" {
-				t.Fatalf("versionFromSkill() = %q, want 0.2.2", got)
+			if got := versionFromSkill([]byte(test.content)); got != "0.3.0" {
+				t.Fatalf("versionFromSkill() = %q, want 0.3.0", got)
 			}
 		})
 	}
