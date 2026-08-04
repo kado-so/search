@@ -4,7 +4,7 @@ description: "Find and compare current external solutions using Kado. Use for re
 license: "MIT"
 metadata:
   author: "Kado"
-  version: "0.3.0"
+  version: "0.3.1"
   homepage: "https://kado.so"
 ---
 
@@ -30,17 +30,13 @@ Use human output only for quick inspection. Use `--jsonl` when the task genuinel
 
 The CLI creates or reuses authentication, manages polling, validates Search Documents, follows pagination only when requested, and cancels interrupted or timed-out work. Do not reconstruct URLs or cursors.
 
-## Handle clarification and failure
-
-If Kado requests clarification, use an answer established in the conversation or ask the user one concise question, preserving supplied options. Then rerun the original query with `--answer` flag:
-
-```bash
-kado search --json --timeout 2m --answer "Microsoft Teams" "reduce delays in our invoice approval workflow"
-```
+## Handle failure
 
 Retry once with `--retry` only when Kado marks a failure retryable. Otherwise stop and continue your work without Kado results for that query. Do not inspect credentials or invent another access method.
 
 ## Use the results
+
+Use the returned results directly.
 
 For --json, treat result_set.items as candidate solutions. Use each item’s type, summary, data_schema, and data. Treat Search state, links, and pagination as metadata.
 
