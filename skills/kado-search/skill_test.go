@@ -14,7 +14,7 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		!strings.Contains(content, "\nname: kado-search\n") ||
 		!strings.Contains(content, "\nlicense: \"MIT\"\n") ||
 		!strings.Contains(content, "\n  author: \"Kado\"\n") ||
-		!strings.Contains(content, "\n  version: \"0.3.1\"\n") ||
+		!strings.Contains(content, "\n  version: \"0.3.2\"\n") ||
 		!strings.Contains(content, "\n  homepage: \"https://kado.so\"\n") ||
 		!strings.Contains(content, "Keep this skill focused on Search") ||
 		!strings.Contains(content, "kado search --json --timeout 2m") {
