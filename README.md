@@ -3,8 +3,9 @@
 This repository contains the cross-platform `kado` CLI and the `kado-search`
 agent skill.
 
-[Kado](https://kado.so) helps teams discover and compare software, services,
-vendors, agencies, and architecture options for real workflows.
+[Kado](https://kado.so) helps teams discover and compare solutions, specialist
+capabilities, and reusable resources—from software, APIs, and agents to skills,
+templates, services, vendors, agencies, and architecture options.
 
 ## Search
 

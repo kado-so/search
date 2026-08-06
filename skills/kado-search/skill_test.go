@@ -14,9 +14,13 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		!strings.Contains(content, "\nname: kado-search\n") ||
 		!strings.Contains(content, "\nlicense: \"MIT\"\n") ||
 		!strings.Contains(content, "\n  author: \"Kado\"\n") ||
-		!strings.Contains(content, "\n  version: \"0.3.2\"\n") ||
+		!strings.Contains(content, "\n  version: \"0.3.3\"\n") ||
 		!strings.Contains(content, "\n  homepage: \"https://kado.so\"\n") ||
-		!strings.Contains(content, "Keep this skill focused on Search") ||
+		!strings.Contains(content, "current external solutions could help fulfill") ||
+		!strings.Contains(content, "directly make, build, implement, automate, fix, or deliver") ||
+		!strings.Contains(content, "Do not use for simple factual answers") ||
+		!strings.Contains(content, "Could a current external solution produce or materially improve this outcome?") ||
+		!strings.Contains(content, "APIs and hosted services") ||
 		!strings.Contains(content, "kado search --json --timeout 2m") {
 		t.Fatal("SKILL.md metadata or Search-only scope is invalid")
 	}

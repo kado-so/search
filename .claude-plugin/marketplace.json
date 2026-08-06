@@ -1,7 +1,7 @@
 {
   "name": "kado",
   "metadata": {
-    "description": "Kado plugins for finding solutions to problems using current market options."
+    "description": "Kado plugins for finding solutions, specialist capabilities, and reusable resources."
   },
   "owner": {
     "name": "Kado",
@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "kado-search",
-      "description": "Find solutions to problems using current market options from Kado.",
+      "description": "Find solutions, specialist capabilities, and reusable resources with Kado.",
       "author": {
         "name": "Kado",
         "url": "https://kado.so"
@@ -28,6 +28,10 @@
         "vendors",
         "agents",
         "saas",
+        "apis",
+        "skills",
+        "templates",
+        "specialists",
         "market-research"
       ]
     }

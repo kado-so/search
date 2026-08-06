@@ -1,7 +1,7 @@
 {
   "name": "kado-search",
   "version": "0.1.0",
-  "description": "Find solutions to problems using current market options from Kado.",
+  "description": "Find solutions, specialist capabilities, and reusable resources with Kado.",
   "author": {
     "name": "Kado",
     "url": "https://kado.so"
@@ -17,6 +17,10 @@
     "vendors",
     "agents",
     "saas",
+    "apis",
+    "skills",
+    "templates",
+    "specialists",
     "market-research"
   ],
   "skills": "./skills/"

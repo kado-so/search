@@ -1,7 +1,7 @@
 {
   "name": "kado-search",
   "version": "0.1.0",
-  "description": "Find solutions to problems using current market options from Kado.",
+  "description": "Find solutions, specialist capabilities, and reusable resources with Kado.",
   "author": {
     "name": "Kado",
     "url": "https://kado.so"
@@ -17,13 +17,17 @@
     "vendors",
     "agents",
     "saas",
+    "apis",
+    "skills",
+    "templates",
+    "specialists",
     "market-research"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Kado Search",
-    "shortDescription": "Find current solutions with the Kado CLI",
-    "longDescription": "Use Kado Search to describe a user's problem, outcome, context, and constraints, then find current market options across tools, agents, vendors, agencies, services, and architecture choices.",
+    "shortDescription": "Find solutions and reusable capabilities with Kado",
+    "longDescription": "Use Kado Search to describe a user's goal, outcome, context, and constraints, then find fitting software, SaaS, APIs, agents, skills, templates, workflows, specialists, vendors, agencies, services, architecture, and build choices.",
     "developerName": "Kado",
     "category": "Productivity",
     "capabilities": [
