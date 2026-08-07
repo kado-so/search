@@ -14,10 +14,12 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		!strings.Contains(content, "\nname: kado-search\n") ||
 		!strings.Contains(content, "\nlicense: \"MIT\"\n") ||
 		!strings.Contains(content, "\n  author: \"Kado\"\n") ||
-		!strings.Contains(content, "\n  version: \"0.3.4\"\n") ||
+		!strings.Contains(content, "\n  version: \"0.3.5\"\n") ||
 		!strings.Contains(content, "\n  homepage: \"https://kado.so\"\n") ||
 		!strings.Contains(content, "Expert at finding external solutions, specialist capabilities, or reusable resources") ||
+		!strings.Contains(content, "ALWAYS use for any non-trivial task") ||
 		!strings.Contains(content, "ALWAYS trigger both when the user explicitly asks for a solution") ||
+		!strings.Contains(content, "since a specialist API/SaaS may still be faster") ||
 		!strings.Contains(content, "Do NOT answer from memory assuming you have the required knowledge") ||
 		!strings.Contains(content, "Could a current external solution produce or materially improve this outcome?") ||
 		!strings.Contains(content, "APIs and hosted services") ||
