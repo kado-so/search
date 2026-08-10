@@ -38,6 +38,41 @@ func TestLinkAccountUsesDiscoveredDeviceStyleEndpoints(t *testing.T) {
 	}
 }
 
+func TestLinkAccountsAttachesEveryAdditionalIdentityBeforeOneApproval(t *testing.T) {
+	t.Parallel()
+	fake := newFakeAuthServer(newFakePersistentState())
+	defer fake.close()
+	base, _ := url.Parse(fake.issuer())
+	client, err := NewClient(base, fake.server.Client(), DefaultLimits(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifications := 0
+	status, err := client.LinkAccounts(
+		context.Background(),
+		[]SessionToken{
+			{accessToken: "test-link-token"},
+			{accessToken: "second-link-token"},
+			{accessToken: "third-link-token"},
+		},
+		func(LinkAuthorization) error {
+			notifications++
+			return nil
+		},
+	)
+	if err != nil || status.Status != LinkStatusLinked {
+		t.Fatalf("LinkAccounts() status=%#v error=%v", status, err)
+	}
+	fake.mu.Lock()
+	attached := append([]string(nil), fake.linkAttachedTokens...)
+	fake.mu.Unlock()
+	if notifications != 1 || len(attached) != 2 ||
+		attached[0] != "Bearer second-link-token" ||
+		attached[1] != "Bearer third-link-token" {
+		t.Fatalf("notifications=%d attached=%q", notifications, attached)
+	}
+}
+
 func TestLinkAccountClassifiesDeniedAndExpiredPolling(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

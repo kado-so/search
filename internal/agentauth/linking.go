@@ -22,9 +22,10 @@ type linkAuthorizationResponse struct {
 }
 
 type linkMetadata struct {
-	Issuer             string `json:"issuer"`
-	LinkEndpoint       string `json:"link_endpoint"`
-	LinkStatusEndpoint string `json:"link_status_endpoint"`
+	Issuer               string `json:"issuer"`
+	LinkEndpoint         string `json:"link_endpoint"`
+	LinkIdentityEndpoint string `json:"link_identity_endpoint"`
+	LinkStatusEndpoint   string `json:"link_status_endpoint"`
 }
 
 type linkSuccessResponse struct {
@@ -44,7 +45,12 @@ var linkAuthorizationFields = []string{
 	"expires_in",
 	"interval",
 }
-var linkMetadataFields = []string{"issuer", "link_endpoint", "link_status_endpoint"}
+var linkMetadataFields = []string{
+	"issuer",
+	"link_endpoint",
+	"link_identity_endpoint",
+	"link_status_endpoint",
+}
 var linkSuccessFields = []string{"status"}
 var linkErrorFields = []string{"error", "error_description"}
 var deviceCodePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
@@ -57,8 +63,23 @@ func (client *Client) LinkAccount(
 	token SessionToken,
 	notify func(LinkAuthorization) error,
 ) (LinkStatus, error) {
-	if token.AuthorizationHeader() == "" || notify == nil {
+	return client.LinkAccounts(ctx, []SessionToken{token}, notify)
+}
+
+// LinkAccounts proves each agent identity to one device-style request, then
+// opens one human approval and polls one device code for the atomic result.
+func (client *Client) LinkAccounts(
+	ctx context.Context,
+	tokens []SessionToken,
+	notify func(LinkAuthorization) error,
+) (LinkStatus, error) {
+	if len(tokens) == 0 || len(tokens) > 32 || notify == nil {
 		return LinkStatus{}, newProtocolError(ErrAuthentication, nil)
+	}
+	for _, token := range tokens {
+		if token.AuthorizationHeader() == "" {
+			return LinkStatus{}, newProtocolError(ErrAuthentication, nil)
+		}
 	}
 	metadata, err := client.discoverLinking(ctx)
 	if err != nil {
@@ -70,7 +91,7 @@ func (client *Client) LinkAccount(
 		metadata.LinkEndpoint,
 		nil,
 		"",
-		token.AuthorizationHeader(),
+		tokens[0].AuthorizationHeader(),
 	)
 	if err != nil {
 		return LinkStatus{}, err
@@ -85,6 +106,28 @@ func (client *Client) LinkAccount(
 	authorization, err := client.validateLinkAuthorization(response)
 	if err != nil {
 		return LinkStatus{}, err
+	}
+	for _, token := range tokens[1:] {
+		form := url.Values{"device_code": {authorization.DeviceCode}}
+		attachStatus, attachEncoded, attachErr := client.doAuthorizedJSON(
+			ctx,
+			http.MethodPost,
+			metadata.LinkIdentityEndpoint,
+			[]byte(form.Encode()),
+			"application/x-www-form-urlencoded",
+			token.AuthorizationHeader(),
+		)
+		if attachErr != nil {
+			return LinkStatus{}, attachErr
+		}
+		if attachStatus != http.StatusOK {
+			return LinkStatus{}, classifyLinkFailure(attachStatus, attachEncoded)
+		}
+		var attached linkSuccessResponse
+		if err := decodeExactJSONObject(attachEncoded, &attached, linkSuccessFields); err != nil ||
+			attached.Status != "attached" {
+			return LinkStatus{}, newProtocolError(ErrProtocol, err)
+		}
 	}
 	if err := notify(authorization); err != nil {
 		return LinkStatus{}, err
@@ -141,10 +184,15 @@ func (client *Client) discoverLinking(ctx context.Context) (linkMetadata, error)
 	if err != nil {
 		return linkMetadata{}, newProtocolError(ErrDiscovery, err)
 	}
+	identityEndpoint, err := validateAdvertisedEndpoint(response.LinkIdentityEndpoint, client.issuer)
+	if err != nil {
+		return linkMetadata{}, newProtocolError(ErrDiscovery, err)
+	}
 	return linkMetadata{
-		Issuer:             response.Issuer,
-		LinkEndpoint:       linkEndpoint.String(),
-		LinkStatusEndpoint: statusEndpoint.String(),
+		Issuer:               response.Issuer,
+		LinkEndpoint:         linkEndpoint.String(),
+		LinkIdentityEndpoint: identityEndpoint.String(),
+		LinkStatusEndpoint:   statusEndpoint.String(),
 	}, nil
 }
 

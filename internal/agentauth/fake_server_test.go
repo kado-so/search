@@ -70,23 +70,24 @@ func (state *fakePersistentState) manage(
 }
 
 type fakeAuthServer struct {
-	server            *httptest.Server
-	persistent        *fakePersistentState
-	mu                sync.Mutex
-	nonces            map[string]bool
-	jtis              map[string]bool
-	nextNonce         int
-	reuseNonce        bool
-	admissionRequired bool
-	issuerValue       string
-	nonceURL          string
-	extensionMismatch bool
-	resultTokenURL    string
-	resultStatus      int
-	credentialStatus  int
-	credentialCalls   int
-	credentialInvalid bool
-	linkPollError     string
+	server             *httptest.Server
+	persistent         *fakePersistentState
+	mu                 sync.Mutex
+	nonces             map[string]bool
+	jtis               map[string]bool
+	nextNonce          int
+	reuseNonce         bool
+	admissionRequired  bool
+	issuerValue        string
+	nonceURL           string
+	extensionMismatch  bool
+	resultTokenURL     string
+	resultStatus       int
+	credentialStatus   int
+	credentialCalls    int
+	credentialInvalid  bool
+	linkPollError      string
+	linkAttachedTokens []string
 }
 
 func newFakeAuthServer(state *fakePersistentState) *fakeAuthServer {
@@ -180,9 +181,10 @@ func (fake *fakeAuthServer) handle(response http.ResponseWriter, request *http.R
 	case request.Method == http.MethodGet &&
 		request.URL.Path == "/.well-known/agent-user-linking":
 		fake.sendJSON(response, http.StatusOK, linkMetadata{
-			Issuer:             fake.issuer(),
-			LinkEndpoint:       fake.issuer() + "/api/auth/agent/link",
-			LinkStatusEndpoint: fake.issuer() + "/api/auth/agent/link/status",
+			Issuer:               fake.issuer(),
+			LinkEndpoint:         fake.issuer() + "/api/auth/agent/link",
+			LinkIdentityEndpoint: fake.issuer() + "/api/auth/agent/link/identities",
+			LinkStatusEndpoint:   fake.issuer() + "/api/auth/agent/link/status",
 		})
 	case (request.Method == http.MethodHead || request.Method == http.MethodGet) &&
 		request.URL.Path == "/api/auth/agent/nonce":
@@ -207,6 +209,17 @@ func (fake *fakeAuthServer) handle(response http.ResponseWriter, request *http.R
 			ExpiresIn:               600,
 			Interval:                5,
 		})
+	case request.Method == http.MethodPost &&
+		request.URL.Path == "/api/auth/agent/link/identities":
+		if err := request.ParseForm(); err != nil ||
+			request.PostForm.Get("device_code") != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" {
+			fake.sendError(response, http.StatusBadRequest, "invalid_request", false)
+			return
+		}
+		fake.mu.Lock()
+		fake.linkAttachedTokens = append(fake.linkAttachedTokens, request.Header.Get("Authorization"))
+		fake.mu.Unlock()
+		fake.sendJSON(response, http.StatusOK, linkSuccessResponse{Status: "attached"})
 	case request.Method == http.MethodPost &&
 		request.URL.Path == "/api/auth/agent/link/status":
 		if fake.linkPollError != "" {

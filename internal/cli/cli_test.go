@@ -156,6 +156,7 @@ func TestAuthLinkDefaultsToEveryConfiguredIdentity(t *testing.T) {
 	t.Parallel()
 	created := []string{}
 	opened := []string{}
+	auths := map[string]*fakeLinkAuthCommands{}
 	var stdout, stderr bytes.Buffer
 	exitCode := runWithDependencies(
 		[]string{"auth", "link"},
@@ -168,10 +169,13 @@ func TestAuthLinkDefaultsToEveryConfiguredIdentity(t *testing.T) {
 			},
 			newAuth: func(identity string) (authCommands, error) {
 				created = append(created, identity)
-				return &fakeLinkAuthCommands{
+				auth := &fakeLinkAuthCommands{
 					fakeAuthCommands: &fakeAuthCommands{},
 					userCode:         map[string]string{"claude-code": "CLDE-2345", "codex": "CODX-2345"}[identity],
-				}, nil
+					principalID:      "agt_" + identity,
+				}
+				auths[identity] = auth
+				return auth, nil
 			},
 			openBrowser: func(value string) error {
 				opened = append(opened, value)
@@ -185,15 +189,14 @@ func TestAuthLinkDefaultsToEveryConfiguredIdentity(t *testing.T) {
 	if !reflect.DeepEqual(created, []string{"claude-code", "codex"}) ||
 		!reflect.DeepEqual(opened, []string{
 			"https://kado.so/link?user_code=CLDE-2345",
-			"https://kado.so/link?user_code=CODX-2345",
-		}) {
+		}) || auths["claude-code"].linkedTokenCount != 2 ||
+		auths["codex"].linkedTokenCount != 0 {
 		t.Fatalf("created=%q opened=%q", created, opened)
 	}
 	for _, expected := range []string{
 		"identity: claude-code\n",
 		"Code: CLDE-2345\n",
 		"identity: codex\n",
-		"Code: CODX-2345\n",
 		"linked identities: 2\n",
 	} {
 		if !strings.Contains(stdout.String(), expected) {
@@ -360,6 +363,31 @@ func TestDefaultAuthCreateRejectsIdentityChangeAfterAdmission(t *testing.T) {
 	}
 }
 
+func TestDefaultAuthLinkUsesAuthenticatedToken(t *testing.T) {
+	t.Parallel()
+	client := &scriptedAgentAuthClient{token: agentauth.SessionToken{
+		PrincipalID: "agt_link", CredentialID: "acred_link", ClientID: "clt_link",
+	}}
+	commands := &defaultAuthCommands{client: client}
+	token, err := commands.LinkToken(context.Background())
+	if err != nil {
+		t.Fatalf("LinkToken() error = %v", err)
+	}
+	status, err := commands.LinkAccounts(context.Background(), []agentauth.SessionToken{token}, func(agentauth.LinkAuthorization) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("LinkAccounts() error = %v", err)
+	}
+	if status.Status != agentauth.LinkStatusLinked || client.linkCalls != 1 ||
+		client.linkTokens[0].PrincipalID != "agt_link" || len(client.acquireRequests) != 1 ||
+		client.acquireRequests[0].Mode != agentauth.AuthenticateOnly {
+		t.Fatalf(
+			"status=%#v linkCalls=%d linkToken=%v acquireRequests=%#v",
+			status, client.linkCalls, client.linkTokens, client.acquireRequests,
+		)
+	}
+}
 func TestAgentOverrideSelectsNamespacedAuthFactory(t *testing.T) {
 	t.Parallel()
 
@@ -1233,13 +1261,21 @@ type fakeCreateAuthCommands struct {
 
 type fakeLinkAuthCommands struct {
 	*fakeAuthCommands
-	userCode string
+	userCode         string
+	principalID      string
+	linkedTokenCount int
 }
 
-func (commands *fakeLinkAuthCommands) Link(
+func (commands *fakeLinkAuthCommands) LinkToken(context.Context) (agentauth.SessionToken, error) {
+	return agentauth.SessionToken{PrincipalID: commands.principalID}, nil
+}
+
+func (commands *fakeLinkAuthCommands) LinkAccounts(
 	_ context.Context,
+	tokens []agentauth.SessionToken,
 	notify func(agentauth.LinkAuthorization) error,
 ) (agentauth.LinkStatus, error) {
+	commands.linkedTokenCount = len(tokens)
 	userCode := commands.userCode
 	if userCode == "" {
 		userCode = "ABCD-2345"
@@ -1360,6 +1396,8 @@ type scriptedAgentAuthClient struct {
 	status               agentauth.CredentialStatus
 	statusError          error
 	statusCalls          int
+	linkCalls            int
+	linkTokens           []agentauth.SessionToken
 }
 
 func (client *scriptedAgentAuthClient) AuthenticateOrEnroll(
@@ -1402,11 +1440,13 @@ func (*scriptedAgentAuthClient) RevokeCurrentCredential(
 	return agentauth.CredentialStatus{}, nil
 }
 
-func (*scriptedAgentAuthClient) LinkAccount(
-	context.Context,
-	agentauth.SessionToken,
-	func(agentauth.LinkAuthorization) error,
+func (client *scriptedAgentAuthClient) LinkAccounts(
+	_ context.Context,
+	tokens []agentauth.SessionToken,
+	_ func(agentauth.LinkAuthorization) error,
 ) (agentauth.LinkStatus, error) {
+	client.linkCalls++
+	client.linkTokens = append([]agentauth.SessionToken(nil), tokens...)
 	return agentauth.LinkStatus{Status: agentauth.LinkStatusLinked}, nil
 }
 

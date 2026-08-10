@@ -20,8 +20,8 @@ When the user asks to link their agents or CLI to their Kado account, run:
 kado auth link
 ```
 
-This links every locally configured agent identity. Only when the user
-explicitly asks to link one identity, run:
+This links every locally configured agent identity through one browser
+approval. Only when the user explicitly asks to link one identity, run:
 
 ```bash
 kado --agent <identity> auth link

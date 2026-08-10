@@ -76,7 +76,12 @@ type authCreator interface {
 }
 
 type authLinker interface {
-	Link(context.Context, func(agentauth.LinkAuthorization) error) (agentauth.LinkStatus, error)
+	LinkToken(context.Context) (agentauth.SessionToken, error)
+	LinkAccounts(
+		context.Context,
+		[]agentauth.SessionToken,
+		func(agentauth.LinkAuthorization) error,
+	) (agentauth.LinkStatus, error)
 }
 
 type searchCommands interface {
@@ -136,9 +141,9 @@ type autonomousAgentClient interface {
 	) (agentauth.SessionToken, error)
 	CredentialStatus(context.Context, keystore.Store) (agentauth.CredentialStatus, error)
 	RevokeCurrentCredential(context.Context, keystore.Store) (agentauth.CredentialStatus, error)
-	LinkAccount(
+	LinkAccounts(
 		context.Context,
-		agentauth.SessionToken,
+		[]agentauth.SessionToken,
 		func(agentauth.LinkAuthorization) error,
 	) (agentauth.LinkStatus, error)
 }
@@ -1011,6 +1016,8 @@ func runAuthLink(
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	linkers := make([]authLinker, 0, len(identities))
+	tokens := make([]agentauth.SessionToken, 0, len(identities))
 	for _, identity := range identities {
 		if !agentidentity.Valid(identity) {
 			return authDiagnostic("link", errors.New("identity list is invalid"))
@@ -1026,26 +1033,32 @@ func runAuthLink(
 		if !ok {
 			return authDiagnostic("link", errors.New("account linking unavailable"))
 		}
-		status, err := linker.Link(ctx, func(link agentauth.LinkAuthorization) error {
-			_, _ = fmt.Fprintf(
-				stdout,
-				"Open %s\nCode: %s\nWaiting for approval...\n",
-				link.VerificationURI,
-				link.UserCode,
-			)
-			if dependencies.openBrowser != nil {
-				_ = dependencies.openBrowser(link.VerificationURIComplete)
-			}
-			return nil
-		})
+		token, err := linker.LinkToken(ctx)
 		if err != nil {
 			return authDiagnostic("link", err)
 		}
-		if status.Status != agentauth.LinkStatusLinked {
-			return authDiagnostic("link", agentauth.ErrProtocol)
-		}
-		_, _ = fmt.Fprintln(stdout, "status: linked")
+		linkers = append(linkers, linker)
+		tokens = append(tokens, token)
 	}
+	status, err := linkers[0].LinkAccounts(ctx, tokens, func(link agentauth.LinkAuthorization) error {
+		_, _ = fmt.Fprintf(
+			stdout,
+			"Open %s\nCode: %s\nWaiting for approval...\n",
+			link.VerificationURI,
+			link.UserCode,
+		)
+		if dependencies.openBrowser != nil {
+			_ = dependencies.openBrowser(link.VerificationURIComplete)
+		}
+		return nil
+	})
+	if err != nil {
+		return authDiagnostic("link", err)
+	}
+	if status.Status != agentauth.LinkStatusLinked {
+		return authDiagnostic("link", agentauth.ErrProtocol)
+	}
+	_, _ = fmt.Fprintln(stdout, "status: linked")
 	if override == "" {
 		_, _ = fmt.Fprintf(stdout, "linked identities: %d\n", len(identities))
 	}
@@ -1449,19 +1462,20 @@ func (commands *defaultAuthCommands) Revoke(
 	return status, err
 }
 
-func (commands *defaultAuthCommands) Link(
-	ctx context.Context,
-	notify func(agentauth.LinkAuthorization) error,
-) (agentauth.LinkStatus, error) {
-	token, err := commands.client.AcquireToken(
+func (commands *defaultAuthCommands) LinkToken(ctx context.Context) (agentauth.SessionToken, error) {
+	return commands.client.AcquireToken(
 		ctx,
 		commands.store,
 		agentauth.Request{Mode: agentauth.AuthenticateOnly},
 	)
-	if err != nil {
-		return agentauth.LinkStatus{}, err
-	}
-	return commands.client.LinkAccount(ctx, token, notify)
+}
+
+func (commands *defaultAuthCommands) LinkAccounts(
+	ctx context.Context,
+	tokens []agentauth.SessionToken,
+	notify func(agentauth.LinkAuthorization) error,
+) (agentauth.LinkStatus, error) {
+	return commands.client.LinkAccounts(ctx, tokens, notify)
 }
 
 func openBrowser(rawURL string) error {
