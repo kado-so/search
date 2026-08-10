@@ -75,6 +75,8 @@ exits.
 ## Invariants
 
 - The skill invokes the CLI instead of handling credentials or HTTP.
+- Every agent-authenticated command uses the shared agent-session middleware;
+  missing credentials follow its single autonomous create-and-login path.
 - Private keys and tokens never enter model context or ordinary logs.
 - JSON-LD and schema validation remain local and deterministic.
 - CLI updates verify signed archive metadata and the replacement executable

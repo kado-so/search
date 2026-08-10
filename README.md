@@ -68,12 +68,15 @@ kado auth identities
 kado --agent codex auth status
 ```
 
-`auth create` creates the selected identity if it does not exist and completes
-mandatory admission when kado-app requires it; an authenticated Search also
-creates the identity transparently when needed.
+All commands that require an authenticated agent use one shared session
+middleware. It reuses a usable in-memory session and, when no credential is
+installed, autonomously creates the detected agent identity, completes any
+mandatory admission, logs in, and continues the original command. This covers
+Search, account linking, explicit identity creation, and agent detection.
 
 `auth link` opens one short-lived browser approval that atomically connects
-every locally configured agent identity to the signed-in human Kado account. Use
+every locally configured agent identity to the signed-in human Kado account. When none is
+configured, it detects and creates the current agent identity first. Use
 `kado --agent <identity> auth link` to link only one identity. Linking does not
 expose or replace any agent's existing credentials.
 

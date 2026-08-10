@@ -15,6 +15,7 @@ import (
 
 	"github.com/kado-so/search/internal/agentauth"
 	"github.com/kado-so/search/internal/agentidentity"
+	"github.com/kado-so/search/internal/agentsession"
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/keystore"
@@ -205,8 +206,9 @@ func TestAuthLinkDefaultsToEveryConfiguredIdentity(t *testing.T) {
 	}
 }
 
-func TestAuthLinkWithoutConfiguredIdentitiesExplainsHowToCreateOne(t *testing.T) {
+func TestAuthLinkWithoutConfiguredIdentitiesDetectsAndCreatesAgentSession(t *testing.T) {
 	t.Parallel()
+	created := ""
 	var stdout, stderr bytes.Buffer
 	exitCode := runWithDependencies(
 		[]string{"auth", "link"},
@@ -215,14 +217,17 @@ func TestAuthLinkWithoutConfiguredIdentitiesExplainsHowToCreateOne(t *testing.T)
 		buildinfo.Info{},
 		dependencies{
 			listIdentities: func() ([]string, error) { return nil, nil },
-			newAuth: func(string) (authCommands, error) {
-				t.Fatal("newAuth called without a configured identity")
-				return nil, nil
+			detectAgent: func(string) (agentidentity.Detection, error) {
+				return agentidentity.Detection{Agent: "codex", Source: "process"}, nil
+			},
+			newAuth: func(identity string) (authCommands, error) {
+				created = identity
+				return &fakeLinkAuthCommands{fakeAuthCommands: &fakeAuthCommands{}}, nil
 			},
 		},
 	)
-	if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 ||
-		!strings.Contains(stderr.String(), "no configured agent identity; run `kado auth create` first") {
+	if exitCode != 0 || stderr.Len() != 0 || created != "codex" ||
+		!strings.Contains(stdout.String(), "status: linked") {
 		t.Fatalf("auth link exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
 	}
 }
@@ -236,8 +241,6 @@ func TestDefaultAuthCreateCompletesRequiredAdmissionAndFinalizesEnrollment(t *te
 		ClientID:     "clt_admitted",
 	}
 	client := &scriptedAgentAuthClient{
-		authenticateResults: []agentauth.Result{{}, identity},
-		authenticateErrors:  []error{agentauth.ErrAdmissionRequired, nil},
 		token: agentauth.SessionToken{
 			PrincipalID:  identity.PrincipalID,
 			CredentialID: identity.CredentialID,
@@ -245,9 +248,7 @@ func TestDefaultAuthCreateCompletesRequiredAdmissionAndFinalizesEnrollment(t *te
 		},
 	}
 	configDir := t.TempDir()
-	commands := &defaultAuthCommands{
-		client: client, configDir: configDir, agent: "codex",
-	}
+	commands := newTestDefaultAuthCommands(t, client, configDir)
 	status, err := commands.Create(context.Background())
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -258,10 +259,7 @@ func TestDefaultAuthCreateCompletesRequiredAdmissionAndFinalizesEnrollment(t *te
 		status.ClientID != identity.ClientID {
 		t.Fatalf("Create() status = %#v", status)
 	}
-	if len(client.authenticateRequests) != 2 ||
-		client.authenticateRequests[0].Mode != agentauth.CreateIfMissing ||
-		client.authenticateRequests[1].Mode != agentauth.AuthenticateOnly ||
-		len(client.acquireRequests) != 1 ||
+	if len(client.authenticateRequests) != 0 || len(client.acquireRequests) != 1 ||
 		client.acquireRequests[0].Mode != agentauth.CreateIfMissing {
 		t.Fatalf(
 			"authenticate requests = %#v; acquire requests = %#v",
@@ -284,11 +282,11 @@ func TestDefaultAuthCreateReturnsExistingActiveCredentialWithoutEnrollment(t *te
 		CredentialID: "acred_existing",
 		ClientID:     "clt_existing",
 	}
-	client := &scriptedAgentAuthClient{status: existing}
+	client := &scriptedAgentAuthClient{token: agentauth.SessionToken{
+		PrincipalID: existing.PrincipalID, CredentialID: existing.CredentialID, ClientID: existing.ClientID,
+	}}
 	configDir := t.TempDir()
-	commands := &defaultAuthCommands{
-		client: client, configDir: configDir, agent: "codex",
-	}
+	commands := newTestDefaultAuthCommands(t, client, configDir)
 
 	status, err := commands.Create(context.Background())
 	if err != nil {
@@ -297,8 +295,8 @@ func TestDefaultAuthCreateReturnsExistingActiveCredentialWithoutEnrollment(t *te
 	if status != existing {
 		t.Fatalf("Create() status = %#v, want %#v", status, existing)
 	}
-	if client.statusCalls != 1 || len(client.authenticateRequests) != 0 ||
-		len(client.acquireRequests) != 0 {
+	if client.statusCalls != 0 || len(client.authenticateRequests) != 0 ||
+		len(client.acquireRequests) != 1 || client.acquireRequests[0].Mode != agentauth.CreateIfMissing {
 		t.Fatalf(
 			"status calls = %d; authenticate requests = %#v; acquire requests = %#v",
 			client.statusCalls,
@@ -315,21 +313,15 @@ func TestDefaultAuthCreateReturnsExistingActiveCredentialWithoutEnrollment(t *te
 func TestDefaultAuthCreateDoesNotReplaceRevokedCredential(t *testing.T) {
 	t.Parallel()
 
-	client := &scriptedAgentAuthClient{status: agentauth.CredentialStatus{
-		Status:       agentauth.StatusRevoked,
-		PrincipalID:  "agt_revoked",
-		CredentialID: "acred_revoked",
-		ClientID:     "clt_revoked",
-	}}
-	commands := &defaultAuthCommands{
-		client: client, configDir: t.TempDir(), agent: "codex",
-	}
+	client := &scriptedAgentAuthClient{tokenError: agentauth.ErrCredentialRevoked}
+	commands := newTestDefaultAuthCommands(t, client, t.TempDir())
 
 	_, err := commands.Create(context.Background())
 	if !errors.Is(err, agentauth.ErrCredentialRevoked) {
 		t.Fatalf("Create() error = %v, want ErrCredentialRevoked", err)
 	}
-	if len(client.authenticateRequests) != 0 || len(client.acquireRequests) != 0 {
+	if len(client.authenticateRequests) != 0 || len(client.acquireRequests) != 1 ||
+		client.acquireRequests[0].Mode != agentauth.CreateIfMissing {
 		t.Fatalf(
 			"authenticate requests = %#v; acquire requests = %#v",
 			client.authenticateRequests,
@@ -338,22 +330,12 @@ func TestDefaultAuthCreateDoesNotReplaceRevokedCredential(t *testing.T) {
 	}
 }
 
-func TestDefaultAuthCreateRejectsIdentityChangeAfterAdmission(t *testing.T) {
+func TestDefaultAuthCreateDoesNotRegisterFailedSession(t *testing.T) {
 	t.Parallel()
 
-	client := &scriptedAgentAuthClient{
-		authenticateResults: []agentauth.Result{{}, {
-			PrincipalID: "agt_other", CredentialID: "acred_other", ClientID: "clt_other",
-		}},
-		authenticateErrors: []error{agentauth.ErrAdmissionRequired, nil},
-		token: agentauth.SessionToken{
-			PrincipalID: "agt_admitted", CredentialID: "acred_admitted", ClientID: "clt_admitted",
-		},
-	}
+	client := &scriptedAgentAuthClient{tokenError: agentauth.ErrAuthentication}
 	configDir := t.TempDir()
-	commands := &defaultAuthCommands{
-		client: client, configDir: configDir, agent: "codex",
-	}
+	commands := newTestDefaultAuthCommands(t, client, configDir)
 	if _, err := commands.Create(context.Background()); !errors.Is(err, agentauth.ErrAuthentication) {
 		t.Fatalf("Create() error = %v, want ErrAuthentication", err)
 	}
@@ -363,12 +345,12 @@ func TestDefaultAuthCreateRejectsIdentityChangeAfterAdmission(t *testing.T) {
 	}
 }
 
-func TestDefaultAuthLinkUsesAuthenticatedToken(t *testing.T) {
+func TestDefaultAuthLinkUsesSharedCreateIfMissingSession(t *testing.T) {
 	t.Parallel()
 	client := &scriptedAgentAuthClient{token: agentauth.SessionToken{
 		PrincipalID: "agt_link", CredentialID: "acred_link", ClientID: "clt_link",
 	}}
-	commands := &defaultAuthCommands{client: client}
+	commands := newTestDefaultAuthCommands(t, client, t.TempDir())
 	token, err := commands.LinkToken(context.Background())
 	if err != nil {
 		t.Fatalf("LinkToken() error = %v", err)
@@ -381,13 +363,33 @@ func TestDefaultAuthLinkUsesAuthenticatedToken(t *testing.T) {
 	}
 	if status.Status != agentauth.LinkStatusLinked || client.linkCalls != 1 ||
 		client.linkTokens[0].PrincipalID != "agt_link" || len(client.acquireRequests) != 1 ||
-		client.acquireRequests[0].Mode != agentauth.AuthenticateOnly {
+		client.acquireRequests[0].Mode != agentauth.CreateIfMissing {
 		t.Fatalf(
 			"status=%#v linkCalls=%d linkToken=%v acquireRequests=%#v",
 			status, client.linkCalls, client.linkTokens, client.acquireRequests,
 		)
 	}
 }
+
+func newTestDefaultAuthCommands(
+	t *testing.T,
+	client *scriptedAgentAuthClient,
+	configDir string,
+) *defaultAuthCommands {
+	t.Helper()
+	store := &memoryKeyStore{}
+	session, err := agentsession.New(client, store, func() error {
+		return localstate.AddIdentity(configDir, "codex")
+	})
+	if err != nil {
+		t.Fatalf("agentsession.New() error = %v", err)
+	}
+	return &defaultAuthCommands{
+		client: client, store: store, session: session,
+		configDir: configDir, agent: "codex",
+	}
+}
+
 func TestAgentOverrideSelectsNamespacedAuthFactory(t *testing.T) {
 	t.Parallel()
 
@@ -469,6 +471,34 @@ func TestAgentAndIdentityListsAreDeterministic(t *testing.T) {
 				stderr.String(),
 			)
 		}
+	}
+}
+
+func TestAgentDetectEnsuresAuthenticatedSession(t *testing.T) {
+	t.Parallel()
+	ensured := ""
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"agent", "detect"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			detectAgent: func(string) (agentidentity.Detection, error) {
+				return agentidentity.Detection{Agent: "codex", Source: "process"}, nil
+			},
+			ensureSession: func(_ context.Context, identity string) error {
+				ensured = identity
+				return nil
+			},
+		},
+	)
+	if exitCode != 0 || stderr.Len() != 0 || ensured != "codex" ||
+		stdout.String() != "agent: codex\nsource: process\n" {
+		t.Fatalf(
+			"exit=%d ensured=%q stdout=%q stderr=%q",
+			exitCode, ensured, stdout.String(), stderr.String(),
+		)
 	}
 }
 
@@ -1232,6 +1262,43 @@ type closedPipeWriter struct{}
 
 func (closedPipeWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
+}
+
+type memoryKeyStore struct {
+	value []byte
+}
+
+func (store *memoryKeyStore) Load() ([]byte, error) {
+	if len(store.value) == 0 {
+		return nil, keystore.ErrNotFound
+	}
+	return append([]byte(nil), store.value...), nil
+}
+
+func (store *memoryKeyStore) Create(value []byte) ([]byte, bool, error) {
+	if len(store.value) != 0 {
+		return append([]byte(nil), store.value...), false, nil
+	}
+	store.value = append([]byte(nil), value...)
+	return append([]byte(nil), store.value...), true, nil
+}
+
+func (store *memoryKeyStore) Save(value []byte) error {
+	store.value = append([]byte(nil), value...)
+	return nil
+}
+
+func (store *memoryKeyStore) Delete() error {
+	store.value = nil
+	return nil
+}
+
+func (store *memoryKeyStore) DeleteIfMatches(expected []byte) (bool, error) {
+	if !bytes.Equal(store.value, expected) {
+		return false, nil
+	}
+	store.value = nil
+	return true, nil
 }
 
 func mustFixture(t *testing.T, name string) []byte {

@@ -21,6 +21,7 @@ import (
 
 	"github.com/kado-so/search/internal/agentauth"
 	"github.com/kado-so/search/internal/agentidentity"
+	"github.com/kado-so/search/internal/agentsession"
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/config"
 	"github.com/kado-so/search/internal/diagnostic"
@@ -113,6 +114,7 @@ type searchRunResult struct {
 
 type dependencies struct {
 	detectAgent    func(string) (agentidentity.Detection, error)
+	ensureSession  func(context.Context, string) error
 	listIdentities func() ([]string, error)
 	newAuth        func(string) (authCommands, error)
 	newSearch      func(string) (searchCommands, error)
@@ -124,6 +126,7 @@ type dependencies struct {
 type defaultAuthCommands struct {
 	client    autonomousAgentClient
 	store     keystore.Store
+	session   *agentsession.Middleware
 	configDir string
 	agent     string
 }
@@ -158,14 +161,6 @@ type defaultReleaseCommands struct {
 	info       buildinfo.Info
 }
 
-type agentAuthorizationSource struct {
-	client    *agentauth.Client
-	store     keystore.Store
-	token     agentauth.SessionToken
-	configDir string
-	agent     string
-}
-
 var outputIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$`)
 var errBrokenPipe = errors.New("CLI output pipe closed")
 
@@ -173,6 +168,7 @@ var errBrokenPipe = errors.New("CLI output pipe closed")
 func Run(args []string, stdout, stderr io.Writer, info buildinfo.Info) int {
 	return runWithDependencies(args, stdout, stderr, info, dependencies{
 		detectAgent:    agentidentity.Detect,
+		ensureSession:  ensureDefaultAgentSession,
 		listIdentities: listDefaultIdentities,
 		newAuth:        newDefaultAuthCommands,
 		newSearch:      newDefaultSearchCommands,
@@ -560,6 +556,11 @@ func runAgent(
 		detection, err := resolveAgent(override, dependencies)
 		if err != nil {
 			return usageError(err.Error())
+		}
+		if dependencies.ensureSession != nil {
+			if err := dependencies.ensureSession(context.Background(), detection.Agent); err != nil {
+				return authDiagnostic("create", err)
+			}
 		}
 		_, _ = fmt.Fprintf(
 			stdout,
@@ -1010,7 +1011,11 @@ func runAuthLink(
 			return authDiagnostic("link", err)
 		}
 		if len(identities) == 0 {
-			return authDiagnostic("link", agentauth.ErrCredentialNotFound)
+			detection, detectErr := resolveAgent("", dependencies)
+			if detectErr != nil {
+				return usageError(detectErr.Error())
+			}
+			identities = []string{detection.Agent}
 		}
 	}
 
@@ -1202,17 +1207,39 @@ func searchDiagnostic(cause error) error {
 }
 
 func newDefaultAuthCommands(agent string) (authCommands, error) {
-	safeConfig, err := config.Load()
+	runtime, err := newDefaultAgentRuntime(agent)
 	if err != nil {
 		return nil, err
+	}
+	return &defaultAuthCommands{
+		client:    runtime.client,
+		store:     runtime.store,
+		session:   runtime.session,
+		configDir: runtime.configDir,
+		agent:     agent,
+	}, nil
+}
+
+type defaultAgentRuntime struct {
+	client     *agentauth.Client
+	store      keystore.Store
+	session    *agentsession.Middleware
+	httpClient *http.Client
+	configDir  string
+}
+
+func newDefaultAgentRuntime(agent string) (defaultAgentRuntime, error) {
+	safeConfig, err := config.Load()
+	if err != nil {
+		return defaultAgentRuntime{}, err
 	}
 	host, err := localstate.EnsureHost(safeConfig.ConfigDir)
 	if err != nil {
-		return nil, err
+		return defaultAgentRuntime{}, err
 	}
 	store, err := selectCredentialStore(safeConfig, agent)
 	if err != nil {
-		return nil, err
+		return defaultAgentRuntime{}, err
 	}
 	httpClient := serviceHTTPClient(
 		30*time.Second,
@@ -1227,60 +1254,48 @@ func newDefaultAuthCommands(agent string) (authCommands, error) {
 		rand.Reader,
 	)
 	if err != nil {
-		return nil, err
+		return defaultAgentRuntime{}, err
 	}
-	return &defaultAuthCommands{
-		client:    client,
-		store:     store,
-		configDir: safeConfig.ConfigDir,
-		agent:     agent,
+	session, err := agentsession.New(client, store, func() error {
+		return localstate.AddIdentity(safeConfig.ConfigDir, agent)
+	})
+	if err != nil {
+		return defaultAgentRuntime{}, err
+	}
+	return defaultAgentRuntime{
+		client: client, store: store, session: session,
+		httpClient: httpClient, configDir: safeConfig.ConfigDir,
 	}, nil
 }
 
 func newDefaultSearchCommands(agent string) (searchCommands, error) {
+	runtime, err := newDefaultAgentRuntime(agent)
+	if err != nil {
+		return nil, err
+	}
 	safeConfig, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	host, err := localstate.EnsureHost(safeConfig.ConfigDir)
-	if err != nil {
-		return nil, err
-	}
-	store, err := selectCredentialStore(safeConfig, agent)
-	if err != nil {
-		return nil, err
-	}
-	httpClient := serviceHTTPClient(
-		30*time.Second,
-		agentauth.DefaultLimits().MaxResponseHeaderBytes,
-		agent,
-		host.ID,
-	)
-	authClient, err := agentauth.NewClient(
-		safeConfig.BaseURL,
-		httpClient,
-		agentauth.DefaultLimits(),
-		rand.Reader,
-	)
-	if err != nil {
-		return nil, err
-	}
-	authorization := &agentAuthorizationSource{
-		client:    authClient,
-		store:     store,
-		configDir: safeConfig.ConfigDir,
-		agent:     agent,
-	}
 	search, err := searchclient.New(
 		safeConfig.BaseURL,
-		httpClient,
-		authorization,
+		runtime.httpClient,
+		runtime.session,
 		searchclient.DefaultLimits(),
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &defaultSearchCommands{client: search}, nil
+}
+
+func ensureDefaultAgentSession(ctx context.Context, agent string) error {
+	runtime, err := newDefaultAgentRuntime(agent)
+	if err != nil {
+		return err
+	}
+	_, err = runtime.session.Ensure(ctx, false)
+	return err
 }
 
 func selectCredentialStore(
@@ -1380,63 +1395,15 @@ func serviceHTTPClient(
 func (commands *defaultAuthCommands) Create(
 	ctx context.Context,
 ) (agentauth.CredentialStatus, error) {
-	status, statusErr := commands.client.CredentialStatus(ctx, commands.store)
-	if statusErr == nil {
-		switch status.Status {
-		case agentauth.StatusActive:
-			if err := localstate.AddIdentity(commands.configDir, commands.agent); err != nil {
-				return agentauth.CredentialStatus{}, err
-			}
-			return status, nil
-		case agentauth.StatusRevoked:
-			return agentauth.CredentialStatus{}, agentauth.ErrCredentialRevoked
-		case agentauth.StatusNotConfigured:
-			// Continue to enrollment. The concrete client normally represents this
-			// state as ErrCredentialNotFound, but accepting the explicit status keeps
-			// the command safe for other client implementations.
-		default:
-			return agentauth.CredentialStatus{}, agentauth.ErrProtocol
-		}
-	} else if !errors.Is(statusErr, agentauth.ErrCredentialNotFound) {
-		return agentauth.CredentialStatus{}, statusErr
-	}
-
-	result, err := commands.client.AuthenticateOrEnroll(
-		ctx,
-		commands.store,
-		agentauth.Request{Mode: agentauth.CreateIfMissing},
-	)
-	if errors.Is(err, agentauth.ErrAdmissionRequired) {
-		token, tokenErr := commands.client.AcquireToken(
-			ctx,
-			commands.store,
-			agentauth.Request{Mode: agentauth.CreateIfMissing},
-		)
-		if tokenErr != nil {
-			return agentauth.CredentialStatus{}, tokenErr
-		}
-		result, err = commands.client.AuthenticateOrEnroll(
-			ctx,
-			commands.store,
-			agentauth.Request{Mode: agentauth.AuthenticateOnly},
-		)
-		if err == nil && (result.PrincipalID != token.PrincipalID ||
-			result.CredentialID != token.CredentialID ||
-			result.ClientID != token.ClientID) {
-			return agentauth.CredentialStatus{}, agentauth.ErrAuthentication
-		}
-	}
+	token, err := commands.session.Ensure(ctx, false)
 	if err != nil {
-		return agentauth.CredentialStatus{}, err
-	}
-	if err := localstate.AddIdentity(commands.configDir, commands.agent); err != nil {
 		return agentauth.CredentialStatus{}, err
 	}
 	return agentauth.CredentialStatus{
 		Status:       agentauth.StatusActive,
-		PrincipalID:  result.PrincipalID,
-		CredentialID: result.CredentialID,
-		ClientID:     result.ClientID,
+		PrincipalID:  token.PrincipalID,
+		CredentialID: token.CredentialID,
+		ClientID:     token.ClientID,
 	}, nil
 }
 
@@ -1463,11 +1430,7 @@ func (commands *defaultAuthCommands) Revoke(
 }
 
 func (commands *defaultAuthCommands) LinkToken(ctx context.Context) (agentauth.SessionToken, error) {
-	return commands.client.AcquireToken(
-		ctx,
-		commands.store,
-		agentauth.Request{Mode: agentauth.AuthenticateOnly},
-	)
+	return commands.session.Ensure(ctx, false)
 }
 
 func (commands *defaultAuthCommands) LinkAccounts(
@@ -1535,30 +1498,6 @@ func (commands *defaultReleaseCommands) VerifyBundle(
 	directory string,
 ) (releaseclient.Metadata, releaseclient.Target, error) {
 	return releaseclient.VerifyLocalBundle(directory, commands.info)
-}
-
-func (source *agentAuthorizationSource) Authorization(
-	ctx context.Context,
-	refresh bool,
-) (string, error) {
-	if !refresh &&
-		source.token.AuthorizationHeader() != "" &&
-		time.Until(source.token.AccessExpiresAt) > 30*time.Second {
-		return source.token.AuthorizationHeader(), nil
-	}
-	token, err := source.client.AcquireToken(
-		ctx,
-		source.store,
-		agentauth.Request{Mode: agentauth.CreateIfMissing},
-	)
-	if err != nil {
-		return "", err
-	}
-	if err := localstate.AddIdentity(source.configDir, source.agent); err != nil {
-		return "", err
-	}
-	source.token = token
-	return source.token.AuthorizationHeader(), nil
 }
 
 func usageError(message string) error {
