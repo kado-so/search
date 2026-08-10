@@ -72,9 +72,10 @@ kado --agent codex auth status
 mandatory admission when kado-app requires it; an authenticated Search also
 creates the identity transparently when needed.
 
-`auth link` opens a short-lived browser approval flow that connects the
-selected agent identity to the signed-in human Kado account. It does not expose
-or replace the agent's existing credentials.
+`auth link` opens short-lived browser approval flows that connect every locally
+configured agent identity to the signed-in human Kado account. Use
+`kado --agent <identity> auth link` to link only one identity. Linking does not
+expose or replace any agent's existing credentials.
 
 ## Local metadata
 

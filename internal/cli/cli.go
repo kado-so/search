@@ -43,7 +43,7 @@ Usage:
 Commands:
   search <query>   Run an authenticated Search
   auth create      Create/authenticate an identity
-  auth link        Link account
+  auth link        Link agents
   auth status      Show identity state
   auth revoke      Revoke an identity
   auth identities  List identities
@@ -950,6 +950,9 @@ func runAuth(
 	if dependencies.newAuth == nil {
 		return authDiagnostic(args[0], errors.New("authentication unavailable"))
 	}
+	if args[0] == "link" {
+		return runAuthLink(stdout, override, dependencies)
+	}
 	detection, err := resolveAgent(override, dependencies)
 	if err != nil {
 		return usageError(err.Error())
@@ -957,34 +960,6 @@ func runAuth(
 	auth, err := dependencies.newAuth(detection.Agent)
 	if err != nil {
 		return authDiagnostic(args[0], err)
-	}
-	if args[0] == "link" {
-		linker, ok := auth.(authLinker)
-		if !ok {
-			return authDiagnostic("link", errors.New("account linking unavailable"))
-		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer stop()
-		status, err := linker.Link(ctx, func(link agentauth.LinkAuthorization) error {
-			_, _ = fmt.Fprintf(
-				stdout,
-				"Open %s\nCode: %s\nWaiting for approval...\n",
-				link.VerificationURI,
-				link.UserCode,
-			)
-			if dependencies.openBrowser != nil {
-				_ = dependencies.openBrowser(link.VerificationURIComplete)
-			}
-			return nil
-		})
-		if err != nil {
-			return authDiagnostic("link", err)
-		}
-		if status.Status != agentauth.LinkStatusLinked {
-			return authDiagnostic("link", agentauth.ErrProtocol)
-		}
-		_, _ = fmt.Fprintln(stdout, "status: linked")
-		return nil
 	}
 	var status agentauth.CredentialStatus
 	if args[0] == "create" {
@@ -1006,6 +981,75 @@ func runAuth(
 		return authDiagnostic(args[0], err)
 	}
 	return renderCredentialStatus(stdout, status)
+}
+
+func runAuthLink(
+	stdout io.Writer,
+	override string,
+	dependencies dependencies,
+) error {
+	identities := []string(nil)
+	if override != "" {
+		detection, err := resolveAgent(override, dependencies)
+		if err != nil {
+			return usageError(err.Error())
+		}
+		identities = []string{detection.Agent}
+	} else {
+		if dependencies.listIdentities == nil {
+			return authDiagnostic("link", errors.New("identity list unavailable"))
+		}
+		var err error
+		identities, err = dependencies.listIdentities()
+		if err != nil {
+			return authDiagnostic("link", err)
+		}
+		if len(identities) == 0 {
+			return authDiagnostic("link", agentauth.ErrCredentialNotFound)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	for _, identity := range identities {
+		if !agentidentity.Valid(identity) {
+			return authDiagnostic("link", errors.New("identity list is invalid"))
+		}
+		if override == "" {
+			_, _ = fmt.Fprintf(stdout, "identity: %s\n", identity)
+		}
+		auth, err := dependencies.newAuth(identity)
+		if err != nil {
+			return authDiagnostic("link", err)
+		}
+		linker, ok := auth.(authLinker)
+		if !ok {
+			return authDiagnostic("link", errors.New("account linking unavailable"))
+		}
+		status, err := linker.Link(ctx, func(link agentauth.LinkAuthorization) error {
+			_, _ = fmt.Fprintf(
+				stdout,
+				"Open %s\nCode: %s\nWaiting for approval...\n",
+				link.VerificationURI,
+				link.UserCode,
+			)
+			if dependencies.openBrowser != nil {
+				_ = dependencies.openBrowser(link.VerificationURIComplete)
+			}
+			return nil
+		})
+		if err != nil {
+			return authDiagnostic("link", err)
+		}
+		if status.Status != agentauth.LinkStatusLinked {
+			return authDiagnostic("link", agentauth.ErrProtocol)
+		}
+		_, _ = fmt.Fprintln(stdout, "status: linked")
+	}
+	if override == "" {
+		_, _ = fmt.Fprintf(stdout, "linked identities: %d\n", len(identities))
+	}
+	return nil
 }
 
 func renderCredentialStatus(stdout io.Writer, status agentauth.CredentialStatus) error {
@@ -1038,12 +1082,12 @@ func renderCredentialStatus(stdout io.Writer, status agentauth.CredentialStatus)
 
 func authDiagnostic(operation string, cause error) error {
 	if operation == "link" {
-		message := "could not link the selected agent identity"
+		message := "could not link agent identities"
 		code := "auth_link_failed"
 		switch {
 		case errors.Is(cause, agentauth.ErrCredentialNotFound):
 			code = "auth_not_configured"
-			message = "run `kado auth create` before linking this agent"
+			message = "no configured agent identity; run `kado auth create` first"
 		case errors.Is(cause, agentauth.ErrLinkDenied):
 			code = "auth_link_denied"
 			message = "account linking was denied"

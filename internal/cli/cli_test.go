@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -132,7 +133,7 @@ func TestAuthLinkOpensVerificationPageAndWaitsForApproval(t *testing.T) {
 	opened := ""
 	var stdout, stderr bytes.Buffer
 	exitCode := runWithDependencies(
-		[]string{"auth", "link"},
+		[]string{"--agent", "codex", "auth", "link"},
 		&stdout,
 		&stderr,
 		buildinfo.Info{},
@@ -148,6 +149,78 @@ func TestAuthLinkOpensVerificationPageAndWaitsForApproval(t *testing.T) {
 		!strings.Contains(stdout.String(), "Code: ABCD-2345") ||
 		!strings.HasSuffix(stdout.String(), "status: linked\n") {
 		t.Fatalf("auth link opened=%q stdout=%q", opened, stdout.String())
+	}
+}
+
+func TestAuthLinkDefaultsToEveryConfiguredIdentity(t *testing.T) {
+	t.Parallel()
+	created := []string{}
+	opened := []string{}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"auth", "link"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			listIdentities: func() ([]string, error) {
+				return []string{"claude-code", "codex"}, nil
+			},
+			newAuth: func(identity string) (authCommands, error) {
+				created = append(created, identity)
+				return &fakeLinkAuthCommands{
+					fakeAuthCommands: &fakeAuthCommands{},
+					userCode:         map[string]string{"claude-code": "CLDE-2345", "codex": "CODX-2345"}[identity],
+				}, nil
+			},
+			openBrowser: func(value string) error {
+				opened = append(opened, value)
+				return nil
+			},
+		},
+	)
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("auth link exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	if !reflect.DeepEqual(created, []string{"claude-code", "codex"}) ||
+		!reflect.DeepEqual(opened, []string{
+			"https://kado.so/link?user_code=CLDE-2345",
+			"https://kado.so/link?user_code=CODX-2345",
+		}) {
+		t.Fatalf("created=%q opened=%q", created, opened)
+	}
+	for _, expected := range []string{
+		"identity: claude-code\n",
+		"Code: CLDE-2345\n",
+		"identity: codex\n",
+		"Code: CODX-2345\n",
+		"linked identities: 2\n",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("auth link stdout missing %q: %q", expected, stdout.String())
+		}
+	}
+}
+
+func TestAuthLinkWithoutConfiguredIdentitiesExplainsHowToCreateOne(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"auth", "link"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			listIdentities: func() ([]string, error) { return nil, nil },
+			newAuth: func(string) (authCommands, error) {
+				t.Fatal("newAuth called without a configured identity")
+				return nil, nil
+			},
+		},
+	)
+	if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "no configured agent identity; run `kado auth create` first") {
+		t.Fatalf("auth link exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
 	}
 }
 
@@ -1160,16 +1233,21 @@ type fakeCreateAuthCommands struct {
 
 type fakeLinkAuthCommands struct {
 	*fakeAuthCommands
+	userCode string
 }
 
-func (*fakeLinkAuthCommands) Link(
+func (commands *fakeLinkAuthCommands) Link(
 	_ context.Context,
 	notify func(agentauth.LinkAuthorization) error,
 ) (agentauth.LinkStatus, error) {
+	userCode := commands.userCode
+	if userCode == "" {
+		userCode = "ABCD-2345"
+	}
 	err := notify(agentauth.LinkAuthorization{
-		UserCode:                "ABCD-2345",
+		UserCode:                userCode,
 		VerificationURI:         "https://kado.so/link",
-		VerificationURIComplete: "https://kado.so/link?user_code=ABCD-2345",
+		VerificationURIComplete: "https://kado.so/link?user_code=" + userCode,
 	})
 	return agentauth.LinkStatus{Status: agentauth.LinkStatusLinked}, err
 }

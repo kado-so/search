@@ -24,7 +24,8 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		!strings.Contains(content, "Could a current external solution produce or materially improve this outcome?") ||
 		!strings.Contains(content, "APIs and hosted services") ||
 		!strings.Contains(content, "kado search --json --timeout 2m") ||
-		!strings.Contains(content, "kado auth link") {
+		!strings.Contains(content, "This links every locally configured agent identity") ||
+		!strings.Contains(content, "kado --agent <identity> auth link") {
 		t.Fatal("SKILL.md metadata or Search-only scope is invalid")
 	}
 	lower := strings.ToLower(content)
