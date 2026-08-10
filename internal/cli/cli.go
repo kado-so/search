@@ -9,9 +9,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -40,14 +42,15 @@ Usage:
 
 Commands:
   search <query>   Run an authenticated Search
-  auth create      Create or authenticate an identity
+  auth create      Create/authenticate an identity
+  auth link        Link account
   auth status      Show identity state
   auth revoke      Revoke an identity
-  auth identities  List locally known identities
+  auth identities  List identities
   agent detect     Show the detected agent
   agent list       List supported agents
-  skill <command>   Manage the Search skill
-  update            Install a signed CLI release
+  skill <command>   Manage Search skill
+  update            Install signed CLI release
   uninstall         Remove the CLI
   release verify    Verify a release
   help              Show help
@@ -70,6 +73,10 @@ type authCommands interface {
 
 type authCreator interface {
 	Create(context.Context) (agentauth.CredentialStatus, error)
+}
+
+type authLinker interface {
+	Link(context.Context, func(agentauth.LinkAuthorization) error) (agentauth.LinkStatus, error)
 }
 
 type searchCommands interface {
@@ -106,6 +113,7 @@ type dependencies struct {
 	newSearch      func(string) (searchCommands, error)
 	newRelease     func(buildinfo.Info) (releaseCommands, error)
 	newSkill       func(buildinfo.Info) (skillCommands, error)
+	openBrowser    func(string) error
 }
 
 type defaultAuthCommands struct {
@@ -128,6 +136,11 @@ type autonomousAgentClient interface {
 	) (agentauth.SessionToken, error)
 	CredentialStatus(context.Context, keystore.Store) (agentauth.CredentialStatus, error)
 	RevokeCurrentCredential(context.Context, keystore.Store) (agentauth.CredentialStatus, error)
+	LinkAccount(
+		context.Context,
+		agentauth.SessionToken,
+		func(agentauth.LinkAuthorization) error,
+	) (agentauth.LinkStatus, error)
 }
 
 type defaultSearchCommands struct {
@@ -160,6 +173,7 @@ func Run(args []string, stdout, stderr io.Writer, info buildinfo.Info) int {
 		newSearch:      newDefaultSearchCommands,
 		newRelease:     newDefaultReleaseCommands,
 		newSkill:       newDefaultSkillCommands,
+		openBrowser:    openBrowser,
 	})
 }
 
@@ -909,7 +923,7 @@ func runAuth(
 	dependencies dependencies,
 ) error {
 	if len(args) != 1 {
-		return usageError("usage: kado auth <create|status|revoke|identities>")
+		return usageError("usage: kado auth <create|link|status|revoke|identities>")
 	}
 	if args[0] == "identities" {
 		if dependencies.listIdentities == nil {
@@ -928,9 +942,9 @@ func runAuth(
 		}
 		return nil
 	}
-	if args[0] != "create" && args[0] != "status" && args[0] != "revoke" {
+	if args[0] != "create" && args[0] != "link" && args[0] != "status" && args[0] != "revoke" {
 		return usageError(
-			"unknown auth command; use 'create', 'status', 'revoke', or 'identities'",
+			"unknown auth command; use 'create', 'link', 'status', 'revoke', or 'identities'",
 		)
 	}
 	if dependencies.newAuth == nil {
@@ -943,6 +957,34 @@ func runAuth(
 	auth, err := dependencies.newAuth(detection.Agent)
 	if err != nil {
 		return authDiagnostic(args[0], err)
+	}
+	if args[0] == "link" {
+		linker, ok := auth.(authLinker)
+		if !ok {
+			return authDiagnostic("link", errors.New("account linking unavailable"))
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		status, err := linker.Link(ctx, func(link agentauth.LinkAuthorization) error {
+			_, _ = fmt.Fprintf(
+				stdout,
+				"Open %s\nCode: %s\nWaiting for approval...\n",
+				link.VerificationURI,
+				link.UserCode,
+			)
+			if dependencies.openBrowser != nil {
+				_ = dependencies.openBrowser(link.VerificationURIComplete)
+			}
+			return nil
+		})
+		if err != nil {
+			return authDiagnostic("link", err)
+		}
+		if status.Status != agentauth.LinkStatusLinked {
+			return authDiagnostic("link", agentauth.ErrProtocol)
+		}
+		_, _ = fmt.Fprintln(stdout, "status: linked")
+		return nil
 	}
 	var status agentauth.CredentialStatus
 	if args[0] == "create" {
@@ -995,6 +1037,22 @@ func renderCredentialStatus(stdout io.Writer, status agentauth.CredentialStatus)
 }
 
 func authDiagnostic(operation string, cause error) error {
+	if operation == "link" {
+		message := "could not link the selected agent identity"
+		code := "auth_link_failed"
+		switch {
+		case errors.Is(cause, agentauth.ErrCredentialNotFound):
+			code = "auth_not_configured"
+			message = "run `kado auth create` before linking this agent"
+		case errors.Is(cause, agentauth.ErrLinkDenied):
+			code = "auth_link_denied"
+			message = "account linking was denied"
+		case errors.Is(cause, agentauth.ErrLinkExpired):
+			code = "auth_link_expired"
+			message = "account linking expired; run `kado auth link` again"
+		}
+		return diagnostic.New(code, message, diagnostic.ExitFailure, cause)
+	}
 	if operation == "revoke" && errors.Is(cause, agentauth.ErrCredentialChanged) {
 		return diagnostic.New(
 			"auth_credential_changed",
@@ -1345,6 +1403,37 @@ func (commands *defaultAuthCommands) Revoke(
 		err = localstate.RemoveIdentity(commands.configDir, commands.agent)
 	}
 	return status, err
+}
+
+func (commands *defaultAuthCommands) Link(
+	ctx context.Context,
+	notify func(agentauth.LinkAuthorization) error,
+) (agentauth.LinkStatus, error) {
+	token, err := commands.client.AcquireToken(
+		ctx,
+		commands.store,
+		agentauth.Request{Mode: agentauth.AuthenticateOnly},
+	)
+	if err != nil {
+		return agentauth.LinkStatus{}, err
+	}
+	return commands.client.LinkAccount(ctx, token, notify)
+}
+
+func openBrowser(rawURL string) error {
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.Command("open", rawURL)
+	case "windows":
+		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL)
+	default:
+		command = exec.Command("xdg-open", rawURL)
+	}
+	if err := command.Start(); err != nil {
+		return err
+	}
+	return command.Process.Release()
 }
 
 func (commands *defaultSearchCommands) Run(

@@ -30,6 +30,8 @@ var (
 	ErrChallengeExpired   = errors.New("agent admission challenge expired")
 	ErrTokenRateLimited   = errors.New("agent token issuance rate limited")
 	ErrAuthentication     = errors.New("agent authentication failed")
+	ErrLinkDenied         = errors.New("agent account linking denied")
+	ErrLinkExpired        = errors.New("agent account linking expired")
 )
 
 type EnrollmentMode uint8
@@ -85,6 +87,23 @@ type Metadata struct {
 	AgentMetadataURI     string
 	AutonomousEnrollment bool
 }
+
+// LinkAuthorization contains the short-lived, non-credential values displayed
+// while a human approves an agent-to-user link.
+type LinkAuthorization struct {
+	DeviceCode              string
+	UserCode                string
+	VerificationURI         string
+	VerificationURIComplete string
+	ExpiresIn               time.Duration
+	Interval                time.Duration
+}
+
+type LinkStatus struct {
+	Status string
+}
+
+const LinkStatusLinked = "linked"
 
 type Request struct {
 	Mode EnrollmentMode

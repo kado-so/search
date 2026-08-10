@@ -86,6 +86,7 @@ type fakeAuthServer struct {
 	credentialStatus  int
 	credentialCalls   int
 	credentialInvalid bool
+	linkPollError     string
 }
 
 func newFakeAuthServer(state *fakePersistentState) *fakeAuthServer {
@@ -176,6 +177,13 @@ func (fake *fakeAuthServer) handle(response http.ResponseWriter, request *http.R
 			JWSAlgorithms:           []string{"EdDSA"},
 			AdmissionChallengeTypes: []string{ProofAlgorithm},
 		})
+	case request.Method == http.MethodGet &&
+		request.URL.Path == "/.well-known/agent-user-linking":
+		fake.sendJSON(response, http.StatusOK, linkMetadata{
+			Issuer:             fake.issuer(),
+			LinkEndpoint:       fake.issuer() + "/api/auth/agent/link",
+			LinkStatusEndpoint: fake.issuer() + "/api/auth/agent/link/status",
+		})
 	case (request.Method == http.MethodHead || request.Method == http.MethodGet) &&
 		request.URL.Path == "/api/auth/agent/nonce":
 		fake.handleNonce(response)
@@ -185,6 +193,30 @@ func (fake *fakeAuthServer) handle(response http.ResponseWriter, request *http.R
 	case request.Method == http.MethodPost &&
 		request.URL.Path == "/api/auth/agent/credentials":
 		fake.handleCredential(response, request)
+	case request.Method == http.MethodPost &&
+		request.URL.Path == "/api/auth/agent/link":
+		if request.Header.Get("Authorization") != "Bearer test-link-token" {
+			fake.sendError(response, http.StatusUnauthorized, "invalid_token", false)
+			return
+		}
+		fake.sendJSON(response, http.StatusOK, linkAuthorizationResponse{
+			DeviceCode:              "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			UserCode:                "ABCD-2345",
+			VerificationURI:         fake.issuer() + "/link",
+			VerificationURIComplete: fake.issuer() + "/link?user_code=ABCD-2345",
+			ExpiresIn:               600,
+			Interval:                5,
+		})
+	case request.Method == http.MethodPost &&
+		request.URL.Path == "/api/auth/agent/link/status":
+		if fake.linkPollError != "" {
+			fake.sendJSON(response, http.StatusBadRequest, linkErrorResponse{
+				Error:            fake.linkPollError,
+				ErrorDescription: "link request did not complete",
+			})
+			return
+		}
+		fake.sendJSON(response, http.StatusOK, linkSuccessResponse{Status: LinkStatusLinked})
 	default:
 		fake.sendError(response, http.StatusNotFound, "not_found", false)
 	}

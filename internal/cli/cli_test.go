@@ -126,6 +126,31 @@ func TestAuthStatusPrintsOnlyBoundedNonSecretIdentityState(t *testing.T) {
 	assertNoCredentialSecrets(t, stdout+stderr)
 }
 
+func TestAuthLinkOpensVerificationPageAndWaitsForApproval(t *testing.T) {
+	t.Parallel()
+	auth := &fakeLinkAuthCommands{fakeAuthCommands: &fakeAuthCommands{}}
+	opened := ""
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"auth", "link"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{},
+		dependencies{
+			newAuth:     func(string) (authCommands, error) { return auth, nil },
+			openBrowser: func(value string) error { opened = value; return nil },
+		},
+	)
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("auth link exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	if opened != "https://kado.so/link?user_code=ABCD-2345" ||
+		!strings.Contains(stdout.String(), "Code: ABCD-2345") ||
+		!strings.HasSuffix(stdout.String(), "status: linked\n") {
+		t.Fatalf("auth link opened=%q stdout=%q", opened, stdout.String())
+	}
+}
+
 func TestDefaultAuthCreateCompletesRequiredAdmissionAndFinalizesEnrollment(t *testing.T) {
 	t.Parallel()
 
@@ -1133,6 +1158,22 @@ type fakeCreateAuthCommands struct {
 	createCalls int
 }
 
+type fakeLinkAuthCommands struct {
+	*fakeAuthCommands
+}
+
+func (*fakeLinkAuthCommands) Link(
+	_ context.Context,
+	notify func(agentauth.LinkAuthorization) error,
+) (agentauth.LinkStatus, error) {
+	err := notify(agentauth.LinkAuthorization{
+		UserCode:                "ABCD-2345",
+		VerificationURI:         "https://kado.so/link",
+		VerificationURIComplete: "https://kado.so/link?user_code=ABCD-2345",
+	})
+	return agentauth.LinkStatus{Status: agentauth.LinkStatusLinked}, err
+}
+
 type fakeSearchCommands struct {
 	result  searchRunResult
 	err     error
@@ -1281,6 +1322,14 @@ func (*scriptedAgentAuthClient) RevokeCurrentCredential(
 	keystore.Store,
 ) (agentauth.CredentialStatus, error) {
 	return agentauth.CredentialStatus{}, nil
+}
+
+func (*scriptedAgentAuthClient) LinkAccount(
+	context.Context,
+	agentauth.SessionToken,
+	func(agentauth.LinkAuthorization) error,
+) (agentauth.LinkStatus, error) {
+	return agentauth.LinkStatus{Status: agentauth.LinkStatusLinked}, nil
 }
 
 func runTestAuth(

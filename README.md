@@ -62,6 +62,7 @@ Safe authentication state can be inspected with:
 
 ```bash
 kado auth create
+kado auth link
 kado auth status
 kado auth identities
 kado --agent codex auth status
@@ -70,6 +71,10 @@ kado --agent codex auth status
 `auth create` creates the selected identity if it does not exist and completes
 mandatory admission when kado-app requires it; an authenticated Search also
 creates the identity transparently when needed.
+
+`auth link` opens a short-lived browser approval flow that connects the
+selected agent identity to the signed-in human Kado account. It does not expose
+or replace the agent's existing credentials.
 
 ## Local metadata
 

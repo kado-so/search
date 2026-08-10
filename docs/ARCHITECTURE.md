@@ -46,7 +46,8 @@ Unsupported major versions fail clearly.
 
 ## Skill boundary
 
-The `kado-search` skill contains Search guidance only: when to search, how to
+The `kado-search` skill contains Search guidance plus the narrow account-link
+command routing: when to search, how to
 form a query, how to invoke Search, and how to use the results. Authentication,
 installation, updates, releases, and uninstallation are CLI or operator
 concerns and do not belong in the skill.
