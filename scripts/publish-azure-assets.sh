@@ -75,18 +75,24 @@ case "$operation" in
       --content-cache-control "$immutable_cache" \
       --only-show-errors
 
-    skill_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' \
-      "$release_directory/skill-metadata.json")"
-    [[ "$skill_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] ||
-      { printf 'skill version is invalid\n' >&2; exit 1; }
-    skill_prefix="install/skills/kado-search/$skill_version"
+    while IFS= read -r -d '' source; do
+      relative="${source#"$release_directory/skills/"}"
+      case "$relative" in
+        catalog.json|catalog.json.sig) continue ;;
+        *.tar.gz) content_type=application/gzip ;;
+        *.json) content_type=application/json ;;
+        *.sig) content_type=application/octet-stream ;;
+        *) { printf 'unexpected skill release artifact: %s\n' "$relative" >&2; exit 1; } ;;
+      esac
+      upload_immutable "$source" "install/skills/$relative" "$immutable_cache" "$content_type"
+    done < <(find "$release_directory/skills" -type f -print0 | sort -z)
 
-    upload_immutable "$release_directory/kado-search.tar.gz" \
-      "$skill_prefix/kado-search.tar.gz" "$immutable_cache" application/gzip
-    upload_immutable "$release_directory/skill-metadata.json" \
-      "$skill_prefix/metadata.json" "$immutable_cache" application/json
-    upload_immutable "$release_directory/skill-metadata.json.sig" \
-      "$skill_prefix/metadata.json.sig" "$immutable_cache" application/octet-stream
+    catalog_revision="$(sed -n 's/.*"revision":\([0-9][0-9]*\).*/\1/p' "$release_directory/skills/catalog.json")"
+    [[ "$catalog_revision" =~ ^[1-9][0-9]*$ ]] || { printf 'skill catalog revision is invalid\n' >&2; exit 1; }
+    upload_immutable "$release_directory/skills/catalog.json" \
+      "install/skills/catalogs/$catalog_revision/catalog.json" "$immutable_cache" application/json
+    upload_immutable "$release_directory/skills/catalog.json.sig" \
+      "install/skills/catalogs/$catalog_revision/catalog.json.sig" "$immutable_cache" application/octet-stream
 
     verification_directory="$(mktemp -d)"
     trap 'rm -rf "$verification_directory"' EXIT
@@ -116,14 +122,11 @@ case "$operation" in
       install/releases/stable/release-metadata.json \
       true "$channel_cache" application/json
 
-    upload "$release_directory/kado-search.tar.gz" \
-      install/skills/kado-search/latest/kado-search.tar.gz \
-      true "$channel_cache" application/gzip
-    upload "$release_directory/skill-metadata.json.sig" \
-      install/skills/kado-search/latest/metadata.json.sig \
+    upload "$release_directory/skills/catalog.json.sig" \
+      install/skills/latest/catalog.json.sig \
       true "$channel_cache" application/octet-stream
-    upload "$release_directory/skill-metadata.json" \
-      install/skills/kado-search/latest/metadata.json \
+    upload "$release_directory/skills/catalog.json" \
+      install/skills/latest/catalog.json \
       true "$channel_cache" application/json
     ;;
 

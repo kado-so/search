@@ -44,18 +44,19 @@ are owned and published by `kado-app`. This repository embeds the three runtime
 contract artifacts and keeps conformance fixtures in test-only data.
 Unsupported major versions fail clearly.
 
-## Skill boundary
+## Skill boundaries
 
-The `kado-search` skill contains Search guidance plus the narrow account-link
-command routing: when to search, how to
-form a query, how to invoke Search, and how to use the results. Authentication,
-installation, updates, releases, and uninstallation are CLI or operator
-concerns and do not belong in the skill.
+The `kado` skill contains general CLI and account-linking guidance. The
+`kado-search` skill contains only Search routing, query formation, invocation,
+and result-use guidance. Installation, releases, and uninstallation remain CLI
+or operator concerns.
 
 ## Distribution
 
-The CLI embeds the Search skill and its assets so an agent can install one
-compatible unit without a plugin manager. Installation targets all detected
+The CLI embeds a revisioned catalog plus every active skill variant so an agent
+can install compatible units without a plugin manager. A signed remote catalog
+is authoritative when available, and exact agent variants take precedence over
+the default variant. Installation targets all detected
 harness locations plus `~/.agents/skills` by default. Kado scans every known
 destination and accepts a local ownership receipt only after its canonical path
 and actual content digest verify; previously registered copies must also match

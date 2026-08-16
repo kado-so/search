@@ -26,8 +26,8 @@ release descriptor an agent can use to:
    identity;
 4. install the executable in a user-writable directory, or run its signed
    updater when that destination already contains Kado;
-5. run `kado skill install` to install the latest compatible signed Search
-   skill, with the bundled copy as an offline fallback;
+5. run `kado skill install` to install the general Kado CLI skill and the latest
+   compatible signed Search skill, with bundled copies as an offline fallback;
 6. run idempotent `kado auth create` to create an identity or reuse an active
    existing credential; and
 7. run `kado auth status` to verify the configured identity.
@@ -50,7 +50,7 @@ The installation flow must explain how to add that directory to `PATH` when it
 is not already present. It must remain non-interactive when the agent supplies
 explicit destination and confirmation options.
 
-## Bundled skill
+## Bundled skills
 
 Each Kado CLI release embeds an offline `kado-search` fallback and prefers the
 latest compatible signed skill published by `kado.so`. The commands are:
@@ -62,7 +62,7 @@ kado skill update
 kado skill uninstall
 ```
 
-`install` defaults to `--all`: it installs for the calling agent, every locally
+`install` defaults to `--all`: it installs both `kado` and `kado-search` for the calling agent, every locally
 detected supported harness, and the portable `~/.agents/skills/` location. An
 explicit `--agent` adds a requested identity. Product-specific user locations
 are used for Codex, Claude Code, Cursor, Gemini CLI, Antigravity, GitHub

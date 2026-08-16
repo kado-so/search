@@ -353,11 +353,15 @@ func runSkill(
 		for _, installed := range result.Installed {
 			_, _ = fmt.Fprintf(
 				stdout,
-				"installed kado-search %s for %s at %s\n",
+				"installed %s %s for %s at %s\n",
+				skillInstallationName(installed),
 				installed.Version,
 				installed.Agent,
 				installed.Path,
 			)
+		}
+		for path, code := range result.Failures {
+			_, _ = fmt.Fprintf(stdout, "could not install %s (%s)\n", path, code)
 		}
 		if result.UsedFallback {
 			_, _ = fmt.Fprintln(stdout, "installed the bundled offline skill fallback")
@@ -378,7 +382,8 @@ func runSkill(
 		for _, installed := range status.Installations {
 			_, _ = fmt.Fprintf(
 				stdout,
-				"kado-search %s agent=%s path=%s\n",
+				"%s %s agent=%s path=%s\n",
+				skillInstallationName(installed),
 				installed.Version,
 				installed.Agent,
 				installed.Path,
@@ -427,10 +432,14 @@ func runSkill(
 		for _, updated := range result.Updated {
 			_, _ = fmt.Fprintf(
 				stdout,
-				"updated kado-search to %s for %s\n",
+				"updated %s to %s for %s\n",
+				skillInstallationName(updated),
 				updated.Version,
 				updated.Agent,
 			)
+		}
+		for _, removed := range result.Removed {
+			_, _ = fmt.Fprintf(stdout, "removed retired %s for %s\n", skillInstallationName(removed), removed.Agent)
 		}
 		if len(result.Updated) == 0 && len(result.Failures) == 0 {
 			_, _ = fmt.Fprintln(stdout, "Kado-managed skills are up to date")
@@ -468,12 +477,23 @@ func runSkill(
 			return skillDiagnostic(err)
 		}
 		for _, item := range removed {
-			_, _ = fmt.Fprintf(stdout, "removed kado-search for %s\n", item.Agent)
+			_, _ = fmt.Fprintf(stdout, "removed %s for %s\n", skillInstallationName(item), item.Agent)
 		}
 		return nil
 	default:
 		return usageError("usage: kado skill install|status|update|uninstall")
 	}
+}
+
+func skillInstallationName(item skillclient.Installation) string {
+	name := item.Name
+	if name == "" {
+		name = skillclient.SkillName
+	}
+	if item.Variant != "" && item.Variant != "default" {
+		return name + "@" + item.Variant
+	}
+	return name
 }
 
 func skillDiagnostic(cause error) error {

@@ -27,7 +27,7 @@ On Windows:
 
 The installers require no superuser privileges. They install the latest
 verified release or update an existing direct installation, configure the user
-PATH when needed, install the latest compatible signed Search skill in every
+PATH when needed, install every compatible signed Kado skill in every
 detected harness and the portable ~/.agents/skills location, and create or
 reuse an authenticated Kado identity. Set
 KADO_INSTALL_DIR to choose another user-owned executable directory or

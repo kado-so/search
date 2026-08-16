@@ -30,13 +30,20 @@ var fallbackSkillAgents = map[string]struct{}{
 	"openhands": {},
 }
 
-func Destination(home, agent string) (string, error) {
+func Destination(home, agent string, names ...string) (string, error) {
 	agent = canonicalSkillAgent(agent)
 	roots := agentSkillRoots[agent]
 	if len(roots) == 0 {
 		return "", ErrUnsupportedAgent
 	}
-	return filepath.Join(home, filepath.FromSlash(roots[0]), SkillName), nil
+	name := SkillName
+	if len(names) > 0 {
+		name = names[0]
+	}
+	if !validSkillName(name) {
+		return "", ErrInvalidRelease
+	}
+	return filepath.Join(home, filepath.FromSlash(roots[0]), name), nil
 }
 
 func canonicalSkillAgent(agent string) string {
@@ -46,11 +53,26 @@ func canonicalSkillAgent(agent string) string {
 	return agent
 }
 
-func KnownDestinations(home string) map[string]string {
+func validAgentSelector(agent string) bool {
+	if agent == "*" {
+		return true
+	}
+	if _, ok := agentSkillRoots[canonicalSkillAgent(agent)]; ok {
+		return true
+	}
+	return false
+}
+
+func KnownDestinations(home string, names ...string) map[string]string {
+	if len(names) == 0 {
+		names = []string{SkillName}
+	}
 	destinations := make(map[string]string, len(agentSkillRoots))
 	for agent := range agentSkillRoots {
-		destination, _ := Destination(home, agent)
-		destinations[agent] = destination
+		for _, name := range names {
+			destination, _ := Destination(home, agent, name)
+			destinations[agent+":"+name] = destination
+		}
 	}
 	return destinations
 }

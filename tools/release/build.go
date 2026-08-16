@@ -123,21 +123,30 @@ func buildRelease(input buildInput) error {
 	if err != nil {
 		return err
 	}
-	skillArchive, skillMetadata, skillSignature, err := makeSkillRelease(
+	skillSet, err := makeSkillReleases(
 		input.source.InstallURL,
 		input.privateKey,
 	)
 	if err != nil {
 		return err
 	}
-	if _, err := add("kado-search.tar.gz", skillArchive, 0o644); err != nil {
+	if _, err := add("skills/catalog.json", skillSet.Catalog, 0o644); err != nil {
 		return err
 	}
-	if _, err := add("skill-metadata.json", skillMetadata, 0o644); err != nil {
+	if _, err := add("skills/catalog.json.sig", skillSet.Signature, 0o644); err != nil {
 		return err
 	}
-	if _, err := add("skill-metadata.json.sig", skillSignature, 0o644); err != nil {
-		return err
+	for _, skill := range skillSet.Releases {
+		prefix := filepath.Join("skills", skill.Name, skill.Variant, skill.Version)
+		if _, err := add(filepath.Join(prefix, skill.Name+".tar.gz"), skill.Archive, 0o644); err != nil {
+			return err
+		}
+		if _, err := add(filepath.Join(prefix, "metadata.json"), skill.Metadata, 0o644); err != nil {
+			return err
+		}
+		if _, err := add(filepath.Join(prefix, "metadata.json.sig"), skill.Signature, 0o644); err != nil {
+			return err
+		}
 	}
 
 	targets := make([]releaseclient.Target, 0, len(releaseTargets))

@@ -51,11 +51,16 @@ func TestDefaultInstallUsesAllDetectedLocationsAndGeminiPair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"agents": true, "antigravity": true, "claude-code": true, "codex": true, "gemini-cli": true}
-	for _, item := range result.Installed {
-		delete(want, item.Agent)
+	want := map[string]bool{}
+	for _, agent := range []string{"agents", "antigravity", "claude-code", "codex", "gemini-cli"} {
+		for _, name := range []string{"kado", SkillName} {
+			want[agent+":"+name] = true
+		}
 	}
-	if len(want) != 0 || len(result.Installed) != 5 {
+	for _, item := range result.Installed {
+		delete(want, item.Agent+":"+item.Name)
+	}
+	if len(want) != 0 || len(result.Installed) != 10 {
 		t.Fatalf("Install() = %#v; missing %#v", result.Installed, want)
 	}
 }
@@ -64,7 +69,7 @@ func TestStatusDiscoversVerifiedUnregisteredInstallation(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	manager := Manager{ConfigDir: filepath.Join(root, "config"), HomeDir: filepath.Join(root, "home"), CurrentVersion: "dev"}
-	installed, err := manager.Install(context.Background(), InstallOptions{Agents: []string{"codex"}})
+	_, err := manager.Install(context.Background(), InstallOptions{Agents: []string{"codex"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +77,7 @@ func TestStatusDiscoversVerifiedUnregisteredInstallation(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, err := manager.Status()
-	if err != nil || len(status.Installations) != 1 || status.Installations[0] != installed.Installed[0] {
+	if err != nil || len(status.Installations) != 2 {
 		t.Fatalf("Status() = %#v, %v", status, err)
 	}
 }

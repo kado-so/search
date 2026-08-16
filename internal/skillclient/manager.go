@@ -3,7 +3,6 @@ package skillclient
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -42,6 +41,8 @@ type InstallResult struct {
 	Version      string
 	Installed    []Installation
 	OtherAgents  []string
+	Removed      []Installation
+	Failures     map[string]string
 	UsedFallback bool
 }
 
@@ -49,6 +50,7 @@ type UpdateResult struct {
 	Version  string
 	Updated  []Installation
 	Current  []Installation
+	Removed  []Installation
 	Failures map[string]string
 }
 
@@ -61,10 +63,6 @@ func (manager Manager) Install(
 	ctx context.Context,
 	options InstallOptions,
 ) (InstallResult, error) {
-	files, version, fallback, err := manager.latest(ctx, true)
-	if err != nil {
-		return InstallResult{}, err
-	}
 	agents := append([]string(nil), options.Agents...)
 	defaultAll := len(agents) == 0
 	if defaultAll && options.CurrentAgent != "" && options.CurrentAgent != "default" {
@@ -84,27 +82,11 @@ func (manager Manager) Install(
 	if err != nil {
 		return InstallResult{}, err
 	}
-	result := InstallResult{
-		Version:      version,
-		OtherAgents:  others,
-		UsedFallback: fallback,
-	}
 	for _, agent := range agents {
-		destination, err := Destination(manager.HomeDir, agent)
-		if err != nil {
-			return result, err
-		}
-		item, err := installFiles(destination, agent, "user", version, files)
-		if err != nil {
-			return result, fmt.Errorf("%s: %w", agent, err)
-		}
-		registry.Installations = upsertInstallation(registry.Installations, item)
-		result.Installed = append(result.Installed, item)
+		registry.Targets = upsertTarget(registry.Targets, Target{Agent: agent, Scope: "user"})
 	}
-	if err := writeRegistry(manager.ConfigDir, registry); err != nil {
-		return result, err
-	}
-	return result, nil
+	sync, err := manager.sync(ctx, registry, true)
+	return InstallResult{Version: embeddedVersion(SkillName), Installed: sync.Updated, Removed: sync.Removed, Failures: sync.Failures, OtherAgents: others, UsedFallback: manager.PublicKey == ""}, err
 }
 
 func (manager Manager) Update(ctx context.Context) (UpdateResult, error) {
@@ -112,48 +94,95 @@ func (manager Manager) Update(ctx context.Context) (UpdateResult, error) {
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	registry, discoveryFailures := manager.reconcileRegistry(registry)
-	files, version, _, err := manager.latest(ctx, manager.PublicKey == "")
+	return manager.sync(ctx, registry, manager.PublicKey == "")
+}
+
+func (manager Manager) sync(ctx context.Context, registry registry, allowFallback bool) (UpdateResult, error) {
+	catalog, embedded, err := manager.desiredCatalog(ctx, allowFallback)
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	result := UpdateResult{
-		Version:  version,
-		Failures: discoveryFailures,
-	}
-	if len(registry.Installations) == 0 {
-		return result, writeRegistry(manager.ConfigDir, registry)
-	}
-	desiredDigest := kadoskill.Digest(files)
-	for index, item := range registry.Installations {
-		expected, destinationErr := Destination(manager.HomeDir, item.Agent)
-		if destinationErr != nil || expected != item.Path || item.Scope != "user" {
-			result.Failures[item.Path] = "invalid_destination"
-			continue
-		}
-		if _, unsafe := result.Failures[item.Path]; unsafe {
-			continue
-		}
-		if item.Version == version && item.ContentSHA256 == desiredDigest {
-			if err := verifyManagedInstallation(item); err == nil {
-				result.Current = append(result.Current, item)
+	staleCatalog := registry.CatalogRevision > catalog.Revision
+	registry, discoveryFailures := manager.reconcileRegistry(registry, catalog)
+	result := UpdateResult{Failures: discoveryFailures}
+	desired := map[string]bool{}
+	cache := map[string]EmbeddedRelease{}
+	for _, target := range registry.Targets {
+		for _, skill := range catalog.Skills {
+			if skill.State != "active" {
 				continue
 			}
+			variant, ok := SelectVariant(skill, target.Agent)
+			if !ok {
+				continue
+			}
+			key := skill.Name + ":" + variant.ID
+			release, ok := cache[key]
+			var resolutionErr error
+			if !ok {
+				release, resolutionErr = manager.resolveRelease(ctx, skill.Name, variant, embedded, allowFallback)
+				if resolutionErr == nil {
+					cache[key] = release
+				}
+			}
+			destination, destinationErr := Destination(manager.HomeDir, target.Agent, skill.Name)
+			desired[destination] = true
+			if destinationErr != nil {
+				result.Failures[key+":"+target.Agent] = "invalid_destination"
+				continue
+			}
+			if resolutionErr != nil {
+				result.Failures[destination] = publicFailure(resolutionErr)
+				continue
+			}
+			existing, exists := installationAt(registry.Installations, destination)
+			if staleCatalog && exists && verifyManagedInstallation(existing) == nil {
+				delete(result.Failures, destination)
+				result.Current = append(result.Current, existing)
+				continue
+			}
+			digest := kadoskill.Digest(release.Files)
+			if exists && existing.Variant == release.Metadata.Variant && lessVersion(release.Metadata.Version, existing.Version) && verifyManagedInstallation(existing) == nil {
+				delete(result.Failures, destination)
+				result.Current = append(result.Current, existing)
+				continue
+			}
+			if exists && existing.Version == release.Metadata.Version && existing.Variant == release.Metadata.Variant && existing.ContentSHA256 == digest && verifyManagedInstallation(existing) == nil {
+				delete(result.Failures, destination)
+				result.Current = append(result.Current, existing)
+				continue
+			}
+			item, installErr := installFiles(destination, target.Agent, target.Scope, release.Metadata.Version, release.Files, release.Metadata.Variant)
+			if installErr != nil {
+				result.Failures[destination] = publicFailure(installErr)
+				continue
+			}
+			item.Name, item.Variant = skill.Name, release.Metadata.Variant
+			delete(result.Failures, destination)
+			registry.Installations = upsertInstallation(registry.Installations, item)
+			result.Updated = append(result.Updated, item)
 		}
-		updated, err := installFiles(
-			item.Path,
-			item.Agent,
-			item.Scope,
-			version,
-			files,
-		)
-		if err != nil {
-			result.Failures[item.Path] = publicFailure(err)
+	}
+	var retained []Installation
+	for _, item := range registry.Installations {
+		if desired[item.Path] || staleCatalog {
+			retained = append(retained, item)
 			continue
 		}
-		registry.Installations[index] = updated
-		result.Updated = append(result.Updated, updated)
+		if verifyManagedInstallation(item) != nil {
+			result.Failures[item.Path] = "locally_modified"
+			retained = append(retained, item)
+			continue
+		}
+		if err := os.RemoveAll(item.Path); err != nil {
+			result.Failures[item.Path] = publicFailure(err)
+			retained = append(retained, item)
+			continue
+		}
+		result.Removed = append(result.Removed, item)
 	}
+	registry.Installations = retained
+	if !staleCatalog { registry.CatalogRevision = catalog.Revision }
 	if err := writeRegistry(manager.ConfigDir, registry); err != nil {
 		return result, err
 	}
@@ -165,7 +194,11 @@ func (manager Manager) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	registry, failures := manager.reconcileRegistry(registry)
+	catalog, _, catalogErr := EmbeddedCatalog()
+	if catalogErr != nil {
+		return Status{}, catalogErr
+	}
+	registry, failures := manager.reconcileRegistry(registry, catalog)
 	if err := writeRegistry(manager.ConfigDir, registry); err != nil {
 		return Status{}, err
 	}
@@ -183,7 +216,8 @@ func (manager Manager) Uninstall(agents []string, all bool) ([]Installation, err
 	if err != nil {
 		return nil, err
 	}
-	registry, _ = manager.reconcileRegistry(registry)
+	catalog, _, _ := EmbeddedCatalog()
+	registry, _ = manager.reconcileRegistry(registry, catalog)
 	selected := make(map[string]struct{})
 	for _, agent := range canonicalSkillAgents(expandSkillAgents(agents)) {
 		selected[agent] = struct{}{}
@@ -195,7 +229,7 @@ func (manager Manager) Uninstall(agents []string, all bool) ([]Installation, err
 			retained = append(retained, item)
 			continue
 		}
-		expected, destinationErr := Destination(manager.HomeDir, item.Agent)
+		expected, destinationErr := Destination(manager.HomeDir, item.Agent, item.Name)
 		if destinationErr != nil || expected != item.Path || item.Scope != "user" {
 			return removed, ErrExternallyManaged
 		}
@@ -208,75 +242,123 @@ func (manager Manager) Uninstall(agents []string, all bool) ([]Installation, err
 		removed = append(removed, item)
 	}
 	registry.Installations = retained
+	if all {
+		registry.Targets = nil
+	} else {
+		var targets []Target
+		for _, target := range registry.Targets {
+			if _, remove := selected[target.Agent]; !remove {
+				targets = append(targets, target)
+			}
+		}
+		registry.Targets = targets
+	}
 	if err := writeRegistry(manager.ConfigDir, registry); err != nil {
 		return removed, err
 	}
 	return removed, nil
 }
 
-func (manager Manager) latest(
-	ctx context.Context,
-	allowFallback bool,
-) (map[string][]byte, string, bool, error) {
-	if manager.PublicKey != "" && manager.BaseURL != "" {
-		files, version, err := manager.fetchLatest(ctx)
-		if err == nil {
-			return files, version, false, nil
-		}
-		if !allowFallback {
-			return nil, "", false, err
-		}
-	}
-	files, err := kadoskill.Bundle()
+func (manager Manager) desiredCatalog(ctx context.Context, allowFallback bool) (Catalog, map[string]EmbeddedRelease, error) {
+	embeddedCatalog, embedded, err := EmbeddedCatalog()
 	if err != nil {
-		return nil, "", true, err
+		return Catalog{}, nil, err
 	}
-	version := kadoskill.Version()
-	if version == "" {
-		return nil, "", true, ErrInvalidRelease
+	if manager.PublicKey == "" || manager.BaseURL == "" {
+		return embeddedCatalog, embedded, nil
 	}
-	return files, version, true, nil
-}
-
-func (manager Manager) fetchLatest(
-	ctx context.Context,
-) (map[string][]byte, string, error) {
-	base := strings.TrimSuffix(manager.BaseURL, "/")
-	metadataURL := base + "/install/skills/kado-search/latest/metadata.json"
+	catalogURL := strings.TrimSuffix(manager.BaseURL, "/") + "/install/skills/latest/catalog.json"
 	fetcher := manager.Fetcher
 	if fetcher == nil {
 		fetcher = releaseclient.HTTPFetcher{}
 	}
-	encoded, err := fetcher.Fetch(ctx, metadataURL, MaxMetadataSize)
+	encoded, err := fetcher.Fetch(ctx, catalogURL, MaxCatalogSize)
 	if err != nil {
-		return nil, "", err
+		if allowFallback {
+			return embeddedCatalog, embedded, nil
+		}
+		return Catalog{}, nil, err
 	}
-	signature, err := fetcher.Fetch(ctx, metadataURL+".sig", 64)
+	signature, err := fetcher.Fetch(ctx, catalogURL+".sig", ed25519SignatureSize)
 	if err != nil {
-		return nil, "", err
+		if allowFallback {
+			return embeddedCatalog, embedded, nil
+		}
+		return Catalog{}, nil, err
 	}
-	metadata, err := VerifyMetadata(encoded, signature, manager.PublicKey, metadataURL)
+	catalog, err := VerifyCatalog(encoded, signature, manager.PublicKey, catalogURL)
 	if err != nil {
-		return nil, "", ErrInvalidRelease
+		if allowFallback {
+			return embeddedCatalog, embedded, nil
+		}
+		return Catalog{}, nil, err
+	}
+	if catalog.Revision < embeddedCatalog.Revision {
+		return embeddedCatalog, embedded, nil
+	}
+	return catalog, embedded, nil
+}
+
+const ed25519SignatureSize = 64
+
+func (manager Manager) resolveRelease(ctx context.Context, name string, variant CatalogVariant, embedded map[string]EmbeddedRelease, allowFallback bool) (EmbeddedRelease, error) {
+	fallback, hasFallback := embedded[name+":"+variant.ID]
+	if !hasFallback {
+		fallback, hasFallback = embedded[name+":default"]
+	}
+	if manager.PublicKey == "" || variant.MetadataURL == "" {
+		if hasFallback {
+			return fallback, nil
+		}
+		return EmbeddedRelease{}, ErrInvalidRelease
+	}
+	fetcher := manager.Fetcher
+	if fetcher == nil {
+		fetcher = releaseclient.HTTPFetcher{}
+	}
+	encoded, err := fetcher.Fetch(ctx, variant.MetadataURL, MaxMetadataSize)
+	if err != nil {
+		if allowFallback && hasFallback {
+			return fallback, nil
+		}
+		return EmbeddedRelease{}, err
+	}
+	signature, err := fetcher.Fetch(ctx, variant.MetadataURL+".sig", ed25519SignatureSize)
+	if err != nil {
+		if allowFallback && hasFallback {
+			return fallback, nil
+		}
+		return EmbeddedRelease{}, err
+	}
+	metadata, err := VerifyMetadata(encoded, signature, manager.PublicKey, variant.MetadataURL, name, variant.ID)
+	if err != nil {
+		if allowFallback && hasFallback {
+			return fallback, nil
+		}
+		return EmbeddedRelease{}, err
 	}
 	if lessVersion(manager.CurrentVersion, metadata.MinimumCLIVersion) {
-		return nil, "", ErrUnsupportedCLI
+		return EmbeddedRelease{}, ErrUnsupportedCLI
 	}
 	archive, err := fetcher.Fetch(ctx, metadata.Archive.URL, MaxArchiveSize)
 	if err != nil || int64(len(archive)) != metadata.Archive.Size ||
 		releaseclient.Digest(archive) != metadata.Archive.SHA256 {
-		return nil, "", ErrInvalidRelease
+		if allowFallback && hasFallback {
+			return fallback, nil
+		}
+		return EmbeddedRelease{}, ErrInvalidRelease
 	}
-	files, err := ExtractArchive(archive)
+	files, err := ExtractArchive(archive, name)
 	if err != nil {
-		return nil, "", err
+		return EmbeddedRelease{}, err
 	}
-	return files, metadata.Version, nil
+	return EmbeddedRelease{Metadata: metadata, Files: files}, nil
 }
 
 func installFiles(
 	destination, agent, scope, version string,
 	files map[string][]byte,
+	variants ...string,
 ) (Installation, error) {
 	if !filepath.IsAbs(destination) {
 		return Installation{}, errors.New("skill destination is invalid")
@@ -296,7 +378,12 @@ func installFiles(
 			return Installation{}, ErrExternallyManaged
 		}
 		existing.Agent = receipt.Agent
+		existing.Name = receipt.Name
+		if existing.Name == "" {
+			existing.Name = filepath.Base(destination)
+		}
 		existing.Scope = receipt.Scope
+		existing.Variant = receipt.Variant
 		existing.Version = receipt.Version
 		existing.ContentSHA256 = receipt.ContentSHA256
 		if err := verifyManagedInstallation(existing); err != nil {
@@ -325,11 +412,15 @@ func installFiles(
 		}
 	}
 	item := Installation{
+		Name:          filepath.Base(destination),
 		Agent:         agent,
 		Scope:         scope,
 		Path:          destination,
 		Version:       version,
 		ContentSHA256: kadoskill.Digest(files),
+	}
+	if len(variants) > 0 {
+		item.Variant = variants[0]
 	}
 	if err := writeJSONAtomic(
 		filepath.Join(staging, receiptName),
@@ -383,6 +474,8 @@ func verifyManagedInstallation(item Installation) error {
 	}
 	receipt, err := readReceipt(item.Path)
 	if err != nil || receipt.Agent != item.Agent || receipt.Scope != item.Scope ||
+		(receipt.Name != "" && receipt.Name != item.Name) ||
+		(receipt.Variant != "" && receipt.Variant != item.Variant) ||
 		receipt.Version != item.Version ||
 		receipt.ContentSHA256 != item.ContentSHA256 {
 		return ErrExternallyManaged
@@ -424,22 +517,36 @@ func verifyManagedInstallation(item Installation) error {
 // Kado-owned installations into the registry. Existing registry entries remain
 // the trust anchor when disk metadata disagrees, while an unregistered receipt
 // is adopted only after its agent, destination, and content digest all verify.
-func (manager Manager) reconcileRegistry(value registry) (registry, map[string]string) {
+func (manager Manager) reconcileRegistry(value registry, catalog Catalog) (registry, map[string]string) {
 	failures := make(map[string]string)
 	registered := make(map[string]Installation, len(value.Installations))
 	for _, item := range value.Installations {
 		registered[item.Path] = item
 	}
 
-	destinations := KnownDestinations(manager.HomeDir)
+	nameSet := map[string]bool{}
+	for _, skill := range catalog.Skills {
+		nameSet[skill.Name] = true
+	}
+	for _, item := range value.Installations {
+		nameSet[item.Name] = true
+	}
+	names := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	destinations := KnownDestinations(manager.HomeDir, names...)
 	agents := make([]string, 0, len(destinations))
 	for agent := range destinations {
 		agents = append(agents, agent)
 	}
 	sort.Strings(agents)
 	seen := make(map[string]struct{}, len(destinations))
-	for _, agent := range agents {
-		destination := destinations[agent]
+	for _, key := range agents {
+		destination := destinations[key]
+		parts := strings.SplitN(key, ":", 2)
+		agent, name := parts[0], parts[1]
 		seen[destination] = struct{}{}
 		tracked, wasRegistered := registered[destination]
 		info, err := os.Lstat(destination)
@@ -455,11 +562,14 @@ func (manager Manager) reconcileRegistry(value registry) (registry, map[string]s
 		}
 		receipt, err := readReceipt(destination)
 		if err != nil || receipt.Agent != agent || receipt.Agent != canonicalSkillAgent(receipt.Agent) ||
+			(receipt.Name != "" && receipt.Name != name) ||
 			receipt.Scope != "user" {
 			failures[destination] = "externally_managed"
 			continue
 		}
 		discovered := Installation{
+			Name:          name,
+			Variant:       receipt.Variant,
 			Agent:         receipt.Agent,
 			Scope:         receipt.Scope,
 			Path:          destination,
@@ -488,6 +598,24 @@ func upsertInstallation(values []Installation, item Installation) []Installation
 	for index := range values {
 		if values[index].Path == item.Path {
 			values[index] = item
+			return values
+		}
+	}
+	return append(values, item)
+}
+
+func installationAt(values []Installation, path string) (Installation, bool) {
+	for _, item := range values {
+		if item.Path == path {
+			return item, true
+		}
+	}
+	return Installation{}, false
+}
+
+func upsertTarget(values []Target, item Target) []Target {
+	for _, value := range values {
+		if value == item {
 			return values
 		}
 	}

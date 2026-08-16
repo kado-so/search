@@ -65,6 +65,32 @@ func TestSkillReleaseIsSelfVerifying(t *testing.T) {
 	}
 }
 
+func TestEveryEmbeddedSkillHasSignedRemoteRelease(t *testing.T) {
+	t.Parallel()
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := makeSkillReleases("https://kado.so/install", private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.Releases) != 2 {
+		t.Fatalf("makeSkillReleases() emitted %d releases", len(set.Releases))
+	}
+	seen := map[string]bool{}
+	for _, release := range set.Releases {
+		files, err := skillclient.ExtractArchive(release.Archive, release.Name)
+		if err != nil || len(files["SKILL.md"]) == 0 {
+			t.Fatalf("%s/%s archive: %v", release.Name, release.Variant, err)
+		}
+		seen[release.Name+":"+release.Variant] = true
+	}
+	if !seen["kado:default"] || !seen["kado-search:default"] {
+		t.Fatalf("missing releases: %#v", seen)
+	}
+}
+
 func TestSkillReleaseIsIndependentOfCLIBuild(t *testing.T) {
 	t.Parallel()
 
