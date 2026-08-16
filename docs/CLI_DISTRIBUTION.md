@@ -13,7 +13,7 @@ from work required before the first production release.
 - The release is built with the exact Go toolchain in `go.mod`.
 - Direct installations are self-updating.
 - Package-manager installations remain managed by their package manager.
-- The Search skill is bundled with the CLI and tested as one compatible unit.
+- The complete active skill catalog is bundled with the CLI and tested as one compatible unit.
 - Windows direct update uses a helper handoff; it does not rename the running
   executable in-process.
 
@@ -74,7 +74,8 @@ An agent:
    operating-system-provided client;
 3. places the candidate in a private temporary directory;
 4. verifies the downloaded release;
-5. installs into a user-writable destination;
+5. installs into a user-writable destination, or invokes the signed updater
+   when that destination already contains the Kado executable;
 6. executes `kado skill install`;
 7. creates or reuses authentication and verifies it with `kado auth status`;
    and
@@ -92,27 +93,27 @@ choice:
 Install Kado Search from https://kado.so/install
 ```
 
-## Bundled skill design
+## Bundled skill catalog design
 
-The CLI embeds:
-
-- `skills/kado-search/SKILL.md`;
-- the skill's image assets;
-- a canonical skill version and content digest; and
-- installation adapters for supported agents.
+The CLI embeds a monotonically revisioned catalog, every active skill variant
+and its assets, canonical versions and content digests, and installation
+adapters for supported agents.
 
 The embedded copy is an offline fallback tested with the CLI. The authoritative
 copy is independently published as signed metadata plus a safe `tar.gz` at:
 
 ```text
-https://kado.so/install/skills/kado-search/latest/metadata.json
-https://kado.so/install/skills/kado-search/latest/metadata.json.sig
-https://kado.so/install/skills/kado-search/latest/kado-search.tar.gz
+https://kado.so/install/skills/latest/catalog.json
+https://kado.so/install/skills/latest/catalog.json.sig
+https://kado.so/install/skills/<name>/<variant>/<version>/metadata.json
+https://kado.so/install/skills/<name>/<variant>/<version>/metadata.json.sig
+https://kado.so/install/skills/<name>/<variant>/<version>/<name>.tar.gz
 ```
 
-The CLI selects only a skill compatible with its current version and extracts
-it with the Go standard library, without invoking `tar`, `gzip`, or another
-external tool.
+The signed catalog authenticates additions and retirements. Each variant also
+has independently signed metadata and a digest-verified archive. The CLI
+selects an exact agent variant before the default `*` variant and reconciles
+each skill independently.
 
 Kado writes a small ownership record next to each installed skill containing:
 
@@ -123,9 +124,13 @@ Kado writes a small ownership record next to each installed skill containing:
 - scope and destination; and
 - installation timestamp.
 
-Kado updates only a destination with a valid matching ownership record. A
-locally modified or externally managed skill causes a conflict report and is
-never overwritten silently.
+Kado scans every known product-specific destination plus the portable
+`~/.agents/skills/kado-search` destination. It reconciles an unregistered copy
+only when the receipt names the canonical agent and the SHA-256 digest of the
+actual relative paths and file bytes matches the receipt. For previously
+registered copies, the registry and receipt must also match exactly. A moved,
+deleted, locally modified, or externally managed skill causes a conflict report
+and is never overwritten silently.
 
 Normal CLI invocations schedule `kado skill update --background` when the
 six-hour, jittered check is due. The requested command continues immediately.

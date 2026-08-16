@@ -328,7 +328,7 @@ func runSkill(
 		if err != nil {
 			return err
 		}
-		options := skillclient.InstallOptions{CurrentAgent: detection.Agent}
+		options := skillclient.InstallOptions{CurrentAgent: detection.Agent, All: true}
 		for index := 1; index < len(args); index++ {
 			switch args[index] {
 			case "--all":
@@ -353,18 +353,15 @@ func runSkill(
 		for _, installed := range result.Installed {
 			_, _ = fmt.Fprintf(
 				stdout,
-				"installed kado-search %s for %s at %s\n",
+				"installed %s %s for %s at %s\n",
+				skillInstallationName(installed),
 				installed.Version,
 				installed.Agent,
 				installed.Path,
 			)
 		}
-		if !options.All && len(options.Agents) == 0 && len(result.OtherAgents) > 0 {
-			_, _ = fmt.Fprintf(
-				stdout,
-				"also detected %s; install for all detected agents? After approval, run `kado skill install --all`\n",
-				strings.Join(result.OtherAgents, ", "),
-			)
+		for path, code := range result.Failures {
+			_, _ = fmt.Fprintf(stdout, "could not install %s (%s)\n", path, code)
 		}
 		if result.UsedFallback {
 			_, _ = fmt.Fprintln(stdout, "installed the bundled offline skill fallback")
@@ -378,18 +375,22 @@ func runSkill(
 		if err != nil {
 			return skillDiagnostic(err)
 		}
-		if len(status.Installations) == 0 {
+		if len(status.Installations) == 0 && len(status.Failures) == 0 {
 			_, _ = fmt.Fprintln(stdout, "no Kado-managed skills are installed")
 			return nil
 		}
 		for _, installed := range status.Installations {
 			_, _ = fmt.Fprintf(
 				stdout,
-				"kado-search %s agent=%s path=%s\n",
+				"%s %s agent=%s path=%s\n",
+				skillInstallationName(installed),
 				installed.Version,
 				installed.Agent,
 				installed.Path,
 			)
+		}
+		for path, code := range status.Failures {
+			_, _ = fmt.Fprintf(stdout, "could not verify %s (%s)\n", path, code)
 		}
 		return nil
 	case "update":
@@ -431,10 +432,14 @@ func runSkill(
 		for _, updated := range result.Updated {
 			_, _ = fmt.Fprintf(
 				stdout,
-				"updated kado-search to %s for %s\n",
+				"updated %s to %s for %s\n",
+				skillInstallationName(updated),
 				updated.Version,
 				updated.Agent,
 			)
+		}
+		for _, removed := range result.Removed {
+			_, _ = fmt.Fprintf(stdout, "removed retired %s for %s\n", skillInstallationName(removed), removed.Agent)
 		}
 		if len(result.Updated) == 0 && len(result.Failures) == 0 {
 			_, _ = fmt.Fprintln(stdout, "Kado-managed skills are up to date")
@@ -472,12 +477,23 @@ func runSkill(
 			return skillDiagnostic(err)
 		}
 		for _, item := range removed {
-			_, _ = fmt.Fprintf(stdout, "removed kado-search for %s\n", item.Agent)
+			_, _ = fmt.Fprintf(stdout, "removed %s for %s\n", skillInstallationName(item), item.Agent)
 		}
 		return nil
 	default:
 		return usageError("usage: kado skill install|status|update|uninstall")
 	}
+}
+
+func skillInstallationName(item skillclient.Installation) string {
+	name := item.Name
+	if name == "" {
+		name = skillclient.SkillName
+	}
+	if item.Variant != "" && item.Variant != "default" {
+		return name + "@" + item.Variant
+	}
+	return name
 }
 
 func skillDiagnostic(cause error) error {

@@ -25,11 +25,11 @@ On Windows:
 
     powershell -NoProfile -Command "irm https://kado.so/install.ps1 | iex"
 
-The installers require no superuser privileges. They authenticate canonical
-metadata with the downloaded candidate, verify its archive and stamped release
-identity, install into a user-owned directory, configure the user PATH when
-needed, install the latest compatible signed Search skill, and create or reuse
-an authenticated Kado identity. Set
+The installers require no superuser privileges. They install the latest
+verified release or update an existing direct installation, configure the user
+PATH when needed, install every compatible signed Kado skill in every
+detected harness and the portable ~/.agents/skills location, and create or
+reuse an authenticated Kado identity. Set
 KADO_INSTALL_DIR to choose another user-owned executable directory or
 KADO_NO_MODIFY_PATH=1 to leave shell configuration unchanged.
 
@@ -91,39 +91,46 @@ temporary="$(mktemp -d "${TMPDIR:-/tmp}/kado-install.XXXXXX")"
 cleanup() { rm -rf "$temporary"; }
 trap cleanup EXIT HUP INT TERM
 
-metadata_url="$base_url/releases/stable/release-metadata.json"
-download "$metadata_url" "$temporary/release-metadata.json"
-download "$metadata_url.sig" "$temporary/release-metadata.json.sig"
-version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$temporary/release-metadata.json")"
-case "$version" in
-  ''|*[!0-9A-Za-z.+-]*) printf 'release metadata version is invalid\n' >&2; exit 1 ;;
-esac
-archive="kado_${version}_${target_os}_${target_arch}.tar.gz"
-download "$base_url/releases/$version/$archive" "$temporary/$archive"
-listing="$(tar -tzf "$temporary/$archive")"
-test "$listing" = "kado
+if test -e "$destination" || test -L "$destination"; then
+  test -f "$destination" && test ! -L "$destination" && test -x "$destination" || {
+    printf 'existing kado destination is not a regular executable\n' >&2
+    exit 1
+  }
+  if ! "$destination" update; then
+    printf 'kado is installed, but the update failed; run kado update to retry\n' >&2
+    exit 1
+  fi
+else
+  metadata_url="$base_url/releases/stable/release-metadata.json"
+  download "$metadata_url" "$temporary/release-metadata.json"
+  download "$metadata_url.sig" "$temporary/release-metadata.json.sig"
+  version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$temporary/release-metadata.json")"
+  case "$version" in
+    ''|*[!0-9A-Za-z.+-]*) printf 'release metadata version is invalid\n' >&2; exit 1 ;;
+  esac
+  archive="kado_${version}_${target_os}_${target_arch}.tar.gz"
+  download "$base_url/releases/$version/$archive" "$temporary/$archive"
+  listing="$(tar -tzf "$temporary/$archive")"
+  test "$listing" = "kado
 LICENSE
 INSTALL-CLI.md" || {
-  printf 'archive contains unexpected paths\n' >&2
-  exit 1
-}
-tar -xzf "$temporary/$archive" -C "$temporary"
-test -f "$temporary/kado" && test ! -L "$temporary/kado"
-test "$(executable_mode "$temporary/kado")" = "755"
-identity="$("$temporary/kado" version --json)"
-printf '%%s\n' "$identity" | grep -F "\"version\":\"${version}\"" >/dev/null
-printf '%%s\n' "$identity" | grep -F "\"target\":\"${target_os}/${target_arch}\"" >/dev/null
-"$temporary/kado" release verify --directory "$temporary" >/dev/null
+    printf 'archive contains unexpected paths\n' >&2
+    exit 1
+  }
+  tar -xzf "$temporary/$archive" -C "$temporary"
+  test -f "$temporary/kado" && test ! -L "$temporary/kado"
+  test "$(executable_mode "$temporary/kado")" = "755"
+  identity="$("$temporary/kado" version --json)"
+  printf '%%s\n' "$identity" | grep -F "\"version\":\"${version}\"" >/dev/null
+  printf '%%s\n' "$identity" | grep -F "\"target\":\"${target_os}/${target_arch}\"" >/dev/null
+  "$temporary/kado" release verify --directory "$temporary" >/dev/null
 
-mkdir -p "$install_dir"
-test ! -e "$destination" || {
-  printf 'kado is already installed; run kado update\n' >&2
-  exit 1
-}
-candidate="$(mktemp "$install_dir/.kado-candidate.XXXXXX")"
-cp "$temporary/kado" "$candidate"
-chmod 755 "$candidate"
-mv "$candidate" "$destination"
+  mkdir -p "$install_dir"
+  candidate="$(mktemp "$install_dir/.kado-candidate.XXXXXX")"
+  cp "$temporary/kado" "$candidate"
+  chmod 755 "$candidate"
+  mv "$candidate" "$destination"
+fi
 
 case ":$PATH:" in
   *":$install_dir:"*) ;;
@@ -150,18 +157,24 @@ case ":$PATH:" in
     ;;
 esac
 
+skills_ready=yes
 if ! "$destination" skill install; then
-  printf 'kado was installed; run kado skill install to finish skill setup\n' >&2
+  skills_ready=no
+  printf 'kado is installed, but skill setup failed; run kado skill install to retry\n' >&2
 fi
 if ! "$destination" auth create; then
-  printf 'kado was installed, but authentication setup failed; run kado auth create to retry\n' >&2
+  printf 'kado is installed, but authentication setup failed; run kado auth create to retry\n' >&2
   exit 1
 fi
 if ! "$destination" auth status; then
-  printf 'kado was installed and authentication was configured, but verification failed; run kado auth status to retry\n' >&2
+  printf 'kado is installed and authentication was configured, but verification failed; run kado auth status to retry\n' >&2
   exit 1
 fi
-printf 'installed kado %%s at %%s; authentication configured and verified\n' "$version" "$destination"
+if test "$skills_ready" = yes; then
+  printf 'kado is ready at %%s; skills synchronized and authentication verified\n' "$destination"
+else
+  printf 'kado is ready at %%s; authentication verified; skill setup requires retry\n' "$destination"
+fi
 `, source.InstallURL)
 }
 
@@ -215,30 +228,56 @@ $Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitect
 $Temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("kado-install-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $Temporary | Out-Null
 try {
-  $MetadataUrl = "$BaseUrl/releases/stable/release-metadata.json"
-  Invoke-WebRequest -UseBasicParsing -Uri $MetadataUrl -OutFile (Join-Path $Temporary "release-metadata.json")
-  Invoke-WebRequest -UseBasicParsing -Uri "$MetadataUrl.sig" -OutFile (Join-Path $Temporary "release-metadata.json.sig")
-  $Metadata = Get-Content -Raw -LiteralPath (Join-Path $Temporary "release-metadata.json") | ConvertFrom-Json
-  $Version = [string]$Metadata.version
-  if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') { throw "release metadata version is invalid" }
-  $Archive = "kado_${Version}_windows_${Arch}.zip"
-  Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/releases/$Version/$Archive" -OutFile (Join-Path $Temporary $Archive)
-  Expand-Archive -LiteralPath (Join-Path $Temporary $Archive) -DestinationPath $Temporary
-  $CandidateBinary = Join-Path $Temporary "kado.exe"
-  $Identity = & $CandidateBinary version --json | ConvertFrom-Json
-  if ($Identity.version -ne $Version -or $Identity.target -ne "windows/$Arch") {
-    throw "candidate executable identity is invalid"
-  }
-  & $CandidateBinary release verify --directory $Temporary | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "release bundle verification failed" }
-
   New-Item -ItemType Directory -Path $InstallDirectory -Force | Out-Null
   if (Test-Path -LiteralPath $Destination) {
-    throw "kado is already installed; run kado update"
+    $Existing = Get-Item -LiteralPath $Destination -Force
+    if ($Existing.PSIsContainer -or $Existing.LinkType) {
+      throw "existing Kado destination is not a regular executable"
+    }
+    $KnownHelpers = @{}
+    Get-ChildItem -LiteralPath $InstallDirectory -Filter ".kado-update-helper-*.exe" -ErrorAction SilentlyContinue |
+      ForEach-Object { $KnownHelpers[$_.FullName] = $true }
+    $UpdateOutput = @(& $Destination update)
+    $UpdateExitCode = $LASTEXITCODE
+    $UpdateOutput | Write-Output
+    if ($UpdateExitCode -ne 0) {
+      throw "Kado is installed, but the update failed; run 'kado update' to retry"
+    }
+    $UpdateFinished = $false
+    for ($Attempt = 0; $Attempt -lt 300; $Attempt++) {
+      $PendingHelpers = @(Get-ChildItem -LiteralPath $InstallDirectory -Filter ".kado-update-helper-*.exe" -ErrorAction SilentlyContinue |
+        Where-Object { -not $KnownHelpers.ContainsKey($_.FullName) })
+      if ($PendingHelpers.Count -eq 0) {
+        $UpdateFinished = $true
+        break
+      }
+      Start-Sleep -Milliseconds 200
+    }
+    if (-not $UpdateFinished) {
+      throw "Kado update did not finish; run 'kado update' to retry"
+    }
+  } else {
+    $MetadataUrl = "$BaseUrl/releases/stable/release-metadata.json"
+    Invoke-WebRequest -UseBasicParsing -Uri $MetadataUrl -OutFile (Join-Path $Temporary "release-metadata.json")
+    Invoke-WebRequest -UseBasicParsing -Uri "$MetadataUrl.sig" -OutFile (Join-Path $Temporary "release-metadata.json.sig")
+    $Metadata = Get-Content -Raw -LiteralPath (Join-Path $Temporary "release-metadata.json") | ConvertFrom-Json
+    $Version = [string]$Metadata.version
+    if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') { throw "release metadata version is invalid" }
+    $Archive = "kado_${Version}_windows_${Arch}.zip"
+    Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/releases/$Version/$Archive" -OutFile (Join-Path $Temporary $Archive)
+    Expand-Archive -LiteralPath (Join-Path $Temporary $Archive) -DestinationPath $Temporary
+    $CandidateBinary = Join-Path $Temporary "kado.exe"
+    $Identity = & $CandidateBinary version --json | ConvertFrom-Json
+    if ($Identity.version -ne $Version -or $Identity.target -ne "windows/$Arch") {
+      throw "candidate executable identity is invalid"
+    }
+    & $CandidateBinary release verify --directory $Temporary | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "release bundle verification failed" }
+
+    $InstallCandidate = Join-Path $InstallDirectory (".kado-candidate-" + [guid]::NewGuid().ToString("N") + ".exe")
+    Copy-Item -LiteralPath $CandidateBinary -Destination $InstallCandidate
+    Move-Item -LiteralPath $InstallCandidate -Destination $Destination
   }
-  $InstallCandidate = Join-Path $InstallDirectory (".kado-candidate-" + [guid]::NewGuid().ToString("N") + ".exe")
-  Copy-Item -LiteralPath $CandidateBinary -Destination $InstallCandidate
-  Move-Item -LiteralPath $InstallCandidate -Destination $Destination
 
   $SkipPath = $NoModifyPath -or $env:KADO_NO_MODIFY_PATH -eq "1"
   if (-not $SkipPath) {
@@ -250,18 +289,23 @@ try {
     }
   }
   & $Destination skill install
-  if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Kado was installed; run 'kado skill install' to finish skill setup"
+  $SkillsReady = $LASTEXITCODE -eq 0
+  if (-not $SkillsReady) {
+    Write-Warning "Kado is installed, but skill setup failed; run 'kado skill install' to retry"
   }
   & $Destination auth create
   if ($LASTEXITCODE -ne 0) {
-    throw "Kado was installed, but authentication setup failed; run 'kado auth create' to retry"
+    throw "Kado is installed, but authentication setup failed; run 'kado auth create' to retry"
   }
   & $Destination auth status
   if ($LASTEXITCODE -ne 0) {
-    throw "Kado was installed and authentication was configured, but verification failed; run 'kado auth status' to retry"
+    throw "Kado is installed and authentication was configured, but verification failed; run 'kado auth status' to retry"
   }
-  Write-Output "installed kado $Version at $Destination; authentication configured and verified"
+  if ($SkillsReady) {
+    Write-Output "Kado is ready at $Destination; skills synchronized and authentication verified"
+  } else {
+    Write-Output "Kado is ready at $Destination; authentication verified; skill setup requires retry"
+  }
 } finally {
   Remove-Item -LiteralPath $Temporary -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -24,12 +24,17 @@ release descriptor an agent can use to:
 2. download the matching versioned Kado release from `kado.so`;
 3. verify the signed release metadata, archive checksum, and executable
    identity;
-4. install the executable in a user-writable directory;
-5. run `kado skill install` to install the latest compatible signed Search
-   skill, with the bundled copy as an offline fallback;
+4. install the executable in a user-writable directory, or run its signed
+   updater when that destination already contains Kado;
+5. run `kado skill install` to install the general Kado CLI skill and the latest
+   compatible signed Search skill, with bundled copies as an offline fallback;
 6. run idempotent `kado auth create` to create an identity or reuse an active
    existing credential; and
 7. run `kado auth status` to verify the configured identity.
+
+Rerunning the installer is also the repair path: after a successful update (or
+an already-current result), it synchronizes skills in every detected harness
+and `~/.agents/skills/`, then recreates or reuses and verifies authentication.
 
 The agent must not need a language runtime or third-party package manager.
 Initial bootstrap uses operating-system facilities or the agent's own HTTPS
@@ -45,7 +50,7 @@ The installation flow must explain how to add that directory to `PATH` when it
 is not already present. It must remain non-interactive when the agent supplies
 explicit destination and confirmation options.
 
-## Bundled skill
+## Bundled skills
 
 Each Kado CLI release embeds an offline `kado-search` fallback and prefers the
 latest compatible signed skill published by `kado.so`. The commands are:
@@ -57,10 +62,23 @@ kado skill update
 kado skill uninstall
 ```
 
-`install` detects the calling agent by default and supports an explicit
-`--agent` override. Kado records which local skill installations it owns.
-`update` may update only those Kado-managed copies; it must not overwrite a copy
-installed by another skill or plugin manager.
+`install` defaults to `--all`: it installs both `kado` and `kado-search` for the calling agent, every locally
+detected supported harness, and the portable `~/.agents/skills/` location. An
+explicit `--agent` adds a requested identity. Product-specific user locations
+are used for Codex, Claude Code, Cursor, Gemini CLI, Antigravity, GitHub
+Copilot, OpenCode, Goose, Aider, and Amp. Detected skill-capable identities
+without a product-specific directory use `~/.agents/skills/`.
+
+Gemini CLI and Antigravity have distinct user locations. Selecting either one
+installs both `~/.gemini/skills/kado-search` and
+`~/.gemini/config/skills/kado-search`.
+
+Kado records which local skill installations it owns. `status`, `update`, and
+`uninstall` also scan every known destination, verify its ownership receipt
+against its canonical agent and path, hash the actual paths and file contents,
+and reconcile valid newly discovered Kado installations into the registry.
+Registry, receipt, or filesystem drift is reported and is never overwritten.
+The same home-relative layout is used on Windows, macOS, and Linux.
 
 A successful direct CLI update automatically syncs Kado-managed skill copies.
 If a skill update fails, the new CLI remains installed and reports the repair

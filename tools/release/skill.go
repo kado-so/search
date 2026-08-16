@@ -5,61 +5,90 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/ed25519"
-	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kado-so/search/internal/releaseclient"
 	"github.com/kado-so/search/internal/skillclient"
-	kadoskill "github.com/kado-so/search/skills/kado-search"
 )
+
+type builtSkillRelease struct {
+	Name, Variant, Version       string
+	Archive, Metadata, Signature []byte
+}
+
+type builtSkillCatalog struct {
+	Catalog, Signature []byte
+	Releases           []builtSkillRelease
+}
+
+func makeSkillReleases(baseURL string, private ed25519.PrivateKey) (builtSkillCatalog, error) {
+	var output builtSkillCatalog
+	catalog, embedded, err := skillclient.EmbeddedCatalog()
+	if err != nil {
+		return builtSkillCatalog{}, err
+	}
+	for skillIndex := range catalog.Skills {
+		skill := &catalog.Skills[skillIndex]
+		for variantIndex := range skill.Variants {
+			variant := &skill.Variants[variantIndex]
+			bundle, ok := embedded[skill.Name+":"+variant.ID]
+			if !ok {
+				return builtSkillCatalog{}, fmt.Errorf("embedded skill %s/%s is unavailable", skill.Name, variant.ID)
+			}
+			archive, err := makeSkillArchive(bundle.Files, skill.Name)
+			if err != nil {
+				return builtSkillCatalog{}, err
+			}
+			metadataURL := fmt.Sprintf("%s/skills/%s/%s/%s/metadata.json", baseURL, skill.Name, variant.ID, bundle.Metadata.Version)
+			bundle.Metadata.Archive = skillclient.Archive{URL: strings.TrimSuffix(metadataURL, "/metadata.json") + "/" + skill.Name + ".tar.gz", Size: int64(len(archive)), SHA256: releaseclient.Digest(archive)}
+			metadata, err := skillclient.CanonicalMetadata(bundle.Metadata)
+			if err != nil {
+				return builtSkillCatalog{}, err
+			}
+			signature := ed25519.Sign(private, metadata)
+			if _, err := skillclient.VerifyMetadata(metadata, signature, releaseclient.PublicKeyText(private.Public().(ed25519.PublicKey)), metadataURL, skill.Name, variant.ID); err != nil {
+				return builtSkillCatalog{}, fmt.Errorf("skill metadata self-check failed: %w", err)
+			}
+			variant.MetadataURL = metadataURL
+			output.Releases = append(output.Releases, builtSkillRelease{Name: skill.Name, Variant: variant.ID, Version: bundle.Metadata.Version, Archive: archive, Metadata: metadata, Signature: signature})
+		}
+	}
+	catalogBytes, err := skillclient.CanonicalCatalog(catalog)
+	if err != nil {
+		return builtSkillCatalog{}, err
+	}
+	catalogSignature := ed25519.Sign(private, catalogBytes)
+	if _, err := skillclient.VerifyCatalog(catalogBytes, catalogSignature, releaseclient.PublicKeyText(private.Public().(ed25519.PublicKey)), baseURL+"/skills/latest/catalog.json"); err != nil {
+		return builtSkillCatalog{}, fmt.Errorf("skill catalog self-check failed: %w", err)
+	}
+	output.Catalog, output.Signature = catalogBytes, catalogSignature
+	return output, nil
+}
 
 func makeSkillRelease(
 	baseURL string,
 	private ed25519.PrivateKey,
 ) (archive, metadata, signature []byte, err error) {
-	files, err := kadoskill.Bundle()
-	if err != nil {
-		return nil, nil, nil, errors.New("bundled skill is unavailable")
-	}
-	version := kadoskill.Version()
-	if version == "" {
-		return nil, nil, nil, errors.New("bundled skill version is invalid")
-	}
-	archive, err = makeSkillArchive(files)
+	set, err := makeSkillReleases(baseURL, private)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	descriptor := skillclient.Metadata{
-		SchemaVersion:     skillclient.SchemaVersion,
-		Name:              skillclient.SkillName,
-		Version:           version,
-		MinimumCLIVersion: kadoskill.MinimumCLIVersion,
-		Archive: skillclient.Archive{
-			URL:    baseURL + "/skills/kado-search/latest/kado-search.tar.gz",
-			Size:   int64(len(archive)),
-			SHA256: releaseclient.Digest(archive),
-		},
+	for _, release := range set.Releases {
+		if release.Name == skillclient.SkillName && release.Variant == "default" {
+			return release.Archive, release.Metadata, release.Signature, nil
+		}
 	}
-	metadata, err = skillclient.CanonicalMetadata(descriptor)
-	if err != nil {
-		return nil, nil, nil, errors.New("skill metadata could not be encoded")
-	}
-	signature = ed25519.Sign(private, metadata)
-	if _, err := skillclient.VerifyMetadata(
-		metadata,
-		signature,
-		releaseclient.PublicKeyText(private.Public().(ed25519.PublicKey)),
-		baseURL+"/skills/kado-search/latest/metadata.json",
-	); err != nil {
-		return nil, nil, nil, errors.New("skill metadata self-check failed")
-	}
-	return archive, metadata, signature, nil
+	return nil, nil, nil, fmt.Errorf("bundled search skill is unavailable")
 }
 
-func makeSkillArchive(
-	files map[string][]byte,
-) ([]byte, error) {
+func makeSkillArchive(files map[string][]byte, names ...string) ([]byte, error) {
+	skillName := skillclient.SkillName
+	if len(names) > 0 {
+		skillName = names[0]
+	}
 	// The skill is independently versioned from the CLI. Keep its archive
 	// bytes stable when an unchanged skill is included in later CLI releases.
 	archivedAt := time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC)
@@ -74,7 +103,7 @@ func makeSkillArchive(
 	for _, name := range sortedSkillNames(files) {
 		value := files[name]
 		header := &tar.Header{
-			Name:       "kado-search/" + name,
+			Name:       skillName + "/" + name,
 			Mode:       0o644,
 			Size:       int64(len(value)),
 			ModTime:    archivedAt,

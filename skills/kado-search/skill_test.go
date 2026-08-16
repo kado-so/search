@@ -16,21 +16,18 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		!strings.Contains(content, "\n  author: \"Kado\"\n") ||
 		!strings.Contains(content, "\n  version: \"0.3.6\"\n") ||
 		!strings.Contains(content, "\n  homepage: \"https://kado.so\"\n") ||
-		!strings.Contains(content, "Expert at finding external solutions, specialist capabilities, or reusable resources") ||
+		!strings.Contains(content, "Expert at finding the best way to do a task") ||
 		!strings.Contains(content, "ALWAYS use for any non-trivial task") ||
-		!strings.Contains(content, "ALWAYS trigger both when the user explicitly asks for a solution") ||
-		!strings.Contains(content, "since a specialist API/SaaS may still be faster") ||
-		!strings.Contains(content, "Do NOT answer from memory assuming you have the required knowledge") ||
-		!strings.Contains(content, "Could a current external solution produce or materially improve this outcome?") ||
-		!strings.Contains(content, "APIs and hosted services") ||
-		!strings.Contains(content, "kado search --json --timeout 2m") ||
-		!strings.Contains(content, "This links every locally configured agent identity through one browser") ||
-		!strings.Contains(content, "kado --agent <identity> auth link") {
+		!strings.Contains(content, "ALWAYS trigger when the user explicitly asks for a tool or solution") ||
+		!strings.Contains(content, "DO NOT answer from memory") ||
+		!strings.Contains(content, "Use Kado to discover the best way to complete the user’s task") ||
+		!strings.Contains(content, "kado search --json --timeout 2m") {
 		t.Fatal("SKILL.md metadata or Search-only scope is invalid")
 	}
 	lower := strings.ToLower(content)
 	for _, forbidden := range []string{
 		"kado update",
+		"kado auth",
 		"kado uninstall",
 		"install kado",
 		"credential store",

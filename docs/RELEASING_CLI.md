@@ -89,14 +89,16 @@ and package systems. They are intentionally outside the self-updater's signed
 metadata and runtime trust path.
 
 The generated `INSTALL-CLI.md`, `install.sh`, and `install.ps1` implement the
-agent-first bootstrap from canonical `kado.so` HTTPS endpoints. They select the
-host target, download stable signed metadata and the immutable versioned
-archive, run verification through the candidate, install into a user-owned
-directory, configure user PATH when needed, install the signed Search skill,
-and create or reuse and verify authentication. `kado update` verifies the
-signed archive descriptor, safely extracts the candidate, checks its stamped
-release identity, retains the existing executable as a rollback file, and only
-then performs the replacement.
+agent-first bootstrap from canonical `kado.so` HTTPS endpoints. For a new
+installation they select the host target, download stable signed metadata and
+the immutable versioned archive, run verification through the candidate, and
+install into a user-owned directory. When Kado already occupies the expected
+destination, they invoke its signed updater instead. Both paths configure user
+PATH when needed, reconcile the signed skill catalog across detected
+harnesses and `~/.agents/skills`, and create or reuse and verify authentication.
+`kado update` verifies the signed archive descriptor, safely extracts the
+candidate, checks its stamped release identity, retains the existing executable
+as a rollback file, and only then performs the replacement.
 
 ## Runtime update and removal policy
 
@@ -145,10 +147,10 @@ must copy those exact release assets to `kado.so` using this mapping:
 | `install.ps1` | `/install.ps1` |
 | `release-metadata.json` | `/install/releases/stable/release-metadata.json` |
 | `release-metadata.json.sig` | `/install/releases/stable/release-metadata.json.sig` |
-| `kado-search.tar.gz` | `/install/skills/kado-search/<skill-version>/kado-search.tar.gz` and `/install/skills/kado-search/latest/kado-search.tar.gz` |
-| `skill-metadata.json` | `/install/skills/kado-search/latest/metadata.json` |
-| `skill-metadata.json.sig` | `/install/skills/kado-search/latest/metadata.json.sig` |
+| skill archives | `/install/skills/<name>/<variant>/<version>/<name>.tar.gz` |
+| skill metadata and signature | `/install/skills/<name>/<variant>/<version>/metadata.json[.sig]` |
+| catalog and signature | `/install/skills/latest/catalog.json[.sig]` |
 
 The publisher uploads immutable CLI and skill objects first, verifies their
-public bytes, copies the latest skill archive, publishes signed skill metadata,
+public bytes, publishes every signed skill variant,
 and promotes stable CLI metadata last.

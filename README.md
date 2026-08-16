@@ -153,17 +153,21 @@ verification, rollback, and publication details.
 
 ## Skill
 
-`skills/kado-search/SKILL.md` contains the offline Search guidance bundled into
-release builds. `kado skill install` prefers the latest compatible signed skill
+`skills/kado/SKILL.md` contains general CLI and account guidance, while
+`skills/kado-search/SKILL.md` contains focused Search guidance. Both are bundled
+into release builds. `kado skill install` installs both skills and prefers the
+latest compatible signed skill catalog
 from `kado.so` and falls back to that embedded copy without requiring npm, a
-plugin marketplace, or another package manager. Kado tracks and asynchronously
-updates only the skill copies it owns.
+plugin marketplace, or another package manager. Installation defaults to all
+detected harnesses and the portable `~/.agents/skills` fallback. Kado scans
+known destinations, verifies receipts against actual content hashes, and
+asynchronously updates every verified copy it owns.
 
 ## Installation
 
 The primary installation flow is agent-first: an agent downloads the one
 platform-specific Kado release, verifies and installs it, then asks Kado to
-install its bundled skill. The canonical installation boundary is
+install its bundled skills. The canonical installation boundary is
 [kado.so/install](https://kado.so/install).
 
 See [installation documentation](docs/INSTALL.md) for the directly

@@ -17,6 +17,8 @@ const (
 )
 
 type Installation struct {
+	Name          string `json:"name,omitempty"`
+	Variant       string `json:"variant,omitempty"`
 	Agent         string `json:"agent"`
 	Scope         string `json:"scope"`
 	Path          string `json:"path"`
@@ -25,13 +27,22 @@ type Installation struct {
 }
 
 type registry struct {
-	Version       int            `json:"version"`
-	Installations []Installation `json:"installations"`
+	Version         int            `json:"version"`
+	CatalogRevision uint64         `json:"catalog_revision,omitempty"`
+	Targets         []Target       `json:"targets,omitempty"`
+	Installations   []Installation `json:"installations"`
+}
+
+type Target struct {
+	Agent string `json:"agent"`
+	Scope string `json:"scope"`
 }
 
 type receipt struct {
 	SchemaVersion int    `json:"schema_version"`
 	Owner         string `json:"owner"`
+	Name          string `json:"name,omitempty"`
+	Variant       string `json:"variant,omitempty"`
 	Agent         string `json:"agent"`
 	Scope         string `json:"scope"`
 	Version       string `json:"version"`
@@ -61,8 +72,29 @@ func readRegistry(configDir string) (registry, error) {
 		return registry{}, errors.New("skill installation registry is invalid")
 	}
 	for index, item := range value.Installations {
+		if item.Name == "" {
+			value.Installations[index].Name = filepath.Base(item.Path)
+		}
 		if item.Agent == "" || item.Path == "" || !filepath.IsAbs(item.Path) ||
 			index > 0 && value.Installations[index-1].Path >= item.Path {
+			return registry{}, errors.New("skill installation registry is invalid")
+		}
+	}
+	if len(value.Targets) == 0 {
+		seen := map[string]bool{}
+		for _, item := range value.Installations {
+			key := item.Agent + ":" + item.Scope
+			if !seen[key] {
+				value.Targets = append(value.Targets, Target{Agent: item.Agent, Scope: item.Scope})
+				seen[key] = true
+			}
+		}
+	}
+	sort.Slice(value.Targets, func(left, right int) bool {
+		return value.Targets[left].Agent+":"+value.Targets[left].Scope < value.Targets[right].Agent+":"+value.Targets[right].Scope
+	})
+	for index, target := range value.Targets {
+		if !validAgentSelector(target.Agent) || target.Agent == "*" || target.Scope != "user" || index > 0 && (value.Targets[index-1].Agent+":"+value.Targets[index-1].Scope >= target.Agent+":"+target.Scope) {
 			return registry{}, errors.New("skill installation registry is invalid")
 		}
 	}
@@ -76,6 +108,9 @@ func writeRegistry(configDir string, value registry) error {
 	sort.Slice(value.Installations, func(left, right int) bool {
 		return value.Installations[left].Path < value.Installations[right].Path
 	})
+	sort.Slice(value.Targets, func(left, right int) bool {
+		return value.Targets[left].Agent+":"+value.Targets[left].Scope < value.Targets[right].Agent+":"+value.Targets[right].Scope
+	})
 	return writeJSONAtomic(filepath.Join(configDir, registryName), value, 0o600)
 }
 
@@ -83,6 +118,8 @@ func newReceipt(item Installation) receipt {
 	return receipt{
 		SchemaVersion: registryVersion,
 		Owner:         "kado",
+		Name:          item.Name,
+		Variant:       item.Variant,
 		Agent:         item.Agent,
 		Scope:         item.Scope,
 		Version:       item.Version,

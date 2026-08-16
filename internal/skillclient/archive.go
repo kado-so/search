@@ -17,7 +17,7 @@ const (
 	maxSkillFile  = 4 << 20
 )
 
-func ExtractArchive(encoded []byte) (map[string][]byte, error) {
+func ExtractArchive(encoded []byte, expected ...string) (map[string][]byte, error) {
 	if len(encoded) == 0 || len(encoded) > MaxArchiveSize {
 		return nil, errors.New("skill archive is invalid")
 	}
@@ -36,7 +36,11 @@ func ExtractArchive(encoded []byte) (map[string][]byte, error) {
 		if err != nil || len(files) >= maxSkillFiles {
 			return nil, errors.New("skill archive is invalid")
 		}
-		name, ok := safeSkillPath(header.Name)
+		skillName := SkillName
+		if len(expected) > 0 {
+			skillName = expected[0]
+		}
+		name, ok := safeSkillPath(skillName, header.Name)
 		if !ok || header.Typeflag != tar.TypeReg ||
 			fs.FileMode(header.Mode).Perm() != 0o644 ||
 			header.Size <= 0 || header.Size > maxSkillFile {
@@ -57,8 +61,8 @@ func ExtractArchive(encoded []byte) (map[string][]byte, error) {
 	return files, nil
 }
 
-func safeSkillPath(value string) (string, bool) {
-	const prefix = SkillName + "/"
+func safeSkillPath(skillName, value string) (string, bool) {
+	prefix := skillName + "/"
 	if !strings.HasPrefix(value, prefix) || strings.Contains(value, "\\") {
 		return "", false
 	}
