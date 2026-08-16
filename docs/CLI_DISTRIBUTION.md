@@ -132,14 +132,15 @@ registered copies, the registry and receipt must also match exactly. A moved,
 deleted, locally modified, or externally managed skill causes a conflict report
 and is never overwritten silently.
 
-Normal CLI invocations schedule `kado skill update --background` when the
-six-hour, jittered check is due. The requested command continues immediately.
-The worker refreshes every unmodified Kado-managed destination and caches signed
-CLI release availability for a rate-limited notice on a later invocation.
+After a normal CLI invocation finishes, it schedules one process-wide
+`kado skill update --background` worker when the six-hour, jittered check is
+due. The worker refreshes every unmodified Kado-managed skill destination and,
+for a direct launcher installation, downloads, verifies, and activates a newer
+CLI payload. Concurrent invocations atomically reserve one worker slot.
 
 `kado update` and skill maintenance have separate transactions:
 
-1. install and verify the new CLI;
+1. install and verify the new immutable CLI payload;
 2. schedule a compatible signed skill refresh;
 3. report any skill conflicts or failures; and
 4. retain the successfully verified CLI even if a skill needs manual repair.
@@ -156,17 +157,26 @@ Every installed executable needs an installation channel:
 - `rpm`
 - `container`
 
-Direct installers write a protected adjacent receipt. Packages either stamp the
-channel at build time or install their own receipt. Missing or invalid receipts
-default to externally managed rather than allowing an unsafe overwrite.
+Direct installers write a protected adjacent receipt. Packages stamp the
+channel at build time or install their own non-direct receipt. A missing receipt
+is accepted only by a canonical direct release as a legacy migration case; an
+invalid or explicitly non-direct receipt disables launcher management.
 
-For a direct receipt, `kado update` uses signed in-place update. Otherwise it
-prints the package manager's upgrade command.
+For a direct installation, `kado update` installs a signed immutable payload
+and appends an activation record. Automatic maintenance uses the same path.
 
-## Windows direct update
+## Launcher and Windows migration
 
-Windows commonly locks a running executable. The update transaction therefore
-needs a small helper mode implemented by the same signed Kado binary:
+The executable on `PATH` is a stable launcher. The same signed release binary
+acts as both the launcher and payload, which keeps release protocol v1 and its
+archive layout compatible with already-released clients. Payloads live under
+`kado[.exe].d/versions/<version>/`; immutable activation records select the
+newest complete payload. The launcher selects once at process start. Unix uses
+`exec`, while Windows waits as the payload's console parent and returns its exit
+status.
+
+The first explicit update from the legacy Windows layout still needs the
+existing helper because Windows locks the legacy running executable:
 
 1. the running CLI downloads and verifies the candidate;
 2. it writes the candidate next to the installed executable;
@@ -175,14 +185,17 @@ needs a small helper mode implemented by the same signed Kado binary:
 4. the original process exits;
 5. the helper waits for that exact parent process to terminate;
 6. it revalidates the target and candidate;
-7. it moves the old executable to a rollback path and the candidate into place;
-8. it starts `kado version --json` from the installed path;
+7. it moves the old executable to a rollback path and the launcher-capable
+   candidate into place;
+8. it starts `kado version --json`, which bootstraps and selects the immutable
+   payload;
 9. it restores the rollback on failed verification; and
 10. it removes the helper and rollback on success.
 
-The helper protocol is private, bounded, lock-protected, and rejects arbitrary
-source or destination paths. Native Windows tests must cover success, a locked
-target, concurrent updates, tampering, rollback, and interrupted cleanup.
+After migration, Windows updates never replace the stable launcher and do not
+need the helper. OS-backed update locks disappear after a crash. Old payload
+cleanup is best effort because an overlapping Windows process may still hold
+one open.
 
 The helper is implemented in the release client and cross-compiles for both
 Windows targets. The release workflow must pass its native locked-file and

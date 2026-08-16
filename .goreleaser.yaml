@@ -30,6 +30,7 @@ builds:
       - -X github.com/kado-so/search/internal/buildinfo.ReleasePublicKey={{ .Env.KADO_RELEASE_PUBLIC_KEY }}
       - -X github.com/kado-so/search/internal/buildinfo.ReleaseKeyID={{ .Env.KADO_RELEASE_KEY_ID }}
       - -X github.com/kado-so/search/internal/buildinfo.ReleaseMetadataURL={{ .Env.KADO_RELEASE_METADATA_URL }}
+      - -X github.com/kado-so/search/internal/buildinfo.InstallChannel=direct
 
 archives:
   - formats: [binary]

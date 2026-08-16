@@ -73,9 +73,10 @@ local install/uninstall scripts are standalone operator artifacts.
 
 Direct installation from `kado.so` is the primary path and must be executable
 by an agent without a package manager or language runtime. Package-manager
-installations remain owned and updated by their package manager. Windows direct
-updates hand replacement to a verified helper process after the running CLI
-exits.
+installations remain owned and updated by their package manager. Direct
+installations use a stable launcher and immutable version payloads on every
+platform. Only the one-time migration from a legacy Windows installation hands
+replacement to a verified helper after the running CLI exits.
 
 ## Invariants
 
@@ -84,6 +85,6 @@ exits.
   missing credentials follow its single autonomous create-and-login path.
 - Private keys and tokens never enter model context or ordinary logs.
 - JSON-LD and schema validation remain local and deterministic.
-- CLI updates verify signed archive metadata and the replacement executable
-  identity before installation.
+- CLI updates verify signed archive metadata and candidate executable identity
+  before publishing an immutable next-start activation.
 - Kado never overwrites a skill or executable owned by another installer.

@@ -27,6 +27,62 @@ type State struct {
 	LastNoticeAt        string `json:"last_notice_at,omitempty"`
 }
 
+// Reservation is one atomically claimed maintenance decision.
+type Reservation struct {
+	NoticeVersion string
+	Spawn         bool
+}
+
+// Reserve atomically emits a due notice and claims the next worker slot.
+func Reserve(configDir string, now time.Time) (Reservation, error) {
+	var reservation Reservation
+	err := withStateLock(configDir, func() error {
+		state, err := Read(configDir)
+		if err != nil {
+			return err
+		}
+		changed := false
+		if NoticeDue(state, now) {
+			reservation.NoticeVersion = state.LatestCLIVersion
+			state.LastNoticeAt = now.UTC().Format(time.RFC3339)
+			changed = true
+		}
+		if Due(state, now) {
+			state.NextCheckAt = now.Add(10 * time.Minute).UTC().Format(time.RFC3339)
+			reservation.Spawn = true
+			changed = true
+		}
+		if changed {
+			return Write(configDir, state)
+		}
+		return nil
+	})
+	return reservation, err
+}
+
+// RecordComplete atomically merges a completed worker result with any notice
+// state written by a concurrent foreground invocation.
+func RecordComplete(
+	configDir string,
+	now time.Time,
+	installed, latest string,
+	updateAvailable bool,
+) error {
+	return withStateLock(configDir, func() error {
+		state, _ := Read(configDir)
+		return Write(configDir, Complete(state, now, installed, latest, updateAvailable))
+	})
+}
+
+// DelayUntil records a short reservation before a caller starts a worker.
+func DelayUntil(configDir string, next time.Time) error {
+	return withStateLock(configDir, func() error {
+		state, _ := Read(configDir)
+		state.NextCheckAt = next.UTC().Format(time.RFC3339)
+		return Write(configDir, state)
+	})
+}
+
 func Read(configDir string) (State, error) {
 	file, err := os.Open(filepath.Join(configDir, stateFileName))
 	if errors.Is(err, os.ErrNotExist) {

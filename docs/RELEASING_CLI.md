@@ -97,8 +97,10 @@ destination, they invoke its signed updater instead. Both paths configure user
 PATH when needed, reconcile the signed skill catalog across detected
 harnesses and `~/.agents/skills`, and create or reuse and verify authentication.
 `kado update` verifies the signed archive descriptor, safely extracts the
-candidate, checks its stamped release identity, retains the existing executable
-as a rollback file, and only then performs the replacement.
+candidate, and checks its stamped release identity. An existing legacy direct
+installation uses that explicit update to install a launcher-capable release.
+Thereafter, the stable executable activates candidates from immutable version
+directories without replacing a running file.
 
 ## Runtime update and removal policy
 
@@ -106,12 +108,12 @@ as a rollback file, and only then performs the replacement.
 signature, and the selected platform archive. It rejects redirects, oversized
 responses, unsupported targets, bad signatures, archive digest mismatches,
 unsafe archive paths/types/modes, and mismatched candidate identity before
-replacement. Downgrades fail unless `--allow-downgrade` is explicit.
-`--dry-run` performs all verification without changing files. A per-executable
-exclusive update lock prevents concurrent replace/uninstall transactions. A
-pre-commit failure restores the installed binary and verified candidate. A
-post-commit rollback-cleanup or directory-sync failure retains the verified new
-executable; no failure path installs an empty or corrupt file.
+activation. Downgrades fail unless `--allow-downgrade` is explicit. `--dry-run`
+performs all verification without changing files. One OS-backed lock serializes
+the complete download and activation transaction and is released by the OS if
+the updater crashes. A candidate is finalized in a new version directory before
+an immutable activation record is published. Previous activation records remain
+valid, so an interrupted update cannot remove the last launchable version.
 
 `kado uninstall --yes` removes only the executable and preserves configuration
 and autonomous-agent credentials. `--purge-credentials` first performs the

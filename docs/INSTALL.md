@@ -41,6 +41,13 @@ Initial bootstrap uses operating-system facilities or the agent's own HTTPS
 download capability. After bootstrap, the Kado executable owns verification,
 skill installation, and direct-install updates.
 
+Direct installations use a stable launcher beside a private
+`kado[.exe].d` directory of immutable payload versions. Update work starts only
+after a foreground command finishes. It never changes that command's selected
+binary; a completely verified activation is observed only by a later CLI
+start. Concurrent old and new invocations may finish normally. Existing direct
+installations enter this layout after one explicit `kado update`.
+
 The target user locations are:
 
 - macOS and Linux: `$HOME/.local/bin/kado`

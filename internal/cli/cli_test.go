@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/keystore"
 	"github.com/kado-so/search/internal/localstate"
+	"github.com/kado-so/search/internal/maintenance"
 	"github.com/kado-so/search/internal/releaseclient"
 	"github.com/kado-so/search/internal/searchclient"
 	"github.com/kado-so/search/internal/searchcontract/testfixture"
@@ -1115,6 +1117,37 @@ func TestSkillInstallDefaultsToAllDetectedAgents(t *testing.T) {
 	}
 }
 
+func TestBackgroundMaintenanceAutoUpdatesEvenWhenSkillRefreshFails(t *testing.T) {
+	t.Setenv("KADO_CONFIG_DIR", t.TempDir())
+	skills := &fakeSkillCommands{updateErr: errors.New("skill conflict")}
+	releases := &fakeAutoReleaseCommands{
+		fakeReleaseCommands: &fakeReleaseCommands{},
+		autoResult: releaseclient.Result{
+			FromVersion: "0.1.0",
+			ToVersion:   "0.2.0",
+			Changed:     true,
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runWithDependencies(
+		[]string{"skill", "update", "--background"},
+		&stdout,
+		&stderr,
+		buildinfo.Info{Version: "0.1.0"},
+		dependencies{
+			newSkill:   func(buildinfo.Info) (skillCommands, error) { return skills, nil },
+			newRelease: func(buildinfo.Info) (releaseCommands, error) { return releases, nil },
+		},
+	)
+	if exitCode != 0 || stdout.Len() != 0 || stderr.Len() != 0 || releases.autoCalls != 1 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q autoCalls=%d", exitCode, stdout.String(), stderr.String(), releases.autoCalls)
+	}
+	state, err := maintenance.Read(os.Getenv("KADO_CONFIG_DIR"))
+	if err != nil || state.InstalledCLIVersion != "0.2.0" || state.UpdateAvailable {
+		t.Fatalf("maintenance state=%#v error=%v", state, err)
+	}
+}
+
 func TestUpdateDowngradeFailureIsSafe(t *testing.T) {
 	t.Parallel()
 
@@ -1378,6 +1411,7 @@ type fakeReleaseCommands struct {
 type fakeSkillCommands struct {
 	installOptions skillclient.InstallOptions
 	installResult  skillclient.InstallResult
+	updateErr      error
 }
 
 func (commands *fakeSkillCommands) Install(
@@ -1388,8 +1422,8 @@ func (commands *fakeSkillCommands) Install(
 	return commands.installResult, nil
 }
 
-func (*fakeSkillCommands) Update(context.Context) (skillclient.UpdateResult, error) {
-	return skillclient.UpdateResult{}, nil
+func (commands *fakeSkillCommands) Update(context.Context) (skillclient.UpdateResult, error) {
+	return skillclient.UpdateResult{}, commands.updateErr
 }
 
 func (*fakeSkillCommands) Status() (skillclient.Status, error) {
@@ -1409,6 +1443,18 @@ func (releases *fakeReleaseCommands) Update(
 ) (releaseclient.Result, error) {
 	releases.options = options
 	return releases.result, releases.err
+}
+
+type fakeAutoReleaseCommands struct {
+	*fakeReleaseCommands
+	autoResult releaseclient.Result
+	autoErr    error
+	autoCalls  int
+}
+
+func (releases *fakeAutoReleaseCommands) AutoUpdate(context.Context) (releaseclient.Result, error) {
+	releases.autoCalls++
+	return releases.autoResult, releases.autoErr
 }
 
 func (releases *fakeReleaseCommands) Uninstall() error {

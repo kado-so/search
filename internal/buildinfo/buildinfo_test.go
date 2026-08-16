@@ -30,16 +30,19 @@ func TestCurrentUsesBuildVariables(t *testing.T) {
 	originalVersion, originalCommit, originalDate := Version, Commit, Date
 	originalTarget, originalKeyID := Target, ReleaseKeyID
 	originalPublicKey, originalMetadataURL := ReleasePublicKey, ReleaseMetadataURL
+	originalInstallChannel := InstallChannel
 	t.Cleanup(func() {
 		Version, Commit, Date = originalVersion, originalCommit, originalDate
 		Target, ReleaseKeyID = originalTarget, originalKeyID
 		ReleasePublicKey, ReleaseMetadataURL = originalPublicKey, originalMetadataURL
+		InstallChannel = originalInstallChannel
 	})
 
 	Version, Commit, Date = "v1.2.3", "abc123", "2026-07-23T00:00:00Z"
 	Target, ReleaseKeyID = "linux/amd64", "sha256:key"
 	ReleasePublicKey = "public"
 	ReleaseMetadataURL = "https://kado.so/install/releases/stable/release-metadata.json"
+	InstallChannel = "direct"
 
 	got := Current()
 	if got.Version != Version || got.Commit != Commit || got.Date != Date ||
@@ -47,6 +50,9 @@ func TestCurrentUsesBuildVariables(t *testing.T) {
 		got.ReleasePublicKey != ReleasePublicKey ||
 		got.ReleaseMetadataURL != ReleaseMetadataURL {
 		t.Fatalf("Current() = %#v", got)
+	}
+	if got.InstallChannel != "direct" {
+		t.Fatalf("Current().InstallChannel = %q", got.InstallChannel)
 	}
 }
 

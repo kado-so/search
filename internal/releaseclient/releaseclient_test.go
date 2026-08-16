@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kado-so/search/internal/launcher"
 )
 
 func TestCleanInstallUpdateDowngradeDryRunAndUninstall(t *testing.T) {
@@ -86,6 +88,42 @@ func TestCleanInstallUpdateDowngradeDryRunAndUninstall(t *testing.T) {
 		t.Fatalf("executable still exists: %v", err)
 	}
 	assertFileContent(t, credential, []byte("preserve"))
+}
+
+func TestManagedUpdateLeavesLauncherAndRunningVersionUntouched(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	launcherPath := filepath.Join(root, executableName(runtime.GOOS))
+	stable := []byte("stable-launcher")
+	if err := os.WriteFile(launcherPath, stable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := filepath.Join(root, "initial")
+	if err := os.WriteFile(initial, []byte("payload-0.1.0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := launcher.WithUpdateLock(launcherPath, func() error {
+		return launcher.InstallVersionLocked(launcherPath, "0.1.0", initial)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
+	result, err := fixture.manager(t).Update(context.Background(), Options{
+		TargetPath:     launcherPath,
+		LauncherPath:   launcherPath,
+		CurrentVersion: "0.1.0",
+	})
+	if err != nil || !result.Changed || result.Pending {
+		t.Fatalf("managed update result=%#v error=%v", result, err)
+	}
+	assertFileContent(t, launcherPath, stable)
+	payload, version, err := launcher.Active(launcherPath)
+	if err != nil || version != "0.2.0" {
+		t.Fatalf("active payload=%q version=%q error=%v", payload, version, err)
+	}
+	assertFileContent(t, payload, fixture.binary)
 }
 
 func TestUpdateRejectsTamperChecksumAndUnsupportedPlatform(t *testing.T) {
@@ -432,9 +470,11 @@ func TestUpdateLockPreventsConcurrentReplacement(t *testing.T) {
 	if err := os.WriteFile(candidate, []byte("new"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(target+".update.lock", []byte("other\n"), 0o600); err != nil {
+	release, err := acquireUpdateLock(target)
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	if err := (Manager{}).replace(candidate, target); err == nil {
 		t.Fatal("concurrent replacement unexpectedly succeeded")
 	}
