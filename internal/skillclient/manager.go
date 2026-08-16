@@ -182,7 +182,9 @@ func (manager Manager) sync(ctx context.Context, registry registry, allowFallbac
 		result.Removed = append(result.Removed, item)
 	}
 	registry.Installations = retained
-	if !staleCatalog { registry.CatalogRevision = catalog.Revision }
+	if !staleCatalog {
+		registry.CatalogRevision = catalog.Revision
+	}
 	if err := writeRegistry(manager.ConfigDir, registry); err != nil {
 		return result, err
 	}

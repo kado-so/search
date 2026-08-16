@@ -124,14 +124,26 @@ func TestInstallContinuesWhenOneSkillDestinationConflicts(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	conflict := filepath.Join(home, ".codex", "skills", "kado")
-	if err := os.MkdirAll(conflict, 0o755); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(conflict, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	manager := Manager{ConfigDir: filepath.Join(root, "config"), HomeDir: home, CurrentVersion: "dev"}
 	result, err := manager.Install(context.Background(), InstallOptions{Agents: []string{"codex"}})
-	if err != nil { t.Fatal(err) }
-	if result.Failures[conflict] != "externally_managed" { t.Fatalf("Install() failures = %#v", result.Failures) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Failures[conflict] != "externally_managed" {
+		t.Fatalf("Install() failures = %#v", result.Failures)
+	}
 	installedSearch := false
-	for _, item := range result.Installed { if item.Name == "kado-search" && item.Agent == "codex" { installedSearch = true } }
-	if !installedSearch { t.Fatalf("search skill was blocked by unrelated conflict: %#v", result) }
+	for _, item := range result.Installed {
+		if item.Name == "kado-search" && item.Agent == "codex" {
+			installedSearch = true
+		}
+	}
+	if !installedSearch {
+		t.Fatalf("search skill was blocked by unrelated conflict: %#v", result)
+	}
 }
 
 func TestExtractArchiveRejectsTraversalAndSymlinks(t *testing.T) {
