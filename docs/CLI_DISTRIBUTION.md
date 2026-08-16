@@ -123,9 +123,13 @@ Kado writes a small ownership record next to each installed skill containing:
 - scope and destination; and
 - installation timestamp.
 
-Kado updates only a destination with a valid matching ownership record. A
-locally modified or externally managed skill causes a conflict report and is
-never overwritten silently.
+Kado scans every known product-specific destination plus the portable
+`~/.agents/skills/kado-search` destination. It reconciles an unregistered copy
+only when the receipt names the canonical agent and the SHA-256 digest of the
+actual relative paths and file bytes matches the receipt. For previously
+registered copies, the registry and receipt must also match exactly. A moved,
+deleted, locally modified, or externally managed skill causes a conflict report
+and is never overwritten silently.
 
 Normal CLI invocations schedule `kado skill update --background` when the
 six-hour, jittered check is due. The requested command continues immediately.

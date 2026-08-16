@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -52,7 +53,8 @@ type UpdateResult struct {
 }
 
 type Status struct {
-	Installations []Installation `json:"installations"`
+	Installations []Installation    `json:"installations"`
+	Failures      map[string]string `json:"failures,omitempty"`
 }
 
 func (manager Manager) Install(
@@ -64,17 +66,20 @@ func (manager Manager) Install(
 		return InstallResult{}, err
 	}
 	agents := append([]string(nil), options.Agents...)
-	if len(agents) == 0 {
-		if options.CurrentAgent == "" || options.CurrentAgent == "default" {
-			return InstallResult{}, ErrUnsupportedAgent
-		}
+	defaultAll := len(agents) == 0
+	if defaultAll && options.CurrentAgent != "" && options.CurrentAgent != "default" {
 		agents = append(agents, options.CurrentAgent)
 	}
+	agents = expandSkillAgents(agents)
 	others := DetectInstalledAgents(manager.HomeDir, options.CurrentAgent)
-	if options.All {
-		agents = append(agents, others...)
+	if options.All || defaultAll {
+		agents = append(agents, expandSkillAgents(others)...)
+		agents = append(agents, "agents")
 	}
-	agents = uniqueStrings(agents)
+	agents = canonicalSkillAgents(agents)
+	if len(agents) == 0 {
+		return InstallResult{}, ErrUnsupportedAgent
+	}
 	registry, err := readRegistry(manager.ConfigDir)
 	if err != nil {
 		return InstallResult{}, err
@@ -107,22 +112,26 @@ func (manager Manager) Update(ctx context.Context) (UpdateResult, error) {
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	if len(registry.Installations) == 0 {
-		return UpdateResult{Failures: map[string]string{}}, nil
-	}
+	registry, discoveryFailures := manager.reconcileRegistry(registry)
 	files, version, _, err := manager.latest(ctx, manager.PublicKey == "")
 	if err != nil {
 		return UpdateResult{}, err
 	}
 	result := UpdateResult{
 		Version:  version,
-		Failures: make(map[string]string),
+		Failures: discoveryFailures,
+	}
+	if len(registry.Installations) == 0 {
+		return result, writeRegistry(manager.ConfigDir, registry)
 	}
 	desiredDigest := kadoskill.Digest(files)
 	for index, item := range registry.Installations {
 		expected, destinationErr := Destination(manager.HomeDir, item.Agent)
 		if destinationErr != nil || expected != item.Path || item.Scope != "user" {
 			result.Failures[item.Path] = "invalid_destination"
+			continue
+		}
+		if _, unsafe := result.Failures[item.Path]; unsafe {
 			continue
 		}
 		if item.Version == version && item.ContentSHA256 == desiredDigest {
@@ -156,7 +165,17 @@ func (manager Manager) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	return Status{Installations: registry.Installations}, nil
+	registry, failures := manager.reconcileRegistry(registry)
+	if err := writeRegistry(manager.ConfigDir, registry); err != nil {
+		return Status{}, err
+	}
+	verified := make([]Installation, 0, len(registry.Installations))
+	for _, item := range registry.Installations {
+		if _, failed := failures[item.Path]; !failed {
+			verified = append(verified, item)
+		}
+	}
+	return Status{Installations: verified, Failures: failures}, nil
 }
 
 func (manager Manager) Uninstall(agents []string, all bool) ([]Installation, error) {
@@ -164,8 +183,9 @@ func (manager Manager) Uninstall(agents []string, all bool) ([]Installation, err
 	if err != nil {
 		return nil, err
 	}
+	registry, _ = manager.reconcileRegistry(registry)
 	selected := make(map[string]struct{})
-	for _, agent := range agents {
+	for _, agent := range canonicalSkillAgents(expandSkillAgents(agents)) {
 		selected[agent] = struct{}{}
 	}
 	var removed, retained []Installation
@@ -400,6 +420,70 @@ func verifyManagedInstallation(item Installation) error {
 	return nil
 }
 
+// reconcileRegistry scans every supported destination and merges verified
+// Kado-owned installations into the registry. Existing registry entries remain
+// the trust anchor when disk metadata disagrees, while an unregistered receipt
+// is adopted only after its agent, destination, and content digest all verify.
+func (manager Manager) reconcileRegistry(value registry) (registry, map[string]string) {
+	failures := make(map[string]string)
+	registered := make(map[string]Installation, len(value.Installations))
+	for _, item := range value.Installations {
+		registered[item.Path] = item
+	}
+
+	destinations := KnownDestinations(manager.HomeDir)
+	agents := make([]string, 0, len(destinations))
+	for agent := range destinations {
+		agents = append(agents, agent)
+	}
+	sort.Strings(agents)
+	seen := make(map[string]struct{}, len(destinations))
+	for _, agent := range agents {
+		destination := destinations[agent]
+		seen[destination] = struct{}{}
+		tracked, wasRegistered := registered[destination]
+		info, err := os.Lstat(destination)
+		if errors.Is(err, os.ErrNotExist) {
+			if wasRegistered {
+				failures[destination] = "externally_managed"
+			}
+			continue
+		}
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			failures[destination] = "externally_managed"
+			continue
+		}
+		receipt, err := readReceipt(destination)
+		if err != nil || receipt.Agent != agent || receipt.Agent != canonicalSkillAgent(receipt.Agent) ||
+			receipt.Scope != "user" {
+			failures[destination] = "externally_managed"
+			continue
+		}
+		discovered := Installation{
+			Agent:         receipt.Agent,
+			Scope:         receipt.Scope,
+			Path:          destination,
+			Version:       receipt.Version,
+			ContentSHA256: receipt.ContentSHA256,
+		}
+		if err := verifyManagedInstallation(discovered); err != nil {
+			failures[destination] = publicFailure(err)
+			continue
+		}
+		if wasRegistered && tracked != discovered {
+			failures[destination] = "externally_managed"
+			continue
+		}
+		value.Installations = upsertInstallation(value.Installations, discovered)
+	}
+	for _, item := range value.Installations {
+		if _, known := seen[item.Path]; !known {
+			failures[item.Path] = "invalid_destination"
+		}
+	}
+	return value, failures
+}
+
 func upsertInstallation(values []Installation, item Installation) []Installation {
 	for index := range values {
 		if values[index].Path == item.Path {
@@ -424,6 +508,27 @@ func uniqueStrings(values []string) []string {
 		output = append(output, value)
 	}
 	return output
+}
+
+func expandSkillAgents(values []string) []string {
+	output := append([]string(nil), values...)
+	for _, value := range values {
+		switch value {
+		case "gemini-cli":
+			output = append(output, "antigravity")
+		case "antigravity":
+			output = append(output, "gemini-cli")
+		}
+	}
+	return uniqueStrings(output)
+}
+
+func canonicalSkillAgents(values []string) []string {
+	output := make([]string, 0, len(values))
+	for _, value := range values {
+		output = append(output, canonicalSkillAgent(value))
+	}
+	return uniqueStrings(output)
 }
 
 func lessVersion(left, right string) bool {

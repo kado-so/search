@@ -55,9 +55,13 @@ concerns and do not belong in the skill.
 ## Distribution
 
 The CLI embeds the Search skill and its assets so an agent can install one
-compatible unit without a plugin manager. Kado-managed skill copies have local
-ownership receipts and are synchronized after a successful direct CLI update.
-Plugin and marketplace manifests remain optional secondary channels.
+compatible unit without a plugin manager. Installation targets all detected
+harness locations plus `~/.agents/skills` by default. Kado scans every known
+destination and accepts a local ownership receipt only after its canonical path
+and actual content digest verify; previously registered copies must also match
+the registry. Every verified Kado-managed copy is synchronized after a
+successful direct CLI update. Plugin and marketplace manifests remain optional
+secondary channels.
 
 The release operator provides the semantic version explicitly; product
 identity is fixed in the release builder.

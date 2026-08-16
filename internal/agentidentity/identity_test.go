@@ -1,6 +1,9 @@
 package agentidentity
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestDetectionPrecedenceAndAmbiguity(t *testing.T) {
 	environment := func(values map[string]string) environmentLookup {
@@ -22,6 +25,8 @@ func TestDetectionPrecedenceAndAmbiguity(t *testing.T) {
 		{name: "environment", env: map[string]string{"CLAUDECODE": "1"}, want: Detection{"claude-code", "environment"}},
 		{name: "opencode process", processes: []string{"/usr/local/bin/opencode"}, want: Detection{"opencode", "process"}},
 		{name: "opencode environment", env: map[string]string{"OPENCODE": "session-marker"}, want: Detection{"opencode", "environment"}},
+		{name: "antigravity cli", processes: []string{filepath.Join("tools", "antigravity.exe")}, want: Detection{"antigravity", "process"}},
+		{name: "antigravity helper", processes: []string{"Antigravity Helper (Renderer)"}, want: Detection{"antigravity", "process"}},
 		{name: "ambiguous environment", env: map[string]string{"CLAUDECODE": "1", "CODEX_THREAD_ID": "1"}, want: Detection{Default, "default"}},
 		{name: "direct", want: Detection{Default, "default"}},
 		{name: "invalid override", override: "raw/path", wantErr: true},

@@ -15,6 +15,7 @@ const Default = "default"
 var known = []string{
 	"aider",
 	"amp",
+	"antigravity",
 	"claude-code",
 	"codex",
 	"cursor",
@@ -104,11 +105,15 @@ func agentFromEnvironment(environment environmentLookup) string {
 func agentForProcess(value string) string {
 	name := strings.ToLower(filepath.Base(strings.TrimSpace(value)))
 	name = strings.TrimSuffix(name, ".exe")
+	if strings.HasPrefix(name, "antigravity helper") {
+		return "antigravity"
+	}
 	matches := []struct {
 		agent string
 		names []string
 	}{
 		{agent: "claude-code", names: []string{"claude", "claude-code"}},
+		{agent: "antigravity", names: []string{"agy", "antigravity", "antigravity-cli"}},
 		{agent: "gemini-cli", names: []string{"gemini", "gemini-cli"}},
 		{agent: "github-copilot", names: []string{"copilot", "github-copilot"}},
 		{agent: "openhands", names: []string{"openhands"}},

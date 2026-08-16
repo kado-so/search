@@ -99,10 +99,10 @@ func TestEmbeddedInstallTracksOwnershipAndProtectsModifications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Installed) != 1 || !result.UsedFallback {
+	if len(result.Installed) != 2 || !result.UsedFallback {
 		t.Fatalf("Install() = %#v", result)
 	}
-	item := result.Installed[0]
+	item := installationForAgent(t, result.Installed, "codex")
 	if err := os.WriteFile(filepath.Join(item.Path, "SKILL.md"), []byte("changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +110,17 @@ func TestEmbeddedInstallTracksOwnershipAndProtectsModifications(t *testing.T) {
 	if updateErr != nil || update.Failures[item.Path] != "locally_modified" {
 		t.Fatalf("Update() = %#v, %v", update, updateErr)
 	}
+}
+
+func installationForAgent(t *testing.T, values []Installation, agent string) Installation {
+	t.Helper()
+	for _, value := range values {
+		if value.Agent == agent {
+			return value
+		}
+	}
+	t.Fatalf("installation for %q not found in %#v", agent, values)
+	return Installation{}
 }
 
 func makeTestArchive(

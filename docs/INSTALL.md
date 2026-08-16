@@ -57,10 +57,23 @@ kado skill update
 kado skill uninstall
 ```
 
-`install` detects the calling agent by default and supports an explicit
-`--agent` override. Kado records which local skill installations it owns.
-`update` may update only those Kado-managed copies; it must not overwrite a copy
-installed by another skill or plugin manager.
+`install` defaults to `--all`: it installs for the calling agent, every locally
+detected supported harness, and the portable `~/.agents/skills/` location. An
+explicit `--agent` adds a requested identity. Product-specific user locations
+are used for Codex, Claude Code, Cursor, Gemini CLI, Antigravity, GitHub
+Copilot, OpenCode, Goose, Aider, and Amp. Detected skill-capable identities
+without a product-specific directory use `~/.agents/skills/`.
+
+Gemini CLI and Antigravity have distinct user locations. Selecting either one
+installs both `~/.gemini/skills/kado-search` and
+`~/.gemini/config/skills/kado-search`.
+
+Kado records which local skill installations it owns. `status`, `update`, and
+`uninstall` also scan every known destination, verify its ownership receipt
+against its canonical agent and path, hash the actual paths and file contents,
+and reconcile valid newly discovered Kado installations into the registry.
+Registry, receipt, or filesystem drift is reported and is never overwritten.
+The same home-relative layout is used on Windows, macOS, and Linux.
 
 A successful direct CLI update automatically syncs Kado-managed skill copies.
 If a skill update fails, the new CLI remains installed and reports the repair

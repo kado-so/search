@@ -328,7 +328,7 @@ func runSkill(
 		if err != nil {
 			return err
 		}
-		options := skillclient.InstallOptions{CurrentAgent: detection.Agent}
+		options := skillclient.InstallOptions{CurrentAgent: detection.Agent, All: true}
 		for index := 1; index < len(args); index++ {
 			switch args[index] {
 			case "--all":
@@ -359,13 +359,6 @@ func runSkill(
 				installed.Path,
 			)
 		}
-		if !options.All && len(options.Agents) == 0 && len(result.OtherAgents) > 0 {
-			_, _ = fmt.Fprintf(
-				stdout,
-				"also detected %s; install for all detected agents? After approval, run `kado skill install --all`\n",
-				strings.Join(result.OtherAgents, ", "),
-			)
-		}
 		if result.UsedFallback {
 			_, _ = fmt.Fprintln(stdout, "installed the bundled offline skill fallback")
 		}
@@ -378,7 +371,7 @@ func runSkill(
 		if err != nil {
 			return skillDiagnostic(err)
 		}
-		if len(status.Installations) == 0 {
+		if len(status.Installations) == 0 && len(status.Failures) == 0 {
 			_, _ = fmt.Fprintln(stdout, "no Kado-managed skills are installed")
 			return nil
 		}
@@ -390,6 +383,9 @@ func runSkill(
 				installed.Agent,
 				installed.Path,
 			)
+		}
+		for path, code := range status.Failures {
+			_, _ = fmt.Fprintf(stdout, "could not verify %s (%s)\n", path, code)
 		}
 		return nil
 	case "update":

@@ -156,8 +156,10 @@ verification, rollback, and publication details.
 `skills/kado-search/SKILL.md` contains the offline Search guidance bundled into
 release builds. `kado skill install` prefers the latest compatible signed skill
 from `kado.so` and falls back to that embedded copy without requiring npm, a
-plugin marketplace, or another package manager. Kado tracks and asynchronously
-updates only the skill copies it owns.
+plugin marketplace, or another package manager. Installation defaults to all
+detected harnesses and the portable `~/.agents/skills` fallback. Kado scans
+known destinations, verifies receipts against actual content hashes, and
+asynchronously updates every verified copy it owns.
 
 ## Installation
 

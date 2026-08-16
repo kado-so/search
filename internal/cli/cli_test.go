@@ -1073,7 +1073,7 @@ func TestUpdateUsesVerifiedReleaseBoundaryAndDeterministicOutput(t *testing.T) {
 	}
 }
 
-func TestSkillInstallDefaultsToDetectedParentAndReportsOtherAgents(t *testing.T) {
+func TestSkillInstallDefaultsToAllDetectedAgents(t *testing.T) {
 	t.Parallel()
 
 	skills := &fakeSkillCommands{installResult: skillclient.InstallResult{
@@ -1102,8 +1102,9 @@ func TestSkillInstallDefaultsToDetectedParentAndReportsOtherAgents(t *testing.T)
 	)
 	if exitCode != 0 || stderr.Len() != 0 ||
 		skills.installOptions.CurrentAgent != "codex" ||
+		!skills.installOptions.All ||
 		!strings.Contains(stdout.String(), "installed kado-search 0.2.0 for codex") ||
-		!strings.Contains(stdout.String(), "kado skill install --all") {
+		strings.Contains(stdout.String(), "kado skill install --all") {
 		t.Fatalf(
 			"skill install exit=%d options=%#v stdout=%q stderr=%q",
 			exitCode,
