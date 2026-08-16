@@ -89,14 +89,16 @@ and package systems. They are intentionally outside the self-updater's signed
 metadata and runtime trust path.
 
 The generated `INSTALL-CLI.md`, `install.sh`, and `install.ps1` implement the
-agent-first bootstrap from canonical `kado.so` HTTPS endpoints. They select the
-host target, download stable signed metadata and the immutable versioned
-archive, run verification through the candidate, install into a user-owned
-directory, configure user PATH when needed, install the signed Search skill,
-and create or reuse and verify authentication. `kado update` verifies the
-signed archive descriptor, safely extracts the candidate, checks its stamped
-release identity, retains the existing executable as a rollback file, and only
-then performs the replacement.
+agent-first bootstrap from canonical `kado.so` HTTPS endpoints. For a new
+installation they select the host target, download stable signed metadata and
+the immutable versioned archive, run verification through the candidate, and
+install into a user-owned directory. When Kado already occupies the expected
+destination, they invoke its signed updater instead. Both paths configure user
+PATH when needed, synchronize the signed Search skill across detected
+harnesses and `~/.agents/skills`, and create or reuse and verify authentication.
+`kado update` verifies the signed archive descriptor, safely extracts the
+candidate, checks its stamped release identity, retains the existing executable
+as a rollback file, and only then performs the replacement.
 
 ## Runtime update and removal policy
 

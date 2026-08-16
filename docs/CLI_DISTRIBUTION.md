@@ -74,7 +74,8 @@ An agent:
    operating-system-provided client;
 3. places the candidate in a private temporary directory;
 4. verifies the downloaded release;
-5. installs into a user-writable destination;
+5. installs into a user-writable destination, or invokes the signed updater
+   when that destination already contains the Kado executable;
 6. executes `kado skill install`;
 7. creates or reuses authentication and verifies it with `kado auth status`;
    and

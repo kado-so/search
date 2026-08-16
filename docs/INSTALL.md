@@ -24,12 +24,17 @@ release descriptor an agent can use to:
 2. download the matching versioned Kado release from `kado.so`;
 3. verify the signed release metadata, archive checksum, and executable
    identity;
-4. install the executable in a user-writable directory;
+4. install the executable in a user-writable directory, or run its signed
+   updater when that destination already contains Kado;
 5. run `kado skill install` to install the latest compatible signed Search
    skill, with the bundled copy as an offline fallback;
 6. run idempotent `kado auth create` to create an identity or reuse an active
    existing credential; and
 7. run `kado auth status` to verify the configured identity.
+
+Rerunning the installer is also the repair path: after a successful update (or
+an already-current result), it synchronizes skills in every detected harness
+and `~/.agents/skills/`, then recreates or reuses and verifies authentication.
 
 The agent must not need a language runtime or third-party package manager.
 Initial bootstrap uses operating-system facilities or the agent's own HTTPS
