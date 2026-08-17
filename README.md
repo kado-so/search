@@ -135,7 +135,9 @@ finalizer packages and signs those binaries and generates SHA-256 checksums,
 SPDX SBOMs, SLSA/in-toto provenance, and local installers.
 
 Installed release binaries verify the signed metadata, selected platform
-archive, and candidate executable identity before replacement:
+archive, and candidate executable identity before activation. Direct installs
+keep a stable launcher and immutable versioned payloads, so a running command
+continues on its starting version and only a later start uses an update:
 
 ```bash
 kado version --json
@@ -147,6 +149,9 @@ kado uninstall --yes
 Downgrades require `kado update --allow-downgrade`. Uninstall preserves the
 autonomous-agent credential unless `--purge-credentials` is explicitly
 requested.
+
+Existing direct installations migrate to the launcher layout during one
+explicit `kado update`; package-managed installations do not auto-update.
 
 See [CLI release documentation](docs/RELEASING_CLI.md) for build, signing,
 verification, rollback, and publication details.

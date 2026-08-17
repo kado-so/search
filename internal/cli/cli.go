@@ -26,6 +26,7 @@ import (
 	"github.com/kado-so/search/internal/config"
 	"github.com/kado-so/search/internal/diagnostic"
 	"github.com/kado-so/search/internal/keystore"
+	"github.com/kado-so/search/internal/launcher"
 	"github.com/kado-so/search/internal/localstate"
 	"github.com/kado-so/search/internal/maintenance"
 	"github.com/kado-so/search/internal/releaseclient"
@@ -99,6 +100,10 @@ type releaseChecker interface {
 	Check(context.Context, string) (releaseclient.Result, error)
 }
 
+type releaseAutoUpdater interface {
+	AutoUpdate(context.Context) (releaseclient.Result, error)
+}
+
 type skillCommands interface {
 	Install(context.Context, skillclient.InstallOptions) (skillclient.InstallResult, error)
 	Update(context.Context) (skillclient.UpdateResult, error)
@@ -158,6 +163,7 @@ type defaultSearchCommands struct {
 type defaultReleaseCommands struct {
 	manager    releaseclient.Manager
 	executable string
+	launcher   string
 	info       buildinfo.Info
 }
 
@@ -185,8 +191,8 @@ func runWithDependencies(
 	info buildinfo.Info,
 	dependencies dependencies,
 ) int {
-	maybeScheduleMaintenance(args, stderr, info)
 	err := run(args, stdout, info, dependencies)
+	maybeScheduleMaintenance(args, stderr, info)
 	if err == nil {
 		return 0
 	}
@@ -211,30 +217,22 @@ func maybeScheduleMaintenance(args []string, stderr io.Writer, info buildinfo.In
 		return
 	}
 	now := time.Now().UTC()
-	state, err := maintenance.Read(safeConfig.ConfigDir)
+	reservation, err := maintenance.Reserve(safeConfig.ConfigDir, now)
 	if err != nil {
 		return
 	}
-	if maintenance.NoticeDue(state, now) {
+	if reservation.NoticeVersion != "" {
 		_, _ = fmt.Fprintf(
 			stderr,
 			"kado: update %s is available; run `kado update`\n",
-			state.LatestCLIVersion,
+			reservation.NoticeVersion,
 		)
-		state.LastNoticeAt = now.Format(time.RFC3339)
-		_ = maintenance.Write(safeConfig.ConfigDir, state)
 	}
-	if !maintenance.Due(state, now) {
+	if !reservation.Spawn {
 		return
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return
-	}
-	// Reserve a short window before spawning so concurrent CLI invocations do
-	// not create duplicate maintenance workers.
-	state.NextCheckAt = now.Add(10 * time.Minute).Format(time.RFC3339)
-	if err := maintenance.Write(safeConfig.ConfigDir, state); err != nil {
 		return
 	}
 	_ = maintenance.Spawn(executable)
@@ -398,16 +396,30 @@ func runSkill(
 		if len(args) != 1 && !background {
 			return usageError("usage: kado skill update")
 		}
-		result, err := commands.Update(context.Background())
-		if err != nil {
-			return skillDiagnostic(err)
+		result, updateSkillsErr := commands.Update(context.Background())
+		if updateSkillsErr != nil && !background {
+			return skillDiagnostic(updateSkillsErr)
 		}
 		if background {
+			installed := info.Version
 			latest := info.Version
 			available := false
 			if dependencies.newRelease != nil {
 				if releases, releaseErr := dependencies.newRelease(info); releaseErr == nil {
-					if checker, ok := releases.(releaseChecker); ok {
+					if updater, ok := releases.(releaseAutoUpdater); ok {
+						update, updateErr := updater.AutoUpdate(context.Background())
+						if updateErr == nil {
+							latest = update.ToVersion
+							installed = update.ToVersion
+							available = false
+						} else if checker, checked := releases.(releaseChecker); checked {
+							check, checkErr := checker.Check(context.Background(), info.Version)
+							if checkErr == nil {
+								latest = check.ToVersion
+								available = check.Changed
+							}
+						}
+					} else if checker, ok := releases.(releaseChecker); ok {
 						check, checkErr := checker.Check(context.Background(), info.Version)
 						if checkErr == nil {
 							latest = check.ToVersion
@@ -417,15 +429,13 @@ func runSkill(
 				}
 			}
 			if safeConfig, configErr := config.Load(); configErr == nil {
-				state, _ := maintenance.Read(safeConfig.ConfigDir)
-				state = maintenance.Complete(
-					state,
+				_ = maintenance.RecordComplete(
+					safeConfig.ConfigDir,
 					time.Now(),
-					info.Version,
+					installed,
 					latest,
 					available,
 				)
-				_ = maintenance.Write(safeConfig.ConfigDir, state)
 			}
 			return nil
 		}
@@ -668,9 +678,9 @@ func runUpdate(
 		scheduleMaintenanceNow()
 		_, _ = fmt.Fprintf(
 			stdout,
-			"updated kado %s to %s for %s\n",
-			result.FromVersion,
+			"installed kado %s from %s for %s; later CLI starts will use it\n",
 			result.ToVersion,
+			result.FromVersion,
 			result.Target,
 		)
 	default:
@@ -684,9 +694,7 @@ func scheduleMaintenanceNow() {
 	if err != nil {
 		return
 	}
-	state, _ := maintenance.Read(safeConfig.ConfigDir)
-	state.NextCheckAt = time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
-	if err := maintenance.Write(safeConfig.ConfigDir, state); err != nil {
+	if err := maintenance.DelayUntil(safeConfig.ConfigDir, time.Now().Add(10*time.Minute)); err != nil {
 		return
 	}
 	executable, err := os.Executable()
@@ -1351,6 +1359,11 @@ func newDefaultReleaseCommands(info buildinfo.Info) (releaseCommands, error) {
 	if err != nil {
 		return nil, releaseclient.ErrInstall
 	}
+	launcherPath := ""
+	if installation, managed := launcher.CurrentInstallation(); managed {
+		launcherPath = installation.LauncherPath
+		executable = launcherPath
+	}
 	return &defaultReleaseCommands{
 		manager: releaseclient.Manager{
 			MetadataURL: info.ReleaseMetadataURL,
@@ -1360,6 +1373,7 @@ func newDefaultReleaseCommands(info buildinfo.Info) (releaseCommands, error) {
 			},
 		},
 		executable: executable,
+		launcher:   launcherPath,
 		info:       info,
 	}, nil
 }
@@ -1495,8 +1509,22 @@ func (commands *defaultReleaseCommands) Update(
 	options releaseclient.Options,
 ) (releaseclient.Result, error) {
 	options.TargetPath = commands.executable
+	options.LauncherPath = commands.launcher
 	options.CurrentVersion = commands.info.Version
 	return commands.manager.Update(ctx, options)
+}
+
+func (commands *defaultReleaseCommands) AutoUpdate(
+	ctx context.Context,
+) (releaseclient.Result, error) {
+	if commands.launcher == "" {
+		return releaseclient.Result{}, releaseclient.ErrInstall
+	}
+	return commands.manager.Update(ctx, releaseclient.Options{
+		TargetPath:     commands.executable,
+		LauncherPath:   commands.launcher,
+		CurrentVersion: commands.info.Version,
+	})
 }
 
 func (commands *defaultReleaseCommands) Check(

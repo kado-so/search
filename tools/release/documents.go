@@ -39,10 +39,11 @@ After installation:
     kado auth status
     kado skill status
 
-Use kado update for a signed in-place update. Downgrades are rejected unless
---allow-downgrade is explicit. Kado refreshes its managed skill installations
-asynchronously and reports signed CLI updates without blocking Search. Use the
-supplied uninstall script with --yes; credentials are preserved unless
+Use kado update for a signed update. Existing direct installations use one
+explicit update to enter the launcher layout. Later verified releases activate
+only for a new CLI start; a running command keeps its selected version.
+Downgrades are rejected unless --allow-downgrade is explicit. Use the supplied
+uninstall script with --yes; credentials are preserved unless
 --purge-credentials is also explicit.
 `, source.Version, source.Repository, source.InstallURL, keyID)
 }
@@ -132,6 +133,11 @@ INSTALL-CLI.md" || {
   mv "$candidate" "$destination"
 fi
 
+receipt_candidate="$(mktemp "$install_dir/.kado-install.XXXXXX")"
+printf '{"schema_version":1,"channel":"direct"}\n' >"$receipt_candidate"
+chmod 600 "$receipt_candidate"
+mv "$receipt_candidate" "$install_dir/kado.install.json"
+
 case ":$PATH:" in
   *":$install_dir:"*) ;;
   *)
@@ -204,6 +210,8 @@ if test "$purge" = yes; then
   "$destination" auth revoke
 fi
 rm -f "$destination"
+rm -f "$(dirname "$destination")/kado.install.json"
+rm -rf "$destination.d"
 if test "$purge" = yes; then
   printf 'removed kado executable after explicit credential revocation\n'
 else
@@ -247,6 +255,8 @@ try {
     for ($Attempt = 0; $Attempt -lt 300; $Attempt++) {
       $PendingHelpers = @(Get-ChildItem -LiteralPath $InstallDirectory -Filter ".kado-update-helper-*.exe" -ErrorAction SilentlyContinue |
         Where-Object { -not $KnownHelpers.ContainsKey($_.FullName) })
+      $PendingHelpers | Remove-Item -Force -ErrorAction SilentlyContinue
+      $PendingHelpers = @($PendingHelpers | Where-Object { Test-Path -LiteralPath $_.FullName })
       if ($PendingHelpers.Count -eq 0) {
         $UpdateFinished = $true
         break
@@ -278,6 +288,14 @@ try {
     Copy-Item -LiteralPath $CandidateBinary -Destination $InstallCandidate
     Move-Item -LiteralPath $InstallCandidate -Destination $Destination
   }
+
+  $ReceiptCandidate = Join-Path $InstallDirectory (".kado-install-" + [guid]::NewGuid().ToString("N") + ".json")
+  [System.IO.File]::WriteAllText(
+    $ReceiptCandidate,
+    '{"schema_version":1,"channel":"direct"}' + [Environment]::NewLine,
+    [System.Text.UTF8Encoding]::new($false)
+  )
+  Move-Item -LiteralPath $ReceiptCandidate -Destination (Join-Path $InstallDirectory "kado.install.json") -Force
 
   $SkipPath = $NoModifyPath -or $env:KADO_NO_MODIFY_PATH -eq "1"
   if (-not $SkipPath) {
@@ -326,6 +344,9 @@ if ($PurgeCredentials) {
   if ($LASTEXITCODE -ne 0) { throw "credential revocation failed; executable was retained" }
 }
 Remove-Item -LiteralPath $Destination -Force
+$InstallDirectory = Split-Path -Parent $Destination
+Remove-Item -LiteralPath (Join-Path $InstallDirectory "kado.install.json") -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath ($Destination + ".d") -Recurse -Force -ErrorAction SilentlyContinue
 if ($PurgeCredentials) {
   Write-Output "removed kado executable after explicit credential revocation"
 } else {

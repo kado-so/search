@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -20,6 +21,53 @@ func TestMaintenanceStateSchedulesAndRateLimitsNotice(t *testing.T) {
 	if NoticeDue(state, now.Add(23*time.Hour)) ||
 		!NoticeDue(state, now.Add(24*time.Hour)) {
 		t.Fatal("notice rate limit is invalid")
+	}
+}
+
+func TestConcurrentReservationsSpawnAndNoticeOnce(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	now := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	if err := Write(root, State{
+		Version:          stateVersion,
+		LatestCLIVersion: "0.2.0",
+		UpdateAvailable:  true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 32
+	var wait sync.WaitGroup
+	results := make(chan Reservation, workers)
+	errors := make(chan error, workers)
+	for index := 0; index < workers; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			reservation, err := Reserve(root, now)
+			results <- reservation
+			errors <- err
+		}()
+	}
+	wait.Wait()
+	close(results)
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	spawned, noticed := 0, 0
+	for result := range results {
+		if result.Spawn {
+			spawned++
+		}
+		if result.NoticeVersion != "" {
+			noticed++
+		}
+	}
+	if spawned != 1 || noticed != 1 {
+		t.Fatalf("spawned=%d noticed=%d, want one each", spawned, noticed)
 	}
 }
 

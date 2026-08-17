@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -17,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kado-so/search/internal/launcher"
 )
 
 var (
@@ -141,6 +142,7 @@ type Manager struct {
 // Options controls one install/update transaction.
 type Options struct {
 	TargetPath     string
+	LauncherPath   string
 	CurrentVersion string
 	AllowDowngrade bool
 	DryRun         bool
@@ -221,6 +223,31 @@ func (manager Manager) Check(
 // Update verifies signed metadata, the selected archive, and candidate
 // executable identity before replacing anything.
 func (manager Manager) Update(ctx context.Context, options Options) (Result, error) {
+	if options.LauncherPath != "" && options.TargetPath != options.LauncherPath {
+		return Result{}, ErrInstall
+	}
+	if options.LauncherPath == "" || options.DryRun {
+		return manager.update(ctx, options)
+	}
+	var result Result
+	var updateErr error
+	lockErr := launcher.WithUpdateLock(options.LauncherPath, func() error {
+		if _, activeVersion, err := launcher.Active(options.LauncherPath); err == nil {
+			options.CurrentVersion = activeVersion
+		}
+		result, updateErr = manager.update(ctx, options)
+		return updateErr
+	})
+	if lockErr != nil {
+		if updateErr != nil {
+			return result, updateErr
+		}
+		return result, ErrInstall
+	}
+	return result, nil
+}
+
+func (manager Manager) update(ctx context.Context, options Options) (Result, error) {
 	goos, goarch := manager.GOOS, manager.GOARCH
 	if goos == "" {
 		goos = runtime.GOOS
@@ -234,7 +261,7 @@ func (manager Manager) Update(ctx context.Context, options Options) (Result, err
 		DryRun:      options.DryRun,
 	}
 	targetSnapshot := ""
-	if !options.DryRun {
+	if !options.DryRun && options.LauncherPath == "" {
 		var snapshotErr error
 		targetSnapshot, snapshotErr = snapshotExecutable(options.TargetPath)
 		if snapshotErr != nil {
@@ -315,11 +342,16 @@ func (manager Manager) Update(ctx context.Context, options Options) (Result, err
 	if options.DryRun {
 		return result, nil
 	}
-	pending, err := manager.installCandidate(
-		candidate,
-		options.TargetPath,
-		targetSnapshot,
-	)
+	pending := false
+	if options.LauncherPath != "" {
+		err = launcher.InstallVersionLocked(
+			options.LauncherPath,
+			metadata.Version,
+			candidate,
+		)
+	} else {
+		pending, err = manager.installCandidate(candidate, options.TargetPath, targetSnapshot)
+	}
 	if err != nil {
 		return result, ErrInstall
 	}
@@ -359,6 +391,8 @@ func Uninstall(targetPath string) error {
 	if err := os.Remove(targetPath); err != nil {
 		return ErrUninstall
 	}
+	_ = os.Remove(filepath.Join(filepath.Dir(targetPath), "kado.install.json"))
+	_ = os.RemoveAll(targetPath + ".d")
 	_ = syncDirectory(filepath.Dir(targetPath))
 	return nil
 }
@@ -559,36 +593,6 @@ func snapshotExecutable(target string) (string, error) {
 		return "", ErrInstall
 	}
 	return Digest(value), nil
-}
-
-func acquireUpdateLock(target string) (func(), error) {
-	lockPath := target + ".update.lock"
-	lock, err := os.OpenFile(
-		lockPath,
-		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
-		0o600,
-	)
-	if err != nil {
-		return nil, ErrInstall
-	}
-	if _, err := fmt.Fprintf(lock, "%d\n", os.Getpid()); err != nil {
-		_ = lock.Close()
-		_ = os.Remove(lockPath)
-		return nil, ErrInstall
-	}
-	if err := lock.Sync(); err != nil {
-		_ = lock.Close()
-		_ = os.Remove(lockPath)
-		return nil, ErrInstall
-	}
-	if err := lock.Close(); err != nil {
-		_ = os.Remove(lockPath)
-		return nil, ErrInstall
-	}
-	return func() {
-		_ = os.Remove(lockPath)
-		_ = syncDirectory(filepath.Dir(target))
-	}, nil
 }
 
 func writeCandidate(target string, binary []byte) (string, func(), error) {

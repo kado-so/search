@@ -19,6 +19,7 @@ var (
 	ReleasePublicKey   = ""
 	ReleaseKeyID       = "unknown"
 	ReleaseMetadataURL = ""
+	InstallChannel     = "unknown"
 )
 
 // Info is the safe, bounded build metadata exposed by the CLI.
@@ -30,6 +31,7 @@ type Info struct {
 	ReleaseKeyID       string `json:"release_key_id"`
 	ReleasePublicKey   string `json:"-"`
 	ReleaseMetadataURL string `json:"-"`
+	InstallChannel     string `json:"-"`
 }
 
 // Current returns the metadata attached to this binary.
@@ -42,6 +44,7 @@ func Current() Info {
 		ReleaseKeyID:       boundedTokenLength(ReleaseKeyID, 80),
 		ReleasePublicKey:   strings.TrimSpace(ReleasePublicKey),
 		ReleaseMetadataURL: strings.TrimSpace(ReleaseMetadataURL),
+		InstallChannel:     boundedToken(InstallChannel),
 	}
 }
 
