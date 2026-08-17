@@ -91,6 +91,19 @@ func TestEveryEmbeddedSkillHasSignedRemoteRelease(t *testing.T) {
 	}
 }
 
+func TestReleaseBuildWritesNestedSkillArtifacts(t *testing.T) {
+	t.Parallel()
+
+	output := t.TempDir()
+	name := filepath.Join("skills", "kado-search", "default", "0.3.5", "metadata.json")
+	if err := writeReleaseArtifact(output, name, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(output, name)); err != nil {
+		t.Fatalf("nested release artifact was not written: %v", err)
+	}
+}
+
 func TestSkillReleaseIsIndependentOfCLIBuild(t *testing.T) {
 	t.Parallel()
 

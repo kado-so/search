@@ -73,8 +73,8 @@ func buildRelease(input buildInput) error {
 		if _, exists := files[name]; exists {
 			return releaseclient.File{}, errors.New("release artifact name is duplicated")
 		}
-		if err := os.WriteFile(filepath.Join(input.output, name), value, mode); err != nil {
-			return releaseclient.File{}, errors.New("release artifact could not be written")
+		if err := writeReleaseArtifact(input.output, name, value, mode); err != nil {
+			return releaseclient.File{}, err
 		}
 		descriptor := releaseclient.File{
 			Name:   name,
@@ -227,6 +227,17 @@ func buildRelease(input buildInput) error {
 				target.Arch,
 			)
 		}
+	}
+	return nil
+}
+
+func writeReleaseArtifact(output, name string, value []byte, mode fs.FileMode) error {
+	path := filepath.Join(output, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return errors.New("release artifact directory could not be created")
+	}
+	if err := os.WriteFile(path, value, mode); err != nil {
+		return errors.New("release artifact could not be written")
 	}
 	return nil
 }
