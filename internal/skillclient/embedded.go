@@ -1,11 +1,11 @@
 package skillclient
 
 import (
-	general "github.com/kado-so/search/skills/kado"
+	general "github.com/kado-so/search/skills/kado-cli-non-search"
 	search "github.com/kado-so/search/skills/kado-search"
 )
 
-const EmbeddedCatalogRevision uint64 = 1
+const EmbeddedCatalogRevision uint64 = 2
 
 type EmbeddedRelease struct {
 	Metadata Metadata
@@ -22,12 +22,13 @@ func EmbeddedCatalog() (Catalog, map[string]EmbeddedRelease, error) {
 		return Catalog{}, nil, err
 	}
 	releases := map[string]EmbeddedRelease{
-		"kado:default":        {Metadata: embeddedMetadata("kado", general.Version(), general.MinimumCLIVersion), Files: generalFiles},
-		"kado-search:default": {Metadata: embeddedMetadata("kado-search", search.Version(), search.MinimumCLIVersion), Files: searchFiles},
+		"kado-cli-non-search:default": {Metadata: embeddedMetadata("kado-cli-non-search", general.Version(), general.MinimumCLIVersion), Files: generalFiles},
+		"kado-search:default":         {Metadata: embeddedMetadata("kado-search", search.Version(), search.MinimumCLIVersion), Files: searchFiles},
 	}
 	catalog := Catalog{SchemaVersion: CatalogSchemaVersion, Revision: EmbeddedCatalogRevision, Skills: []CatalogSkill{
-		{Name: "kado", State: "active", Variants: []CatalogVariant{{ID: "default", Agents: []string{"*"}}}},
+		{Name: "kado-cli-non-search", State: "active", Variants: []CatalogVariant{{ID: "default", Agents: []string{"*"}}}},
 		{Name: "kado-search", State: "active", Variants: []CatalogVariant{{ID: "default", Agents: []string{"*"}}}},
+		{Name: "kado", State: "retired"},
 	}}
 	return catalog, releases, nil
 }
