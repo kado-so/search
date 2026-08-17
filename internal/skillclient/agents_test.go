@@ -2,6 +2,7 @@ package skillclient
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,7 +54,7 @@ func TestDefaultInstallUsesAllDetectedLocationsAndGeminiPair(t *testing.T) {
 	}
 	want := map[string]bool{}
 	for _, agent := range []string{"agents", "antigravity", "claude-code", "codex", "gemini-cli"} {
-		for _, name := range []string{"kado", SkillName} {
+		for _, name := range []string{"kado-cli-non-search", SkillName} {
 			want[agent+":"+name] = true
 		}
 	}
@@ -137,6 +138,35 @@ func TestStatusDetectsContentReceiptAndDeletionDrift(t *testing.T) {
 				t.Fatalf("Status() = %#v, %v; want %q", status, err, test.code)
 			}
 		})
+	}
+}
+
+func TestUninstallPreflightLeavesAllSkillsWhenOneCopyIsModified(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	manager := Manager{ConfigDir: filepath.Join(root, "config"), HomeDir: filepath.Join(root, "home"), CurrentVersion: "dev"}
+	result, err := manager.Install(context.Background(), InstallOptions{Agents: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Installed) != 2 {
+		t.Fatalf("Install() installed %d skills, want 2", len(result.Installed))
+	}
+	modified := result.Installed[len(result.Installed)-1]
+	if err := os.WriteFile(filepath.Join(modified.Path, "SKILL.md"), []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := manager.Uninstall(nil, true); !errors.Is(err, ErrLocallyModified) || len(removed) != 0 {
+		t.Fatalf("Uninstall() = %#v, %v; want no removals and ErrLocallyModified", removed, err)
+	}
+	for _, item := range result.Installed {
+		if _, err := os.Stat(item.Path); err != nil {
+			t.Fatalf("preflight failure removed %s: %v", item.Path, err)
+		}
+	}
+	state, err := readRegistry(manager.ConfigDir)
+	if err != nil || len(state.Installations) != len(result.Installed) {
+		t.Fatalf("registry changed after failed uninstall: %#v, %v", state, err)
 	}
 }
 

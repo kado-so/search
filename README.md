@@ -158,7 +158,7 @@ verification, rollback, and publication details.
 
 ## Skill
 
-`skills/kado/SKILL.md` contains general CLI and account guidance, while
+`skills/kado-cli-non-search/SKILL.md` contains general CLI and account guidance, while
 `skills/kado-search/SKILL.md` contains focused Search guidance. Both are bundled
 into release builds. `kado skill install` installs both skills and prefers the
 latest compatible signed skill catalog
@@ -193,7 +193,8 @@ internal/releaseclient/   signed self-update and uninstall
 internal/searchclient/    Search lifecycle client
 internal/searchcontract/  JSON Schema, JSON-LD, and semantic validation
 internal/searchoutput/    human, JSON, and JSONL rendering
-skills/kado-search/       Search-only agent skill
+skills/kado-search/         Search-only agent skill
+skills/kado-cli-non-search/ Non-search CLI agent skill
 tools/release/            deterministic release builder
 docs/                     installation, architecture, and release operations
 ```

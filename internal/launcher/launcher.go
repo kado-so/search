@@ -266,6 +266,10 @@ func activeFromRoot(root string) (string, string, error) {
 		if !validPayload(root, payload, record.Version) {
 			continue
 		}
+		value, readErr := os.ReadFile(payload)
+		if readErr != nil || digest(value) != record.SHA256 {
+			continue
+		}
 		return payload, record.Version, nil
 	}
 	return "", "", errors.New("launcher has no valid activation")

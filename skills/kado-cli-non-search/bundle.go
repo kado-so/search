@@ -1,5 +1,5 @@
-// Package kado exposes the general Kado CLI skill bundled with Kado.
-package kado
+// Package kado_cli_non_search exposes the non-Search Kado CLI skill.
+package kado_cli_non_search
 
 import (
 	"bufio"

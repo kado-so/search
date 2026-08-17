@@ -86,7 +86,7 @@ func TestEveryEmbeddedSkillHasSignedRemoteRelease(t *testing.T) {
 		}
 		seen[release.Name+":"+release.Variant] = true
 	}
-	if !seen["kado:default"] || !seen["kado-search:default"] {
+	if !seen["kado-cli-non-search:default"] || !seen["kado-search:default"] {
 		t.Fatalf("missing releases: %#v", seen)
 	}
 }

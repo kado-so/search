@@ -224,7 +224,7 @@ func (manager Manager) Uninstall(agents []string, all bool) ([]Installation, err
 	for _, agent := range canonicalSkillAgents(expandSkillAgents(agents)) {
 		selected[agent] = struct{}{}
 	}
-	var removed, retained []Installation
+	var selectedItems, retained []Installation
 	for _, item := range registry.Installations {
 		_, requested := selected[item.Agent]
 		if !all && !requested {
@@ -233,15 +233,42 @@ func (manager Manager) Uninstall(agents []string, all bool) ([]Installation, err
 		}
 		expected, destinationErr := Destination(manager.HomeDir, item.Agent, item.Name)
 		if destinationErr != nil || expected != item.Path || item.Scope != "user" {
-			return removed, ErrExternallyManaged
+			return nil, ErrExternallyManaged
 		}
 		if err := verifyManagedInstallation(item); err != nil {
-			return removed, err
+			return nil, err
 		}
-		if err := os.RemoveAll(item.Path); err != nil {
-			return removed, err
+		selectedItems = append(selectedItems, item)
+	}
+
+	// Validate the complete selection before moving anything. Each move stays on
+	// the destination filesystem so it can be rolled back atomically if a later
+	// move or registry write fails.
+	type stagedRemoval struct {
+		item   Installation
+		backup string
+	}
+	staged := make([]stagedRemoval, 0, len(selectedItems))
+	rollback := func() {
+		for index := len(staged) - 1; index >= 0; index-- {
+			_ = os.Rename(staged[index].backup, staged[index].item.Path)
 		}
-		removed = append(removed, item)
+	}
+	for _, item := range selectedItems {
+		backup, err := os.MkdirTemp(filepath.Dir(item.Path), ".kado-skill-remove-*")
+		if err != nil {
+			rollback()
+			return nil, err
+		}
+		if err := os.Remove(backup); err != nil {
+			rollback()
+			return nil, err
+		}
+		if err := os.Rename(item.Path, backup); err != nil {
+			rollback()
+			return nil, err
+		}
+		staged = append(staged, stagedRemoval{item: item, backup: backup})
 	}
 	registry.Installations = retained
 	if all {
@@ -256,9 +283,13 @@ func (manager Manager) Uninstall(agents []string, all bool) ([]Installation, err
 		registry.Targets = targets
 	}
 	if err := writeRegistry(manager.ConfigDir, registry); err != nil {
-		return removed, err
+		rollback()
+		return nil, err
 	}
-	return removed, nil
+	for _, removal := range staged {
+		_ = os.RemoveAll(removal.backup)
+	}
+	return selectedItems, nil
 }
 
 func (manager Manager) desiredCatalog(ctx context.Context, allowFallback bool) (Catalog, map[string]EmbeddedRelease, error) {

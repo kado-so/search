@@ -1,4 +1,4 @@
-package kado
+package kado_cli_non_search
 
 import (
 	"strings"
@@ -11,7 +11,7 @@ func TestGeneralSkillOwnsNonSearchCLIWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(files["SKILL.md"])
-	for _, required := range []string{"name: kado", "kado auth link", "kado auth status", "kado agent list", "kado-search"} {
+	for _, required := range []string{"name: kado-cli-non-search", "kado auth link", "kado auth status", "kado agent list", "kado-search"} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("SKILL.md is missing %q", required)
 		}

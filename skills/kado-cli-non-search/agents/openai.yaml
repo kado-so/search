@@ -2,7 +2,7 @@ interface:
   display_name: "Kado"
   short_description: "Set up and manage the Kado CLI"
   brand_color: "#5B3DF5"
-  default_prompt: "Use $kado to link my local agents to my Kado account."
+  default_prompt: "Use $kado-cli-non-search to link my local agents to my Kado account."
 
 policy:
   allow_implicit_invocation: false

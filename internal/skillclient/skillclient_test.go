@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,7 +84,7 @@ func TestUpdateReinstallsEveryMissingCatalogSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range installed.Installed {
-		if item.Name == "kado" {
+		if item.Name == "kado-cli-non-search" {
 			if err := os.RemoveAll(item.Path); err != nil {
 				t.Fatal(err)
 			}
@@ -110,7 +111,7 @@ func TestUpdateReinstallsEveryMissingCatalogSkill(t *testing.T) {
 	}
 	found := false
 	for _, item := range updated.Updated {
-		if item.Name == "kado" && item.Agent == "codex" {
+		if item.Name == "kado-cli-non-search" && item.Agent == "codex" {
 			found = true
 		}
 	}
@@ -123,7 +124,7 @@ func TestInstallContinuesWhenOneSkillDestinationConflicts(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
-	conflict := filepath.Join(home, ".codex", "skills", "kado")
+	conflict := filepath.Join(home, ".codex", "skills", "kado-cli-non-search")
 	if err := os.MkdirAll(conflict, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +144,38 @@ func TestInstallContinuesWhenOneSkillDestinationConflicts(t *testing.T) {
 	}
 	if !installedSearch {
 		t.Fatalf("search skill was blocked by unrelated conflict: %#v", result)
+	}
+}
+
+func TestUpdateRetiresVerifiedLegacySkillAfterRename(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	manager := Manager{ConfigDir: filepath.Join(root, "config"), HomeDir: home, CurrentVersion: "dev"}
+	files := map[string][]byte{"SKILL.md": []byte("legacy")}
+	legacyPath, err := Destination(home, "codex", "kado")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := installFiles(legacyPath, "codex", "user", "0.1.0", files, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.Name = "kado"
+	state := registry{Version: registryVersion, Targets: []Target{{Agent: "codex", Scope: "user"}}, Installations: []Installation{legacy}}
+	if err := writeRegistry(manager.ConfigDir, state); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := manager.Update(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Removed) != 1 || updated.Removed[0].Name != "kado" {
+		t.Fatalf("Update() removed = %#v, want retired kado skill", updated.Removed)
+	}
+	if _, err := os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retired skill still exists: %v", err)
 	}
 }
 

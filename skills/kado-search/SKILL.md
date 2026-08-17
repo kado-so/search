@@ -4,7 +4,7 @@ description: 'Expert at finding the best way to do a task — such as tools, sof
 license: "MIT"
 metadata:
   author: "Kado"
-  version: "0.3.6"
+  version: "0.3.7"
   homepage: "https://kado.so"
 ---
 
