@@ -78,10 +78,7 @@ func Dispatch(
 		return 0, false
 	}
 	cleanupLegacyUpdateFiles(executable)
-	if err := ensureBootstrap(executable, info.Version); err != nil {
-		return 0, false
-	}
-	payload, _, err := Active(executable)
+	payload, _, err := ensureBootstrap(executable, info.Version)
 	if err != nil {
 		setFallbackEnvironment(executable)
 		return 0, false
@@ -165,14 +162,14 @@ func Active(launcherPath string) (string, string, error) {
 	return activeFromRoot(managedRoot(launcherPath))
 }
 
-func ensureBootstrap(launcherPath, version string) error {
+func ensureBootstrap(launcherPath, version string) (string, string, error) {
 	if !validVersion(version) {
-		return errors.New("launcher version is invalid")
+		return "", "", errors.New("launcher version is invalid")
 	}
-	if _, _, err := Active(launcherPath); err == nil {
-		return nil
+	if payload, activeVersion, err := Active(launcherPath); err == nil {
+		return payload, activeVersion, nil
 	}
-	return WithUpdateLock(launcherPath, func() error {
+	err := WithUpdateLock(launcherPath, func() error {
 		if _, _, err := Active(launcherPath); err == nil {
 			return nil
 		}
@@ -184,6 +181,10 @@ func ensureBootstrap(launcherPath, version string) error {
 		}
 		return writeDirectReceipt(launcherPath)
 	})
+	if err != nil {
+		return "", "", err
+	}
+	return Active(launcherPath)
 }
 
 func directInstallation(launcherPath string) bool {
@@ -312,11 +313,36 @@ func installPayload(root, version string, value []byte, expectedDigest string) (
 		if err == nil && digest(existing) == expectedDigest {
 			return destination, nil
 		}
-		return "", errors.New("installed launcher version conflicts with candidate")
 	}
-	if _, err := os.Lstat(destinationDirectory); err == nil || !errors.Is(err, fs.ErrNotExist) {
+	backup := ""
+	if _, err := os.Lstat(destinationDirectory); err == nil {
+		placeholder, createErr := os.MkdirTemp(versions, ".kado-version-replaced-")
+		if createErr != nil {
+			return "", createErr
+		}
+		if removeErr := os.Remove(placeholder); removeErr != nil {
+			return "", removeErr
+		}
+		if renameErr := os.Rename(destinationDirectory, placeholder); renameErr != nil {
+			return "", renameErr
+		}
+		backup = placeholder
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", errors.New("launcher version directory is invalid")
 	}
+	committed := false
+	defer func() {
+		if backup == "" {
+			return
+		}
+		if committed {
+			_ = os.RemoveAll(backup)
+			return
+		}
+		_ = os.RemoveAll(destinationDirectory)
+		_ = os.Rename(backup, destinationDirectory)
+		_ = syncDirectory(versions)
+	}()
 	temporary, err := os.MkdirTemp(versions, ".kado-version-")
 	if err != nil {
 		return "", err
@@ -353,6 +379,7 @@ func installPayload(root, version string, value []byte, expectedDigest string) (
 		_ = syncDirectory(versions)
 		return "", err
 	}
+	committed = true
 	return destination, nil
 }
 

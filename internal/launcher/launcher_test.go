@@ -168,6 +168,32 @@ func TestModifiedNewestPayloadFallsBackToVerifiedActivation(t *testing.T) {
 	assertContent(t, payload, []byte("payload-one"))
 }
 
+func TestModifiedNewestPayloadCanBeRepaired(t *testing.T) {
+	t.Parallel()
+
+	launcherPath := testLauncher(t, []byte("stable-launcher"))
+	first := testCandidate(t, []byte("payload-one"))
+	secondValue := []byte("payload-two")
+	second := testCandidate(t, secondValue)
+	installForTest(t, launcherPath, "1.0.0", first)
+	installForTest(t, launcherPath, "1.1.0", second)
+
+	newest := filepath.Join(managedRoot(launcherPath), "versions", "1.1.0", executableName())
+	if err := os.WriteFile(newest, []byte("modified-payload"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, version, err := Active(launcherPath); err != nil || version != "1.0.0" {
+		t.Fatalf("Active() before repair version=%q error=%v", version, err)
+	}
+
+	installForTest(t, launcherPath, "1.1.0", second)
+	payload, version, err := Active(launcherPath)
+	if err != nil || version != "1.1.0" {
+		t.Fatalf("Active() after repair payload=%q version=%q error=%v", payload, version, err)
+	}
+	assertContent(t, payload, secondValue)
+}
+
 func TestExternalInstallReceiptDisablesDirectLauncher(t *testing.T) {
 	t.Parallel()
 
