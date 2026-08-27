@@ -1,0 +1,84 @@
+{
+  "schema_version": "kado.a2a-command-contract.v1",
+  "upstream_commit": "fdbb3aad6289c0070480147a29e04c3d46aa6c2f",
+  "upstream_version": "0.0.0-20260827.fdbb3aa",
+  "display_name": "kado a2a",
+  "global_flags": [
+    "--agent-card",
+    "--auth",
+    "--config",
+    "--endpoint",
+    "--help",
+    "--insecure",
+    "--output",
+    "--svc-param",
+    "--tenant",
+    "--timeout",
+    "--transport",
+    "--verbose",
+    "--version"
+  ],
+  "commands": [
+    { "path": "card", "local_flags": ["--help"] },
+    { "path": "card get", "local_flags": ["--extended", "--help"] },
+    { "path": "completion", "local_flags": ["--help"] },
+    { "path": "config", "local_flags": ["--help"] },
+    { "path": "config show", "local_flags": ["--help"] },
+    {
+      "path": "send",
+      "local_flags": [
+        "--async",
+        "--context-id",
+        "--data-part",
+        "--file-part",
+        "--help",
+        "--history",
+        "--media-type",
+        "--metadata",
+        "--polling-interval",
+        "--request-payload",
+        "--stream",
+        "--task-id",
+        "--text-part"
+      ]
+    },
+    {
+      "path": "server",
+      "local_flags": [
+        "--advertise-address",
+        "--card",
+        "--card-compat",
+        "--chunk",
+        "--description",
+        "--echo",
+        "--exec",
+        "--help",
+        "--host",
+        "--name",
+        "--port",
+        "--protocol",
+        "--proxy",
+        "--quiet",
+        "--serve-transport"
+      ]
+    },
+    { "path": "task", "local_flags": ["--help"] },
+    { "path": "task cancel", "local_flags": ["--help", "--metadata"] },
+    { "path": "task get", "local_flags": ["--help", "--history"] },
+    {
+      "path": "task list",
+      "local_flags": [
+        "--context",
+        "--help",
+        "--history",
+        "--limit",
+        "--page-token",
+        "--since",
+        "--status",
+        "--with-artifacts"
+      ]
+    },
+    { "path": "task subscribe", "local_flags": ["--help"] },
+    { "path": "version", "local_flags": ["--help"] }
+  ]
+}

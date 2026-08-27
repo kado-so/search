@@ -33,6 +33,41 @@ func TestA2ASourceLockIsClosedAndDisplayOnly(t *testing.T) {
 	}
 }
 
+func TestA2ACommandContractMatchesSourceLock(t *testing.T) {
+	root := repositoryRoot(t)
+	lock, _, err := loadA2ASourceLock(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(filepath.Join(root, "third_party", "a2a-cli", "command-contract.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	var contract struct {
+		SchemaVersion   string   `json:"schema_version"`
+		UpstreamCommit  string   `json:"upstream_commit"`
+		UpstreamVersion string   `json:"upstream_version"`
+		DisplayName     string   `json:"display_name"`
+		GlobalFlags     []string `json:"global_flags"`
+		Commands        []struct {
+			Path       string   `json:"path"`
+			LocalFlags []string `json:"local_flags"`
+		} `json:"commands"`
+	}
+	if err := decoder.Decode(&contract); err != nil {
+		t.Fatal(err)
+	}
+	if contract.SchemaVersion != "kado.a2a-command-contract.v1" ||
+		contract.UpstreamCommit != lock.Commit ||
+		contract.UpstreamVersion != lock.Version ||
+		contract.DisplayName != lock.DisplayName ||
+		len(contract.GlobalFlags) == 0 || len(contract.Commands) == 0 {
+		t.Fatalf("command contract does not match source lock: %#v", contract)
+	}
+}
+
 func TestPrepareA2ASourceAcceptsSnapshotAndTaggedLocks(t *testing.T) {
 	t.Run("snapshot", func(t *testing.T) {
 		fixture := newA2ASourceFixture(t)

@@ -29,8 +29,8 @@ func TestSearchUseInvokesOfficialLocalEchoAgent(t *testing.T) {
 	if binary == "" {
 		t.Skip("set KADO_A2A_QUALIFICATION_BINARY to a built paired Kado candidate")
 	}
-	if runtime.GOOS == "windows" {
-		t.Skip("temporary CA injection is unavailable with Go's Windows system root loader")
+	if runtime.GOOS != "linux" {
+		t.Skip("temporary CA injection is supported by this qualification only on Linux")
 	}
 	binary, err := filepath.Abs(binary)
 	if err != nil {

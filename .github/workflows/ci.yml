@@ -35,14 +35,92 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
           git diff --exit-code
-      - name: Build all release targets with GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+      - name: Cross-build the Kado executable
+        shell: bash
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            suffix=""
+            if test "$goos" = windows; then suffix=".exe"; fi
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/kado-$goos-$goarch$suffix" ./cmd/kado
+          done
+
+  build-candidate:
+    runs-on: depot-ubuntu-24.04
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
         with:
-          distribution: goreleaser
-          version: v2.17.1
-          args: build --clean --snapshot
+          fetch-depth: 0
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - id: identity
+        shell: bash
+        run: |
+          version="0.0.0-ci.${GITHUB_RUN_ID}"
+          commit="$(git rev-parse HEAD)"
+          epoch="$(git show -s --format=%ct HEAD)"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+          echo "epoch=$epoch" >>"$GITHUB_OUTPUT"
+      - id: a2a
+        name: Fetch locked official A2A source
+        shell: bash
+        run: |
+          lock="third_party/a2a-cli/upstream.lock.json"
+          repository="$(jq -r '.repository' "$lock")"
+          commit="$(jq -r '.commit' "$lock")"
+          test "$repository" = "https://github.com/a2aproject/a2a-cli"
+          printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'
+          checkout="$RUNNER_TEMP/kado-a2a-source"
+          git init "$checkout"
+          git -C "$checkout" remote add origin "$repository"
+          git -C "$checkout" fetch --force origin "$commit"
+          git -C "$checkout" fetch --force --tags origin
+          git -C "$checkout" checkout --detach "$commit"
+          echo "checkout=$checkout" >>"$GITHUB_OUTPUT"
+      - name: Build signed six-target candidate
+        shell: bash
+        env:
+          KADO_RELEASE_SIGNING_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        run: |
+          go run ./tools/release \
+            --version "${{ steps.identity.outputs.version }}" \
+            --commit "${{ steps.identity.outputs.commit }}" \
+            --source-date-epoch "${{ steps.identity.outputs.epoch }}" \
+            --a2a-source "${{ steps.a2a.outputs.checkout }}" \
+            --out dist/qualification
+      - name: Qualify Search use against official local echo agent
+        shell: bash
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/kado-candidate"
+          tar -xzf "dist/qualification/kado_${VERSION}_linux_amd64.tar.gz" \
+            -C "$RUNNER_TEMP/kado-candidate"
+          KADO_A2A_QUALIFICATION_BINARY="$RUNNER_TEMP/kado-candidate/kado" \
+            go test ./cmd/kado \
+              -run '^(TestA2ACandidate|TestSearchUseInvokesOfficialLocalEchoAgent$)' \
+              -count=1 -timeout=10m
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: dist/qualification/
+          if-no-files-found: error
+          retention-days: 14
 
   native-lifecycle:
+    needs: build-candidate
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -75,6 +153,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: release
       - id: toolchain
         shell: bash
         run: |
@@ -100,11 +182,44 @@ jobs:
       - name: Race-test A2A lifecycle, completion, and version presentation
         if: matrix.race
         run: go test -race ./internal/a2adispatch ./internal/buildinfo ./internal/cli ./internal/launcher ./internal/shellcompletion ./cmd/kado -count=1 -timeout=20m
+      - name: Qualify signed Unix candidate
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/kado-candidate"
+          tar -xzf "release/kado_${VERSION}_${TARGET_OS}_${TARGET_ARCH}.tar.gz" \
+            -C "$RUNNER_TEMP/kado-candidate"
+          export KADO_A2A_QUALIFICATION_BINARY="$RUNNER_TEMP/kado-candidate/kado"
+          go test ./cmd/kado -run '^TestA2ACandidate' -count=1 -timeout=10m
+          "$KADO_A2A_QUALIFICATION_BINARY" release verify --directory "$PWD/release"
+      - name: Qualify signed Windows candidate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          $candidate = Join-Path $env:RUNNER_TEMP 'kado-candidate'
+          Expand-Archive -LiteralPath "release/kado_$env:VERSION`_windows_$env:TARGET_ARCH.zip" -DestinationPath $candidate
+          $env:KADO_A2A_QUALIFICATION_BINARY = Join-Path $candidate 'kado.exe'
+          go test ./cmd/kado -run '^TestA2ACandidate' -count=1 -timeout=10m
+          if ($LASTEXITCODE -ne 0) { throw 'candidate qualification failed' }
+          & $env:KADO_A2A_QUALIFICATION_BINARY release verify --directory (Join-Path $PWD 'release')
+          if ($LASTEXITCODE -ne 0) { throw 'candidate verification failed' }
 
   unix-completion-engines:
+    needs: build-candidate
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: release
       - id: toolchain
         shell: bash
         run: |
@@ -118,9 +233,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes bash-completion zsh fish
       - name: Exercise Bash, Zsh, and Fish completion engines
         shell: bash
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
         run: |
           mkdir -p "$RUNNER_TEMP/kado-bin" "$RUNNER_TEMP/kado-completion"
-          go build -o "$RUNNER_TEMP/kado-bin/kado" ./cmd/kado
+          tar -xzf "release/kado_${VERSION}_linux_amd64.tar.gz" -C "$RUNNER_TEMP/kado-bin"
           export PATH="$RUNNER_TEMP/kado-bin:$PATH"
           export TERM=xterm
 
@@ -139,9 +256,14 @@ jobs:
           grep -q '^a2a' <<<"$fish_output"
 
   powershell-completion-engine:
+    needs: build-candidate
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: release
       - id: toolchain
         shell: bash
         run: |
@@ -153,13 +275,15 @@ jobs:
           go-version: ${{ steps.toolchain.outputs.version }}
       - name: Exercise PowerShell completion engine
         shell: pwsh
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
         run: |
           $binDirectory = Join-Path $env:RUNNER_TEMP 'kado-bin'
           $completionDirectory = Join-Path $env:RUNNER_TEMP 'kado-completion'
           New-Item -ItemType Directory -Force -Path $binDirectory, $completionDirectory | Out-Null
+          Expand-Archive -LiteralPath "release/kado_$env:VERSION`_windows_amd64.zip" -DestinationPath $binDirectory
           $kado = Join-Path $binDirectory 'kado.exe'
           $completion = Join-Path $completionDirectory 'completion.ps1'
-          go build -o $kado ./cmd/kado
           & $kado completion powershell | Set-Content -LiteralPath $completion -Encoding utf8
           . $completion
           Set-Alias -Name kado -Value $kado
