@@ -25,70 +25,47 @@ import (
 	"github.com/kado-so/search/internal/launcher"
 )
 
-func TestCleanInstallUpdateDowngradeDryRunAndUninstall(t *testing.T) {
+func TestLegacyDirectUpdateRequiresManualReinstallAndUninstallPreservesState(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	targetPath := filepath.Join(root, executableName(runtime.GOOS))
 	credential := filepath.Join(root, "credential-record")
+	configuration := filepath.Join(root, "config-record")
 	if err := os.WriteFile(credential, []byte("preserve"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	first := newReleaseFixture(t, "0.1.0", runtime.GOOS, runtime.GOARCH)
-	manager := first.manager(t)
-	result, err := manager.Update(context.Background(), Options{
-		TargetPath: targetPath,
-	})
-	if err != nil || !result.Changed || result.ToVersion != "0.1.0" {
-		t.Fatalf("first install result=%#v error=%v", result, err)
+	if err := os.WriteFile(configuration, []byte("preserve-config"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	assertFileContent(t, targetPath, first.binary)
-
-	second := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
-	manager = second.manager(t)
-	result, err = manager.Update(context.Background(), Options{
+	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
+	if _, err := fixture.manager(t).Update(context.Background(), Options{
 		TargetPath:     targetPath,
 		CurrentVersion: "0.1.0",
-		DryRun:         true,
-	})
-	if err != nil || result.Changed || !result.DryRun {
-		t.Fatalf("dry run result=%#v error=%v", result, err)
+	}); !errors.Is(err, ErrInstall) {
+		t.Fatalf("legacy direct update error = %v", err)
 	}
-	assertFileContent(t, targetPath, first.binary)
 
-	result, err = manager.Update(context.Background(), Options{
-		TargetPath:     targetPath,
-		CurrentVersion: "0.1.0",
-	})
-	if err != nil || !result.Changed {
-		t.Fatalf("update result=%#v error=%v", result, err)
+	if err := os.WriteFile(targetPath, []byte("installed-kado"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	assertFileContent(t, targetPath, second.binary)
-
-	downgrade := first.manager(t)
-	if _, err := downgrade.Update(context.Background(), Options{
-		TargetPath:     targetPath,
-		CurrentVersion: "0.2.0",
-	}); !errors.Is(err, ErrDowngrade) {
-		t.Fatalf("downgrade error = %v", err)
+	sidecarPath := filepath.Join(root, a2aInstalledName(targetPath))
+	if err := os.WriteFile(sidecarPath, []byte("installed-a2a"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := downgrade.Update(context.Background(), Options{
-		TargetPath:     targetPath,
-		CurrentVersion: "0.2.0",
-		AllowDowngrade: true,
-	}); err != nil {
-		t.Fatalf("explicit downgrade error = %v", err)
+	if err := os.Mkdir(targetPath+".d", 0o700); err != nil {
+		t.Fatal(err)
 	}
-	assertFileContent(t, targetPath, first.binary)
-
 	if err := Uninstall(targetPath); err != nil {
 		t.Fatalf("Uninstall error = %v", err)
 	}
-	if _, err := os.Stat(targetPath); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("executable still exists: %v", err)
+	for _, removed := range []string{targetPath, sidecarPath, targetPath + ".d"} {
+		if _, err := os.Stat(removed); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("managed path still exists: %s: %v", removed, err)
+		}
 	}
 	assertFileContent(t, credential, []byte("preserve"))
+	assertFileContent(t, configuration, []byte("preserve-config"))
 }
 
 func TestManagedUpdateLeavesLauncherAndRunningVersionUntouched(t *testing.T) {
@@ -100,12 +77,15 @@ func TestManagedUpdateLeavesLauncherAndRunningVersionUntouched(t *testing.T) {
 	if err := os.WriteFile(launcherPath, stable, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	initial := filepath.Join(root, "initial")
-	if err := os.WriteFile(initial, []byte("payload-0.1.0"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := launcher.WithUpdateLock(launcherPath, func() error {
-		return launcher.InstallVersionLocked(launcherPath, "0.1.0", initial)
+		return launcher.InstallBundleVersionLocked(
+			launcherPath,
+			"0.1.0",
+			launcher.ExecutableBundle{
+				Kado: []byte("payload-0.1.0"),
+				A2A:  []byte("a2a-0.1.0"),
+			},
+		)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +105,44 @@ func TestManagedUpdateLeavesLauncherAndRunningVersionUntouched(t *testing.T) {
 		t.Fatalf("active payload=%q version=%q error=%v", payload, version, err)
 	}
 	assertFileContent(t, payload, fixture.binary)
+	pair, bundleVersion, err := launcher.ActiveBundle(launcherPath)
+	if err != nil || bundleVersion != "0.2.0" || pair.Kado != payload {
+		t.Fatalf("active bundle=%#v version=%q error=%v", pair, bundleVersion, err)
+	}
+	assertFileContent(t, pair.A2A, []byte("fixture-a2a-sidecar"))
+}
+
+func TestSingleExecutableActivationCannotCrossBundleBoundary(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	launcherPath := filepath.Join(root, executableName(runtime.GOOS))
+	stable := []byte("stable-launcher")
+	if err := os.WriteFile(launcherPath, stable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyCandidate := filepath.Join(root, "legacy-candidate")
+	if err := os.WriteFile(legacyCandidate, []byte("legacy-payload"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := launcher.WithUpdateLock(launcherPath, func() error {
+		return launcher.InstallVersionLocked(launcherPath, "0.1.0", legacyCandidate)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
+	if _, err := fixture.manager(t).Update(context.Background(), Options{
+		TargetPath:   launcherPath,
+		LauncherPath: launcherPath,
+	}); !errors.Is(err, ErrInstall) {
+		t.Fatalf("single-executable migration error = %v", err)
+	}
+	assertFileContent(t, launcherPath, stable)
+	payload, version, err := launcher.Active(launcherPath)
+	if err != nil || version != "0.1.0" {
+		t.Fatalf("legacy activation changed: payload=%q version=%q error=%v", payload, version, err)
+	}
+	assertFileContent(t, payload, []byte("legacy-payload"))
 }
 
 func TestUpdateRejectsTamperChecksumAndUnsupportedPlatform(t *testing.T) {
@@ -1035,16 +1053,25 @@ func (fetcher mapFetcher) Fetch(
 
 func validArchive(t *testing.T, format, binaryName string, binary []byte) []byte {
 	t.Helper()
+	sidecarName, ok := a2aExecutableName(binaryName)
+	if !ok {
+		t.Fatalf("unsupported executable name %q", binaryName)
+	}
+	sidecar := []byte("fixture-a2a-sidecar")
 	if format == "zip" {
 		return makeTestZip(t, []zipEntry{
 			{name: binaryName, mode: 0o755, value: binary},
+			{name: sidecarName, mode: 0o755, value: sidecar},
 			{name: "LICENSE", mode: 0o644, value: []byte("license")},
+			{name: "LICENSE-A2A-CLI", mode: 0o644, value: []byte("a2a-license")},
 			{name: "INSTALL-CLI.md", mode: 0o644, value: []byte("guide")},
 		})
 	}
 	return makeTestTar(t, []tarEntry{
 		{name: binaryName, mode: 0o755, value: binary},
+		{name: sidecarName, mode: 0o755, value: sidecar},
 		{name: "LICENSE", mode: 0o644, value: []byte("license")},
+		{name: "LICENSE-A2A-CLI", mode: 0o644, value: []byte("a2a-license")},
 		{name: "INSTALL-CLI.md", mode: 0o644, value: []byte("guide")},
 	})
 }

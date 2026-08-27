@@ -233,8 +233,10 @@ func (manager Manager) Update(ctx context.Context, options Options) (Result, err
 	var result Result
 	var updateErr error
 	lockErr := launcher.WithUpdateLock(options.LauncherPath, func() error {
-		if _, activeVersion, err := launcher.Active(options.LauncherPath); err == nil {
+		if _, activeVersion, err := launcher.ActiveBundle(options.LauncherPath); err == nil {
 			options.CurrentVersion = activeVersion
+		} else {
+			return ErrInstall
 		}
 		result, updateErr = manager.update(ctx, options)
 		return updateErr
@@ -260,14 +262,6 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 		FromVersion: options.CurrentVersion,
 		Target:      goos + "/" + goarch,
 		DryRun:      options.DryRun,
-	}
-	targetSnapshot := ""
-	if !options.DryRun && options.LauncherPath == "" {
-		var snapshotErr error
-		targetSnapshot, snapshotErr = snapshotExecutable(options.TargetPath)
-		if snapshotErr != nil {
-			return result, ErrInstall
-		}
 	}
 	fetcher := manager.Fetcher
 	if fetcher == nil {
@@ -313,6 +307,9 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 			return result, ErrDowngrade
 		}
 		if comparison == 0 && !options.DryRun {
+			if options.LauncherPath == "" {
+				return result, ErrInstall
+			}
 			return result, nil
 		}
 	}
@@ -321,14 +318,14 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 	if err != nil {
 		return result, err
 	}
-	binary, err := VerifyTargetArchive(target, archive)
+	bundle, err := VerifyTargetBundle(target, archive)
 	if err != nil {
 		return result, err
 	}
 	if options.TargetPath == "" {
 		return result, ErrInstall
 	}
-	candidate, cleanup, err := writeCandidate(options.TargetPath, binary)
+	candidate, cleanup, err := writeCandidate(options.TargetPath, bundle.Kado)
 	if err != nil {
 		return result, ErrInstall
 	}
@@ -343,21 +340,19 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 	if options.DryRun {
 		return result, nil
 	}
-	pending := false
 	if options.LauncherPath != "" {
-		err = launcher.InstallVersionLocked(
+		err = launcher.InstallBundleVersionLocked(
 			options.LauncherPath,
 			metadata.Version,
-			candidate,
+			launcher.ExecutableBundle{Kado: bundle.Kado, A2A: bundle.A2A},
 		)
 	} else {
-		pending, err = manager.installCandidate(candidate, options.TargetPath, targetSnapshot)
+		return result, ErrInstall
 	}
 	if err != nil {
 		return result, ErrInstall
 	}
 	result.Changed = true
-	result.Pending = pending
 	return result, nil
 }
 
@@ -393,8 +388,8 @@ func VerifyTargetBundle(target Target, archive []byte) (ExecutableBundle, error)
 	return bundle, nil
 }
 
-// Uninstall removes only the selected executable. Credentials and config are
-// deliberately outside this boundary.
+// Uninstall removes the direct executable pair and managed activation state.
+// Credentials and config are deliberately outside this boundary.
 func Uninstall(targetPath string) error {
 	if err := validateTargetPath(targetPath, true); err != nil {
 		return ErrUninstall
@@ -410,10 +405,18 @@ func Uninstall(targetPath string) error {
 	if err := os.Remove(targetPath); err != nil {
 		return ErrUninstall
 	}
+	_ = os.Remove(filepath.Join(filepath.Dir(targetPath), a2aInstalledName(targetPath)))
 	_ = os.Remove(filepath.Join(filepath.Dir(targetPath), "kado.install.json"))
 	_ = os.RemoveAll(targetPath + ".d")
 	_ = syncDirectory(filepath.Dir(targetPath))
 	return nil
+}
+
+func a2aInstalledName(targetPath string) string {
+	if strings.HasSuffix(strings.ToLower(filepath.Base(targetPath)), ".exe") {
+		return "kado-a2a.exe"
+	}
+	return "kado-a2a"
 }
 
 // VerifyExecutable executes only the extracted same-platform candidate and

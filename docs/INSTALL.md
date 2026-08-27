@@ -24,8 +24,9 @@ release descriptor an agent can use to:
 2. download the matching versioned Kado release from `kado.so`;
 3. verify the signed release metadata, archive checksum, and executable
    identity;
-4. install the executable in a user-writable directory, or run its signed
-   updater when that destination already contains Kado;
+4. install the Kado and `kado-a2a` executable pair in a user-writable
+   directory, or run their signed paired updater when a current direct
+   installation already exists;
 5. run `kado skill install` to install the general Kado CLI skill and the latest
    compatible signed Search skill, with bundled copies as an offline fallback;
 6. run idempotent `kado auth create` to create an identity or reuse an active
@@ -41,17 +42,22 @@ Initial bootstrap uses operating-system facilities or the agent's own HTTPS
 download capability. After bootstrap, the Kado executable owns verification,
 skill installation, and direct-install updates.
 
-Direct installations use a stable launcher beside a private
-`kado[.exe].d` directory of immutable payload versions. Update work starts only
-after a foreground command finishes. It never changes that command's selected
-binary; a completely verified activation is observed only by a later CLI
-start. Concurrent old and new invocations may finish normally. Existing direct
-installations enter this layout after one explicit `kado update`.
+Direct installations use a stable Kado launcher and an adjacent `kado-a2a`
+sidecar beside a private `kado[.exe].d` directory of immutable executable-pair
+versions. An activation record authenticates both members, and a later CLI
+start observes either the previous complete pair or the new complete pair.
+
+Pre-A2A direct installations cannot cross this bundle boundary with their old
+`kado update`. Close all Kado processes, run the current signed uninstall
+script with confirmation but without credential purge, and then run the current
+signed installer. This one-time reinstall preserves configuration, identities,
+and credentials.
 
 The target user locations are:
 
-- macOS and Linux: `$HOME/.local/bin/kado`
-- Windows: `%LOCALAPPDATA%\Kado\kado.exe`
+- macOS and Linux: `$HOME/.local/bin/kado` and `$HOME/.local/bin/kado-a2a`
+- Windows: `%LOCALAPPDATA%\Kado\kado.exe` and
+  `%LOCALAPPDATA%\Kado\kado-a2a.exe`
 
 The installation flow must explain how to add that directory to `PATH` when it
 is not already present. It must remain non-interactive when the agent supplies

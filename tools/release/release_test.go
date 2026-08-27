@@ -233,9 +233,22 @@ func TestGeneratedInstallAndUninstallDocumentsEnforcePolicy(t *testing.T) {
 	}
 	for _, uninstall := range documents[3:] {
 		if !strings.Contains(strings.ToLower(uninstall), "purge") ||
-			!strings.Contains(strings.ToLower(uninstall), "preserv") {
+			!strings.Contains(strings.ToLower(uninstall), "preserv") ||
+			!strings.Contains(uninstall, "kado-a2a") {
 			t.Fatalf("uninstall description lost credential policy: %q", uninstall)
 		}
+	}
+	for _, install := range documents[:3] {
+		if !strings.Contains(install, "kado-a2a") ||
+			!strings.Contains(strings.ToLower(install), "reinstall") {
+			t.Fatalf("install description lost pair migration policy: %q", install)
+		}
+	}
+	if sidecar, kado := strings.Index(documents[1], `mv "$sidecar_candidate"`), strings.Index(documents[1], `mv "$candidate"`); sidecar < 0 || kado < 0 || sidecar >= kado {
+		t.Fatal("Unix installer does not expose the sidecar before Kado")
+	}
+	if sidecar, kado := strings.Index(documents[2], "Move-Item -LiteralPath $SidecarInstallCandidate"), strings.Index(documents[2], "Move-Item -LiteralPath $InstallCandidate"); sidecar < 0 || kado < 0 || sidecar >= kado {
+		t.Fatal("PowerShell installer does not expose the sidecar before Kado")
 	}
 }
 
@@ -319,6 +332,312 @@ func TestGeneratedUnixInstallerStillAuthenticatesAfterSkillFailure(t *testing.T)
 	if strings.Contains(string(output), "skills synchronized") ||
 		!strings.Contains(string(output), "skill setup requires retry") {
 		t.Fatalf("installer reported incorrect skill status: %q", output)
+	}
+}
+
+func TestGeneratedUnixCleanInstallStagesCompletePair(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native POSIX clean-install test")
+	}
+	root := t.TempDir()
+	fixtureDirectory := filepath.Join(root, "fixture")
+	fakeBin := filepath.Join(root, "fake-bin")
+	installDirectory := filepath.Join(root, "install")
+	for _, directory := range []string{fixtureDirectory, fakeBin} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metadata := []byte(`{"version":"1.2.3"}` + "\n")
+	if err := os.WriteFile(filepath.Join(fixtureDirectory, "release-metadata.json"), metadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixtureDirectory, "release-metadata.json.sig"), []byte("signature"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	candidate := []byte("#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  'version --json') printf '%s\\n' '{\"schema_version\":\"kado.version.v1\",\"kado\":{\"version\":\"1.2.3\",\"target\":\"" + runtime.GOOS + "/" + runtime.GOARCH + "\"}}' ;;\n" +
+		"  *) exit 0 ;;\n" +
+		"esac\n")
+	archive, err := makeTarGzip(
+		time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC),
+		"kado",
+		candidate,
+		[]byte("sidecar"),
+		[]byte("license\n"),
+		[]byte("a2a-license\n"),
+		[]byte("guide\n"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveName := "kado_1.2.3_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+	if err := os.WriteFile(filepath.Join(fixtureDirectory, archiveName), archive, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeCurl := `#!/bin/sh
+set -eu
+url=''
+output=''
+while test "$#" -gt 0; do
+  case "$1" in
+    -o) output="$2"; shift 2 ;;
+    http*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+name="${url##*/}"
+cp "$KADO_INSTALL_FIXTURE/$name" "$output"
+`
+	if err := os.WriteFile(filepath.Join(fakeBin, "curl"), []byte(fakeCurl), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("native POSIX shell is unavailable")
+	}
+	command := exec.Command(shell, "-c", installUnixScript(releaseIdentity{InstallURL: "https://fixture.invalid"}, "unused"))
+	command.Env = append(
+		os.Environ(),
+		"KADO_INSTALL_DIR="+installDirectory,
+		"KADO_INSTALL_FIXTURE="+fixtureDirectory,
+		"KADO_NO_MODIFY_PATH=1",
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("clean installer: %v\n%s", err, output)
+	}
+	for path, expected := range map[string][]byte{
+		filepath.Join(installDirectory, "kado"):              candidate,
+		filepath.Join(installDirectory, "kado-a2a"):          []byte("sidecar"),
+		filepath.Join(installDirectory, "kado.install.json"): []byte("{\"schema_version\":1,\"channel\":\"direct\"}\n"),
+	} {
+		value, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(value, expected) {
+			t.Fatalf("installed %s = %q, %v", path, value, err)
+		}
+	}
+}
+
+func TestGeneratedPowerShellCleanInstallStagesCompletePair(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("native PowerShell clean-install test")
+	}
+	powershell, err := exec.LookPath("powershell.exe")
+	if err != nil {
+		t.Skip("native PowerShell is unavailable")
+	}
+	goCommand, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("Go toolchain is unavailable for the executable fixture")
+	}
+	root := t.TempDir()
+	fixtureDirectory := filepath.Join(root, "fixture")
+	installDirectory := filepath.Join(root, "install")
+	if err := os.Mkdir(fixtureDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string][]byte{
+		"release-metadata.json":     []byte(`{"version":"1.2.3"}` + "\n"),
+		"release-metadata.json.sig": []byte("signature"),
+	} {
+		if err := os.WriteFile(filepath.Join(fixtureDirectory, name), value, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	helperSource := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) == 3 && os.Args[1] == "version" && os.Args[2] == "--json" {
+		fmt.Println("{\"schema_version\":\"kado.version.v1\",\"kado\":{\"version\":\"1.2.3\",\"target\":\"windows/` + runtime.GOARCH + `\"},\"components\":{\"a2a_cli\":{\"target\":\"windows/` + runtime.GOARCH + `\"}}}")
+	}
+}
+`
+	helperPath := filepath.Join(root, "fixture-helper.go")
+	if err := os.WriteFile(helperPath, []byte(helperSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	candidatePath := filepath.Join(root, "kado.exe")
+	if output, err := exec.Command(goCommand, "build", "-o", candidatePath, helperPath).CombinedOutput(); err != nil {
+		t.Fatalf("build fixture candidate: %v\n%s", err, output)
+	}
+	candidate, err := os.ReadFile(candidatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := makeZip(
+		time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC),
+		"kado.exe",
+		candidate,
+		[]byte("sidecar"),
+		[]byte("license\n"),
+		[]byte("a2a-license\n"),
+		[]byte("guide\n"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveName := "kado_1.2.3_windows_" + runtime.GOARCH + ".zip"
+	if err := os.WriteFile(filepath.Join(fixtureDirectory, archiveName), archive, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(root, "install.ps1")
+	if err := os.WriteFile(scriptPath, []byte(installPowerShellScript(releaseIdentity{InstallURL: "https://fixture.invalid"}, "unused")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commandText := `function Invoke-WebRequest { param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile); $name = [System.IO.Path]::GetFileName(([uri]$Uri).AbsolutePath); Copy-Item -LiteralPath (Join-Path $env:KADO_INSTALL_FIXTURE $name) -Destination $OutFile }; & $env:KADO_INSTALL_SCRIPT -InstallDirectory $env:KADO_INSTALL_TARGET -NoModifyPath`
+	command := exec.Command(powershell, "-NoProfile", "-Command", commandText)
+	command.Env = append(
+		os.Environ(),
+		"KADO_INSTALL_FIXTURE="+fixtureDirectory,
+		"KADO_INSTALL_SCRIPT="+scriptPath,
+		"KADO_INSTALL_TARGET="+installDirectory,
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("PowerShell clean installer: %v\n%s", err, output)
+	}
+	for path, expected := range map[string][]byte{
+		filepath.Join(installDirectory, "kado.exe"):          candidate,
+		filepath.Join(installDirectory, "kado-a2a.exe"):      []byte("sidecar"),
+		filepath.Join(installDirectory, "kado.install.json"): []byte("{\"schema_version\":1,\"channel\":\"direct\"}\r\n"),
+	} {
+		value, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(value, expected) {
+			t.Fatalf("installed %s = %d bytes, %v", path, len(value), err)
+		}
+	}
+}
+
+func TestGeneratedScriptsHaveValidNativeSyntax(t *testing.T) {
+	root := t.TempDir()
+	if shell, err := exec.LookPath("sh"); err == nil {
+		for name, value := range map[string]string{
+			"install.sh":   installUnixScript(releaseIdentity{InstallURL: "https://kado.so/install"}, "unused"),
+			"uninstall.sh": uninstallUnixScript(),
+		} {
+			path := filepath.Join(root, name)
+			if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if output, err := exec.Command(shell, "-n", path).CombinedOutput(); err != nil {
+				t.Fatalf("%s syntax: %v\n%s", name, err, output)
+			}
+		}
+	}
+	if powershell, err := exec.LookPath("powershell.exe"); runtime.GOOS == "windows" && err == nil {
+		for name, value := range map[string]string{
+			"install.ps1":   installPowerShellScript(releaseIdentity{InstallURL: "https://kado.so/install"}, "unused"),
+			"uninstall.ps1": uninstallPowerShellScript(),
+		} {
+			path := filepath.Join(root, name)
+			if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			command := `$tokens = $null; $parseErrors = $null; [System.Management.Automation.Language.Parser]::ParseFile($env:KADO_SCRIPT_TO_PARSE, [ref]$tokens, [ref]$parseErrors) | Out-Null; if ($parseErrors.Count -ne 0) { $parseErrors | Out-String | Write-Error; exit 1 }`
+			process := exec.Command(powershell, "-NoProfile", "-Command", command)
+			process.Env = append(os.Environ(), "KADO_SCRIPT_TO_PARSE="+path)
+			if output, err := process.CombinedOutput(); err != nil {
+				t.Fatalf("%s syntax: %v\n%s", name, err, output)
+			}
+		}
+	}
+}
+
+func TestGeneratedNativeUninstallerRemovesPairAndPreservesUserState(t *testing.T) {
+	root := t.TempDir()
+	installDirectory := filepath.Join(root, "bin")
+	if err := os.Mkdir(installDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configuration := filepath.Join(root, "configuration.json")
+	credential := filepath.Join(root, "credential.json")
+	if err := os.WriteFile(configuration, []byte("config-state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(credential, []byte("credential-state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configurationDigest := releaseclient.Digest([]byte("config-state"))
+	credentialDigest := releaseclient.Digest([]byte("credential-state"))
+
+	if runtime.GOOS == "windows" {
+		powershell, err := exec.LookPath("powershell.exe")
+		if err != nil {
+			t.Skip("native PowerShell is unavailable")
+		}
+		destination := filepath.Join(installDirectory, "kado.exe")
+		for path, value := range map[string][]byte{
+			destination: []byte("kado"),
+			filepath.Join(installDirectory, "kado-a2a.exe"):      []byte("a2a"),
+			filepath.Join(installDirectory, "kado.install.json"): []byte("receipt"),
+		} {
+			if err := os.WriteFile(path, value, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Mkdir(destination+".d", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		script := filepath.Join(root, "uninstall.ps1")
+		if err := os.WriteFile(script, []byte(uninstallPowerShellScript()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if output, err := exec.Command(powershell, "-NoProfile", "-File", script, "-Yes", "-Destination", destination).CombinedOutput(); err != nil {
+			t.Fatalf("PowerShell uninstall: %v\n%s", err, output)
+		}
+		for _, path := range []string{destination, filepath.Join(installDirectory, "kado-a2a.exe"), destination + ".d"} {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("managed path remains: %s: %v", path, err)
+			}
+		}
+	} else {
+		shell, err := exec.LookPath("sh")
+		if err != nil {
+			t.Skip("native POSIX shell is unavailable")
+		}
+		destination := filepath.Join(installDirectory, "kado")
+		for path, value := range map[string][]byte{
+			destination: []byte("#!/bin/sh\nexit 0\n"),
+			filepath.Join(installDirectory, "kado-a2a"):          []byte("a2a"),
+			filepath.Join(installDirectory, "kado.install.json"): []byte("receipt"),
+		} {
+			if err := os.WriteFile(path, value, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Mkdir(destination+".d", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		script := filepath.Join(root, "uninstall.sh")
+		if err := os.WriteFile(script, []byte(uninstallUnixScript()), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(shell, script, "--yes")
+		command.Env = append(os.Environ(), "KADO_INSTALL_PATH="+destination)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("Unix uninstall: %v\n%s", err, output)
+		}
+		for _, path := range []string{destination, filepath.Join(installDirectory, "kado-a2a"), destination + ".d"} {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("managed path remains: %s: %v", path, err)
+			}
+		}
+	}
+
+	configurationValue, err := os.ReadFile(configuration)
+	if err != nil || releaseclient.Digest(configurationValue) != configurationDigest {
+		t.Fatalf("configuration changed: %v", err)
+	}
+	credentialValue, err := os.ReadFile(credential)
+	if err != nil || releaseclient.Digest(credentialValue) != credentialDigest {
+		t.Fatalf("credential changed: %v", err)
 	}
 }
 

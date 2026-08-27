@@ -39,12 +39,18 @@ After installation:
     kado auth status
     kado skill status
 
-Use kado update for a signed update. Existing direct installations use one
-explicit update to enter the launcher layout. Later verified releases activate
-only for a new CLI start; a running command keeps its selected version.
+Use kado update for a signed update after the current installer has established
+the kado and kado-a2a pair. Later verified releases activate only for a new
+CLI start; a running command keeps its selected version.
 Downgrades are rejected unless --allow-downgrade is explicit. Use the supplied
 uninstall script with --yes; credentials are preserved unless
 --purge-credentials is also explicit.
+
+Installations from before Kado included the A2A sidecar require one manual
+reinstall. Close every Kado process, run the current signed uninstall script
+with --yes and without --purge-credentials, then run the current signed
+installer. This preserves configuration, identities, and credentials while
+installing the authenticated executable pair.
 `, source.Version, source.Repository, source.InstallURL, keyID)
 }
 
@@ -55,6 +61,7 @@ set -eu
 base_url=%q
 install_dir="${KADO_INSTALL_DIR:-${HOME}/.local/bin}"
 destination="$install_dir/kado"
+sidecar_destination="$install_dir/kado-a2a"
 
 case "$(uname -s)" in
   Darwin) target_os=darwin ;;
@@ -98,7 +105,7 @@ if test -e "$destination" || test -L "$destination"; then
     exit 1
   }
   if ! "$destination" update; then
-    printf 'kado is installed, but the update failed; run kado update to retry\n' >&2
+    printf 'this Kado installation may require a one-time reinstall; run the current uninstall script with --yes (without --purge-credentials), then rerun this installer\n' >&2
     exit 1
   fi
 else
@@ -113,14 +120,18 @@ else
   download "$base_url/releases/$version/$archive" "$temporary/$archive"
   listing="$(tar -tzf "$temporary/$archive")"
   test "$listing" = "kado
+kado-a2a
 LICENSE
+LICENSE-A2A-CLI
 INSTALL-CLI.md" || {
     printf 'archive contains unexpected paths\n' >&2
     exit 1
   }
   tar -xzf "$temporary/$archive" -C "$temporary"
   test -f "$temporary/kado" && test ! -L "$temporary/kado"
+  test -f "$temporary/kado-a2a" && test ! -L "$temporary/kado-a2a"
   test "$(executable_mode "$temporary/kado")" = "755"
+	test "$(executable_mode "$temporary/kado-a2a")" = "755"
 	identity="$("$temporary/kado" version --json)"
 	printf '%%s\n' "$identity" | grep -F '"schema_version":"kado.version.v1"' >/dev/null
 	printf '%%s\n' "$identity" | grep -F "\"kado\":{\"version\":\"${version}\"" >/dev/null
@@ -128,9 +139,13 @@ INSTALL-CLI.md" || {
   "$temporary/kado" release verify --directory "$temporary" >/dev/null
 
   mkdir -p "$install_dir"
+  sidecar_candidate="$(mktemp "$install_dir/.kado-a2a-candidate.XXXXXX")"
+  cp "$temporary/kado-a2a" "$sidecar_candidate"
+  chmod 755 "$sidecar_candidate"
   candidate="$(mktemp "$install_dir/.kado-candidate.XXXXXX")"
   cp "$temporary/kado" "$candidate"
   chmod 755 "$candidate"
+  mv "$sidecar_candidate" "$sidecar_destination"
   mv "$candidate" "$destination"
 fi
 
@@ -211,6 +226,7 @@ if test "$purge" = yes; then
   "$destination" auth revoke
 fi
 rm -f "$destination"
+rm -f "$(dirname "$destination")/kado-a2a"
 rm -f "$(dirname "$destination")/kado.install.json"
 rm -rf "$destination.d"
 if test "$purge" = yes; then
@@ -229,6 +245,7 @@ func installPowerShellScript(source releaseIdentity, keyID string) string {
 $ErrorActionPreference = "Stop"
 $BaseUrl = %q
 $Destination = Join-Path $InstallDirectory "kado.exe"
+$SidecarDestination = Join-Path $InstallDirectory "kado-a2a.exe"
 $Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
   "X64" { "amd64" }
   "Arm64" { "arm64" }
@@ -250,7 +267,7 @@ try {
     $UpdateExitCode = $LASTEXITCODE
     $UpdateOutput | Write-Output
     if ($UpdateExitCode -ne 0) {
-      throw "Kado is installed, but the update failed; run 'kado update' to retry"
+      throw "This Kado installation may require a one-time reinstall. Run the current uninstall script with -Yes (without -PurgeCredentials), then rerun this installer."
     }
     $UpdateFinished = $false
     for ($Attempt = 0; $Attempt -lt 300; $Attempt++) {
@@ -278,17 +295,26 @@ try {
     Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/releases/$Version/$Archive" -OutFile (Join-Path $Temporary $Archive)
     Expand-Archive -LiteralPath (Join-Path $Temporary $Archive) -DestinationPath $Temporary
     $CandidateBinary = Join-Path $Temporary "kado.exe"
+	$CandidateSidecar = Join-Path $Temporary "kado-a2a.exe"
+	$SidecarInfo = Get-Item -LiteralPath $CandidateSidecar -Force
+	if ($SidecarInfo.PSIsContainer -or $SidecarInfo.LinkType) {
+	  throw "candidate A2A sidecar is invalid"
+	}
 	$Identity = & $CandidateBinary version --json | ConvertFrom-Json
 	if ($Identity.schema_version -ne "kado.version.v1" -or
 	    $Identity.kado.version -ne $Version -or
-	    $Identity.kado.target -ne "windows/$Arch") {
+	    $Identity.kado.target -ne "windows/$Arch" -or
+	    $Identity.components.a2a_cli.target -ne "windows/$Arch") {
       throw "candidate executable identity is invalid"
     }
     & $CandidateBinary release verify --directory $Temporary | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "release bundle verification failed" }
 
+	$SidecarInstallCandidate = Join-Path $InstallDirectory (".kado-a2a-candidate-" + [guid]::NewGuid().ToString("N") + ".exe")
+	Copy-Item -LiteralPath $CandidateSidecar -Destination $SidecarInstallCandidate
     $InstallCandidate = Join-Path $InstallDirectory (".kado-candidate-" + [guid]::NewGuid().ToString("N") + ".exe")
     Copy-Item -LiteralPath $CandidateBinary -Destination $InstallCandidate
+	Move-Item -LiteralPath $SidecarInstallCandidate -Destination $SidecarDestination -Force
     Move-Item -LiteralPath $InstallCandidate -Destination $Destination
   }
 
@@ -348,6 +374,7 @@ if ($PurgeCredentials) {
 }
 Remove-Item -LiteralPath $Destination -Force
 $InstallDirectory = Split-Path -Parent $Destination
+Remove-Item -LiteralPath (Join-Path $InstallDirectory "kado-a2a.exe") -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $InstallDirectory "kado.install.json") -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath ($Destination + ".d") -Recurse -Force -ErrorAction SilentlyContinue
 if ($PurgeCredentials) {

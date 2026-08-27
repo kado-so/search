@@ -23,11 +23,13 @@ import (
 const (
 	launcherEnvironment = "KADO_LAUNCHER_PATH"
 	payloadEnvironment  = "KADO_PAYLOAD_PATH"
-	activationVersion   = 1
+	activationVersionV1 = 1
+	activationVersionV2 = 2
 	maxActivationSize   = 4096
 	activationDigits    = 20
 	retainedVersions    = 2
 	receiptName         = "kado.install.json"
+	maxPayloadSize      = 96 << 20
 )
 
 var (
@@ -42,11 +44,23 @@ type Installation struct {
 }
 
 type activation struct {
-	SchemaVersion int    `json:"schema_version"`
-	Generation    uint64 `json:"generation"`
-	Version       string `json:"version"`
-	Executable    string `json:"executable"`
-	SHA256        string `json:"sha256"`
+	SchemaVersion int              `json:"schema_version"`
+	Generation    uint64           `json:"generation"`
+	Version       string           `json:"version"`
+	Executable    string           `json:"executable,omitempty"`
+	SHA256        string           `json:"sha256,omitempty"`
+	Files         *activationFiles `json:"files,omitempty"`
+}
+
+type activationFiles struct {
+	Kado activationFile `json:"kado"`
+	A2A  activationFile `json:"a2a"`
+}
+
+type activationFile struct {
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
 }
 
 type receipt struct {
@@ -173,7 +187,26 @@ func ensureBootstrap(launcherPath, version string) (string, string, error) {
 		if _, _, err := Active(launcherPath); err == nil {
 			return nil
 		}
-		if err := InstallVersionLocked(launcherPath, version, launcherPath); err != nil {
+		sidecarPath := filepath.Join(filepath.Dir(launcherPath), a2aExecutableName())
+		if _, statErr := os.Lstat(sidecarPath); statErr == nil {
+			kado, readErr := readBootstrapExecutable(launcherPath)
+			if readErr != nil {
+				return readErr
+			}
+			sidecar, readErr := readBootstrapExecutable(sidecarPath)
+			if readErr != nil {
+				return readErr
+			}
+			if err := InstallBundleVersionLocked(
+				launcherPath,
+				version,
+				ExecutableBundle{Kado: kado, A2A: sidecar},
+			); err != nil {
+				return err
+			}
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return errors.New("launcher bootstrap sidecar is unavailable")
+		} else if err := InstallVersionLocked(launcherPath, version, launcherPath); err != nil {
 			return err
 		}
 		if _, err := os.Lstat(filepath.Join(filepath.Dir(launcherPath), receiptName)); err == nil {
@@ -263,12 +296,8 @@ func activeFromRoot(root string) (string, string, error) {
 		if readErr != nil {
 			continue
 		}
-		payload := filepath.Join(root, filepath.FromSlash(record.Executable))
-		if !validPayload(root, payload, record.Version) {
-			continue
-		}
-		value, readErr := os.ReadFile(payload)
-		if readErr != nil || digest(value) != record.SHA256 {
+		payload, valid := validatedActivationPayload(root, record)
+		if !valid {
 			continue
 		}
 		return payload, record.Version, nil
@@ -293,15 +322,43 @@ func readActivation(directory, name string) (activation, error) {
 		return activation{}, errors.New("activation has trailing content")
 	}
 	generation, err := strconv.ParseUint(strings.TrimSuffix(name, ".json"), 10, 64)
-	if err != nil || record.SchemaVersion != activationVersion || record.Generation != generation ||
-		!validVersion(record.Version) || record.Executable != payloadRelativePath(record.Version) ||
-		len(record.SHA256) != sha256.Size*2 {
+	if err != nil || record.Generation != generation || !validVersion(record.Version) {
 		return activation{}, errors.New("activation is invalid")
 	}
-	if _, err := hex.DecodeString(record.SHA256); err != nil {
-		return activation{}, errors.New("activation digest is invalid")
+	switch record.SchemaVersion {
+	case activationVersionV1:
+		if record.Files != nil || record.Executable != payloadRelativePath(record.Version) ||
+			!validDigest(record.SHA256) {
+			return activation{}, errors.New("activation is invalid")
+		}
+	case activationVersionV2:
+		if record.Executable != "" || record.SHA256 != "" || record.Files == nil ||
+			!validActivationFile(record.Files.Kado, bundleKadoRelativePath(record.Version)) ||
+			!validActivationFile(record.Files.A2A, bundleA2ARelativePath(record.Version)) {
+			return activation{}, errors.New("activation is invalid")
+		}
+	default:
+		return activation{}, errors.New("activation is invalid")
 	}
 	return record, nil
+}
+
+func readBootstrapExecutable(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0 ||
+		info.Size() <= 0 || info.Size() > maxPayloadSize {
+		return nil, errors.New("launcher bootstrap executable is unavailable")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errors.New("launcher bootstrap executable is unavailable")
+	}
+	value, readErr := io.ReadAll(io.LimitReader(file, maxPayloadSize+1))
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil || int64(len(value)) != info.Size() {
+		return nil, errors.New("launcher bootstrap executable is unavailable")
+	}
+	return value, nil
 }
 
 func installPayload(root, version string, value []byte, expectedDigest string) (string, error) {
@@ -403,7 +460,13 @@ func writeActivation(root, version, digestValue string) error {
 		return errors.New("activation generation is exhausted")
 	}
 	generation++
-	record := activation{activationVersion, generation, version, payloadRelativePath(version), digestValue}
+	record := activation{
+		SchemaVersion: activationVersionV1,
+		Generation:    generation,
+		Version:       version,
+		Executable:    payloadRelativePath(version),
+		SHA256:        digestValue,
+	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -466,6 +529,9 @@ func cleanup(root string) {
 		record, readErr := readActivation(directory, entry.Name())
 		if readErr != nil {
 			_ = os.Remove(filepath.Join(directory, entry.Name()))
+			continue
+		}
+		if _, valid := validatedActivationPayload(root, record); !valid {
 			continue
 		}
 		records = append(records, validRecord{name: entry.Name(), version: record.Version})

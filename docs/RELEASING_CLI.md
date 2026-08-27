@@ -92,15 +92,16 @@ The generated `INSTALL-CLI.md`, `install.sh`, and `install.ps1` implement the
 agent-first bootstrap from canonical `kado.so` HTTPS endpoints. For a new
 installation they select the host target, download stable signed metadata and
 the immutable versioned archive, run verification through the candidate, and
-install into a user-owned directory. When Kado already occupies the expected
-destination, they invoke its signed updater instead. Both paths configure user
+install the sidecar first and expose Kado last in a user-owned directory. When
+a current paired Kado installation already occupies the expected destination,
+they invoke its signed updater. A failed legacy update reports the required
+one-time uninstall/reinstall migration. Both successful paths configure user
 PATH when needed, reconcile the signed skill catalog across detected
 harnesses and `~/.agents/skills`, and create or reuse and verify authentication.
 `kado update` verifies the signed archive descriptor, safely extracts the
-candidate, and checks its stamped release identity. An existing legacy direct
-installation uses that explicit update to install a launcher-capable release.
-Thereafter, the stable executable activates candidates from immutable version
-directories without replacing a running file.
+candidate, and checks its stamped release identity. A current direct
+installation activates complete pairs from immutable version directories
+without replacing the stable launcher.
 
 ## Runtime update and removal policy
 
@@ -110,13 +111,18 @@ responses, unsupported targets, bad signatures, archive digest mismatches,
 unsafe archive paths/types/modes, and mismatched candidate identity before
 activation. Downgrades fail unless `--allow-downgrade` is explicit. `--dry-run`
 performs all verification without changing files. One OS-backed lock serializes
-the complete download and activation transaction and is released by the OS if
-the updater crashes. A candidate is finalized in a new version directory before
-an immutable activation record is published. Previous activation records remain
-valid, so an interrupted update cannot remove the last launchable version.
+the complete transaction. Both executables are finalized and revalidated in a
+new version directory before an activation-v2 record publishes their exact
+paths, sizes, and hashes. Previous complete activations remain available for
+fallback.
 
-`kado uninstall --yes` removes only the executable and preserves configuration
-and autonomous-agent credentials. `--purge-credentials` first performs the
+Pre-A2A direct installations require the documented one-time signed
+uninstall/reinstall migration. Their old `kado update` is not a supported path
+across the bundle boundary.
+
+`kado uninstall --yes` removes both executables and managed activation state
+while preserving configuration and autonomous-agent credentials.
+`--purge-credentials` first performs the
 existing authenticated revocation; if revocation fails, the executable remains.
 The generated uninstall scripts provide the same policy and are the preferred
 removal path on Windows, where a running executable can be locked.
