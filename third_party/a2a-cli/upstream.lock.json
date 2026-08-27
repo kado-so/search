@@ -1,0 +1,27 @@
+{
+  "schema_version": "kado.a2a-source-lock.v1",
+  "repository": "https://github.com/a2aproject/a2a-cli",
+  "module": "github.com/a2aproject/a2a-cli",
+  "version": "0.0.0-20260827.fdbb3aa",
+  "commit": "fdbb3aad6289c0070480147a29e04c3d46aa6c2f",
+  "source_archive_sha256": "ce0df0c12a8ba6d8f98f638b78ddbf8847e65f777e013c0c28e477f2cb76771a",
+  "source_tree_sha256": "e57ad46d845c02437dae32ec62bf7340498769b6ceee6cc6a0f3d06ce9b94ee2",
+  "patched_tree_sha256": "deca53a940b0167ec93df9facb086608ad15abf14e0b1432e6911a78e8851828",
+  "go_mod_sha256": "6fb4857f02a8ca343b302d7b2ddbd1a5090dc42da8f80a1587ad7cb29688643f",
+  "go_sum_sha256": "9dc03b632203e02e7bb2dcec9f305b72d5b9ea0c0b1b959a2160b5f78abe9a18",
+  "license": {
+    "path": "LICENSE",
+    "spdx": "Apache-2.0",
+    "sha256": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6"
+  },
+  "notice_files": [],
+  "go_toolchain": "go1.26.4",
+  "display_name": "kado a2a",
+  "patch_set_sha256": "3488875917de1fc0dd0b1d1e86fcdc13919f0103409598cd55d19605e1c34e71",
+  "patches": [
+    {
+      "path": "patches/0001-configurable-display-name.patch",
+      "sha256": "daf677b649d50efc53a89e5f42477e50d3879d4779f77b1e4950703e37cb14b6"
+    }
+  ]
+}

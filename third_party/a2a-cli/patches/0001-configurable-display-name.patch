@@ -1,0 +1,15 @@
+diff --git a/internal/cli/root.go b/internal/cli/root.go
+index 5f74d56..3f1acdb 100644
+--- a/internal/cli/root.go
++++ b/internal/cli/root.go
+@@ -83,0 +84,4 @@ func Execute() int {
++// displayName changes only Cobra's rendered command path. Official upstream
++// builds retain "a2a"; Kado release builds set this to "kado a2a" at link time.
++var displayName = "a2a"
++
+@@ -88 +92,4 @@ func newRootCmd(cfg *globalConfig, deps deps) *cobra.Command {
+-		Use:           "a2a",
++		Use: "a2a",
++		Annotations: map[string]string{
++			cobra.CommandDisplayNameAnnotation: displayName,
++		},
