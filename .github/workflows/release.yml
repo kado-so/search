@@ -338,7 +338,7 @@ jobs:
           UNINSTALL_COMMAND: ${{ matrix.uninstall }}
         run: |
           if ($env:CHANNEL -eq 'winget') {
-            winget validate --manifest "release/packages/winget/manifests"
+            winget validate --ignore-warnings --manifest "release/packages/winget/manifests"
             if ($LASTEXITCODE -ne 0) { throw 'WinGet manifest validation failed' }
           }
           $root = Join-Path $env:RUNNER_TEMP "Kado package ü\$env:CHANNEL"

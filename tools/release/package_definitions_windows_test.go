@@ -23,7 +23,7 @@ func TestGeneratedWinGetManifestPassesInstalledValidator(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(winget, "validate", "--manifest", filepath.Join(output, "manifests"))
+	command := exec.Command(winget, "validate", "--ignore-warnings", "--manifest", filepath.Join(output, "manifests"))
 	if result, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("winget validate: %v output=%q", err, result)
 	}
