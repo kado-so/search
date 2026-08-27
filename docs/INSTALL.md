@@ -97,16 +97,22 @@ A successful direct CLI update automatically syncs Kado-managed skill copies.
 If a skill update fails, the new CLI remains installed and reports the repair
 command. Skill removal does not remove the CLI or revoke credentials.
 
-## Future optional distribution channels
+## Package-manager distribution
 
-Only agent-first installation and direct downloads are in the initial
-distribution scope. These channels may be added later:
+Release builds also produce channel-stamped pairs and current package
+definitions for Homebrew, WinGet, Scoop, Debian, RPM, and containers. Each
+manager keeps the real `kado` and `kado-a2a` files together in one owned
+directory. Homebrew and Linux packages expose only a public Kado symlink;
+Scoop exposes only its Kado shim; WinGet declares only the Kado portable alias;
+and the container image starts the real Kado member of its private pair.
 
-1. a Kado-owned Homebrew tap for macOS and Linux;
-2. WinGet for Windows;
-3. Scoop for Windows;
-4. Debian and RPM repositories for managed Linux systems;
-5. container images for CI and ephemeral agents.
+Package-owned binaries do not run Kado's direct updater or uninstaller. They
+stop before release or credential state is opened and print the owning
+manager's exact command. Use `brew`, `winget`, `scoop`, `apt`, or `dnf` for the
+corresponding lifecycle. Replace or remove a container through its deployment
+tool. The manager may relocate, relink, or repair the package because Kado
+canonicalizes the running executable and verifies only the fixed sibling in
+that real directory.
 
 GitHub Releases are published now as a mirror of the exact `kado.so` release
 artifacts, but are not the CLI's runtime update origin.

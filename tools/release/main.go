@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kado-so/search/internal/installchannel"
 	"github.com/kado-so/search/internal/releaseclient"
 )
 
@@ -41,6 +42,7 @@ type options struct {
 	version   string
 	a2aSource string
 	a2aLock   string
+	channel   string
 }
 
 type releaseIdentity struct {
@@ -59,6 +61,12 @@ func main() {
 	flag.StringVar(&configured.version, "version", "", "semantic release version")
 	flag.StringVar(&configured.a2aSource, "a2a-source", "", "official A2A CLI Git checkout")
 	flag.StringVar(&configured.a2aLock, "a2a-lock", a2aDefaultLock, "repository-relative A2A source lock")
+	flag.StringVar(
+		&configured.channel,
+		"install-channel",
+		installchannel.Direct,
+		"installation owner: direct, homebrew, winget, scoop, deb, rpm, or container",
+	)
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fatal(errors.New("release does not accept positional arguments"))
@@ -86,6 +94,9 @@ func run(configured options) error {
 	source, err := newReleaseIdentity(configured.version)
 	if err != nil {
 		return err
+	}
+	if !installchannel.Valid(configured.channel) {
+		return errors.New("--install-channel is invalid")
 	}
 	if err := verifyGoVersion(root, "go"); err != nil {
 		return err
@@ -141,6 +152,7 @@ func run(configured options) error {
 	if err != nil {
 		return err
 	}
+	targets := targetsForInstallChannel(configured.channel)
 	executables, err := buildExecutables(
 		root,
 		workspace,
@@ -151,6 +163,8 @@ func run(configured options) error {
 		public,
 		keyID,
 		metadataURL,
+		configured.channel,
+		targets,
 		prepared,
 	)
 	if err != nil {
@@ -160,7 +174,7 @@ func run(configured options) error {
 	if err := os.Mkdir(staging, 0o755); err != nil {
 		return errors.New("release artifact staging could not be created")
 	}
-	if err := buildRelease(buildInput{
+	input := buildInput{
 		root:         root,
 		output:       staging,
 		kadoPrebuilt: executables.KadoDirectory,
@@ -175,16 +189,27 @@ func run(configured options) error {
 		publicKey:    public,
 		publicPEM:    publicPEM,
 		keyID:        keyID,
-	}); err != nil {
-		return err
+		channel:      configured.channel,
+		targets:      targets,
+	}
+	if configured.channel == installchannel.Direct {
+		if err := buildRelease(input); err != nil {
+			return err
+		}
+	} else {
+		if err := buildPackageRelease(input); err != nil {
+			return err
+		}
 	}
 	if err := replaceOutput(staging, output); err != nil {
 		return err
 	}
 	fmt.Printf(
-		"release finalized version=%s commit=%s targets=6 output=%s\n",
+		"release finalized version=%s commit=%s channel=%s targets=%d output=%s\n",
 		source.Version,
 		configured.commit,
+		configured.channel,
+		len(targets),
 		output,
 	)
 	return nil

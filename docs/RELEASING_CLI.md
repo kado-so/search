@@ -21,6 +21,19 @@ contains exactly five root entries: `kado[.exe]`, `kado-a2a[.exe]`, `LICENSE`,
 `LICENSE-A2A-CLI`, and `INSTALL-CLI.md`. Executables use mode `0755`; support
 files use `0644`; timestamps and entry order are deterministic.
 
+The release workflow also builds every package identity: `homebrew`, `winget`,
+`scoop`, `deb`, `rpm`, and `container`. Homebrew receives both architectures
+for macOS and Linux; WinGet and Scoop receive both Windows architectures; and
+deb, rpm, and containers receive both Linux architectures. Package artifacts
+live under `packages/<channel>/`. They deliberately do not reuse the direct
+updater's six-target metadata contract. Instead, each compact package directory
+contains only its supported paired archives, an Ed25519-signed checksum list,
+the release public key, and the manager-native definition generated from the
+exact archive URLs and hashes: `kado.rb`, `kado.json`, a clean three-file
+WinGet `manifests/` directory, a Debian builder, RPM specs, or a container
+Dockerfile. Each Kado executable is stamped with that closed channel while
+retaining the exact sibling size and SHA-256.
+
 ## Signing boundary
 
 Release metadata uses a detached Ed25519 signature. The production signing seed
@@ -63,6 +76,19 @@ go run ./tools/release \
   --source-date-epoch 1784851200 \
   --a2a-source /absolute/path/to/a2a-cli \
   --out dist/release
+```
+
+To reproduce one package-owned candidate, add a closed channel and use an
+isolated output directory:
+
+```bash
+go run ./tools/release \
+  --version 0.1.0 \
+  --commit 0123456789abcdef0123456789abcdef01234567 \
+  --source-date-epoch 1784851200 \
+  --a2a-source /absolute/path/to/a2a-cli \
+  --install-channel homebrew \
+  --out dist/release/packages/homebrew
 ```
 
 Delete the temporary seed and dry-run directories after verification. The
@@ -126,6 +152,14 @@ while preserving configuration and autonomous-agent credentials.
 existing authenticated revocation; if revocation fails, the executable remains.
 The generated uninstall scripts provide the same policy and are the preferred
 removal path on Windows, where a running executable can be locked.
+
+For a package-owned build, both lifecycle commands refuse before any release
+or credential mutation and print the owning manager command. A package must
+install the two real files together in its private directory and expose only
+Kado where the manager supports a private sidecar. The release matrix invokes
+every native target through its link or junction, verifies delegation, checks
+the refusal text and unchanged hashes, rejects a tampered sidecar, restores it,
+and proves delegation recovers.
 
 The CLI release also owns a version-compatible embedded copy of the Search
 skill. Installing, refreshing, or removing that copy is a distinct local

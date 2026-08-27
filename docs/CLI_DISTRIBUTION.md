@@ -160,13 +160,24 @@ Every installed executable needs an installation channel:
 - `container`
 
 Direct installers write a protected adjacent receipt. Packages stamp the
-channel at build time or install their own non-direct receipt. A missing receipt
-is accepted only by a canonical direct release as a legacy migration case; an
-invalid or explicitly non-direct receipt disables launcher management.
+channel at build time. A missing receipt is accepted only by a canonical
+direct release as a legacy migration case; an invalid or explicitly non-direct
+receipt disables launcher management.
 
 For a current direct installation, `kado update` installs a signed immutable
 Kado/A2A executable pair and appends an activation-v2 record that authenticates
 both members. Automatic maintenance uses the same path.
+
+Package-managed `kado update` and `kado uninstall` calls fail before release
+or credential state is initialized. The diagnostic names the owner and exact
+manager command. Container builds instead direct the caller to the deployment
+tool because Kado cannot know whether Docker, Podman, Kubernetes, or another
+orchestrator owns that image.
+
+All channels use one runtime rule: canonicalize the real Kado executable and
+accept only the regular, non-symlink `kado-a2a` sibling whose bounded size and
+SHA-256 match the values stamped into Kado. No channel searches `PATH`, the
+current directory, or environment overrides for the sidecar.
 
 ## Launcher and pre-A2A migration
 
@@ -215,8 +226,14 @@ Implemented in this repository:
 - asynchronous skill refresh and cached CLI update availability notices;
 - agent-first Unix and Windows installers;
 - Windows verified-candidate update handoff;
-- Depot CI, deterministic paired release construction, native smoke jobs, and GitHub
-  Releases.
+- Depot CI, deterministic paired release construction, native smoke jobs, and
+  GitHub Releases;
+- closed direct/Homebrew/WinGet/Scoop/deb/rpm/container build identities;
+- manager-native Homebrew, Scoop, and WinGet definitions plus Debian, RPM, and
+  container build definitions, backed by compact signed-checksum package
+  artifact sets; and
+- six-target package-pair release gates covering canonical links/junctions,
+  lifecycle refusal, tamper rejection, repair, and unchanged pair hashes.
 
 Required outside or after this repository change:
 

@@ -30,6 +30,8 @@ func buildExecutables(
 	publicKey ed25519.PublicKey,
 	keyID string,
 	metadataURL string,
+	installChannel string,
+	targets []buildTarget,
 	a2a a2aPreparedSource,
 ) (executableBuild, error) {
 	wantToolchain, err := pinnedGoVersionFromRoot(root)
@@ -54,12 +56,12 @@ func buildExecutables(
 		"GOTOOLCHAIN":       "local",
 		"SOURCE_DATE_EPOCH": strconv.FormatInt(builtAt.Unix(), 10),
 	})
-	for _, target := range releaseTargets {
+	for _, target := range targets {
 		if err := buildA2AExecutable(a2a, a2aOutput, goBinary, baseEnvironment, source.Version, builtAt, target); err != nil {
 			return executableBuild{}, err
 		}
 	}
-	for _, target := range releaseTargets {
+	for _, target := range targets {
 		if err := buildKadoExecutable(
 			root,
 			kadoOutput,
@@ -72,6 +74,7 @@ func buildExecutables(
 			publicKey,
 			keyID,
 			metadataURL,
+			installChannel,
 			a2a,
 			target,
 		); err != nil {
@@ -134,6 +137,7 @@ func buildKadoExecutable(
 	publicKey ed25519.PublicKey,
 	keyID string,
 	metadataURL string,
+	installChannel string,
 	a2a a2aPreparedSource,
 	target buildTarget,
 ) error {
@@ -154,7 +158,7 @@ func buildKadoExecutable(
 		" -X " + buildinfoPackage + "ReleasePublicKey=" + releaseclient.PublicKeyText(publicKey) +
 		" -X " + buildinfoPackage + "ReleaseKeyID=" + keyID +
 		" -X " + buildinfoPackage + "ReleaseMetadataURL=" + metadataURL +
-		" -X " + buildinfoPackage + "InstallChannel=direct" +
+		" -X " + buildinfoPackage + "InstallChannel=" + installChannel +
 		" -X " + buildinfoPackage + "A2AVersion=" + a2a.Lock.Version +
 		" -X " + buildinfoPackage + "A2ATag=" + a2aTagValue(a2a.Lock.Tag) +
 		" -X " + buildinfoPackage + "A2AUpstreamCommit=" + a2a.Lock.Commit +

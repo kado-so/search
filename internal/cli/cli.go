@@ -25,6 +25,7 @@ import (
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/config"
 	"github.com/kado-so/search/internal/diagnostic"
+	"github.com/kado-so/search/internal/installchannel"
 	"github.com/kado-so/search/internal/keystore"
 	"github.com/kado-so/search/internal/launcher"
 	"github.com/kado-so/search/internal/localstate"
@@ -668,6 +669,9 @@ func runUpdate(
 			return usageError("usage: kado update [--dry-run] [--allow-downgrade]")
 		}
 	}
+	if err := packageManagedDiagnostic("update", info.InstallChannel); err != nil {
+		return err
+	}
 	if dependencies.newRelease == nil {
 		return releaseDiagnostic(errors.New("release support unavailable"))
 	}
@@ -750,6 +754,9 @@ func runUninstall(
 			"uninstall requires --yes; credentials are preserved unless --purge-credentials is explicit",
 		)
 	}
+	if err := packageManagedDiagnostic("uninstall", info.InstallChannel); err != nil {
+		return err
+	}
 	if purgeCredentials {
 		if dependencies.newAuth == nil {
 			return authDiagnostic("revoke", errors.New("authentication unavailable"))
@@ -785,6 +792,58 @@ func runUninstall(
 		_, _ = fmt.Fprintln(stdout, "removed kado; credentials were preserved")
 	}
 	return nil
+}
+
+func packageManagedDiagnostic(action, channel string) error {
+	type instructions struct {
+		owner     string
+		update    string
+		uninstall string
+	}
+	channels := map[string]instructions{
+		installchannel.Homebrew: {
+			owner: "Homebrew", update: "brew upgrade kado", uninstall: "brew uninstall kado",
+		},
+		installchannel.WinGet: {
+			owner: "WinGet", update: "winget upgrade --id Kado.Kado --exact", uninstall: "winget uninstall --id Kado.Kado --exact",
+		},
+		installchannel.Scoop: {
+			owner: "Scoop", update: "scoop update kado", uninstall: "scoop uninstall kado",
+		},
+		installchannel.Deb: {
+			owner: "the Debian package manager", update: "sudo apt-get install --only-upgrade kado", uninstall: "sudo apt-get remove kado",
+		},
+		installchannel.RPM: {
+			owner: "the RPM package manager", update: "sudo dnf upgrade kado", uninstall: "sudo dnf remove kado",
+		},
+	}
+	if channel == installchannel.Container {
+		return diagnostic.New(
+			"release_package_managed",
+			"this Kado executable belongs to a container image; replace or remove the container through its owning deployment tool",
+			diagnostic.ExitFailure,
+			nil,
+		)
+	}
+	instruction, ok := channels[channel]
+	if !ok {
+		return nil
+	}
+	command := instruction.update
+	if action == "uninstall" {
+		command = instruction.uninstall
+	}
+	return diagnostic.New(
+		"release_package_managed",
+		fmt.Sprintf(
+			"this Kado installation is managed by %s; run `%s` to %s it",
+			instruction.owner,
+			command,
+			action,
+		),
+		diagnostic.ExitFailure,
+		nil,
+	)
 }
 
 func releaseDiagnostic(cause error) error {

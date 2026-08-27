@@ -276,6 +276,82 @@ func TestActualA2ADoesNotSearchPathCurrentDirectoryOrEnvironment(t *testing.T) {
 	}
 }
 
+func TestActualPackageOwnedPathDelegatesAndRefusesLifecycle(t *testing.T) {
+	channel := "homebrew"
+	updateCommand := "brew upgrade kado"
+	uninstallCommand := "brew uninstall kado"
+	if runtime.GOOS == "windows" {
+		channel = "scoop"
+		updateCommand = "scoop update kado"
+		uninstallCommand = "scoop uninstall kado"
+	}
+
+	built := buildA2ATestPairWithLDFlags(
+		t,
+		false,
+		"-X github.com/kado-so/search/internal/buildinfo.InstallChannel="+channel,
+	)
+	packageRoot := filepath.Join(t.TempDir(), "Kado package ü", channel, "1.2.3", "libexec")
+	if err := os.MkdirAll(packageRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{kadoTestBinaryName(), a2aTestBinaryName()} {
+		value, err := os.ReadFile(filepath.Join(built, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(packageRoot, name), value, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	publicRoot := filepath.Join(t.TempDir(), "Kado public ü")
+	if err := os.MkdirAll(publicRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	publicKado := filepath.Join(publicRoot, kadoTestBinaryName())
+	if runtime.GOOS == "windows" {
+		aliasRoot := filepath.Join(publicRoot, "current")
+		if output, err := exec.Command("cmd", "/c", "mklink", "/J", aliasRoot, packageRoot).CombinedOutput(); err != nil {
+			t.Fatalf("create package junction: %v output=%q", err, output)
+		}
+		publicKado = filepath.Join(aliasRoot, kadoTestBinaryName())
+	} else if err := os.Symlink(filepath.Join(packageRoot, kadoTestBinaryName()), publicKado); err != nil {
+		t.Fatalf("create public Kado link: %v", err)
+	}
+
+	delegated := runA2ATestProcess(t, publicKado, a2aFixtureEnvironment(0), "", "a2a", "--output", "json", "version")
+	if delegated.exitCode != 0 || delegated.stderr != "fixture-stderr\n" {
+		t.Fatalf("delegated result = %+v", delegated)
+	}
+	before := make(map[string][32]byte, 2)
+	for _, name := range []string{kadoTestBinaryName(), a2aTestBinaryName()} {
+		value, err := os.ReadFile(filepath.Join(packageRoot, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = sha256.Sum256(value)
+	}
+	for _, operation := range []struct {
+		arguments []string
+		command   string
+	}{
+		{arguments: []string{"update", "--dry-run"}, command: updateCommand},
+		{arguments: []string{"uninstall", "--yes", "--purge-credentials"}, command: uninstallCommand},
+	} {
+		result := runA2ATestProcess(t, publicKado, a2aFixtureEnvironment(0), "", operation.arguments...)
+		if result.exitCode != 1 || result.stdout != "" || !strings.Contains(result.stderr, operation.command) {
+			t.Fatalf("Run(%q) = %+v", operation.arguments, result)
+		}
+	}
+	for name, digest := range before {
+		value, err := os.ReadFile(filepath.Join(packageRoot, name))
+		if err != nil || sha256.Sum256(value) != digest {
+			t.Fatalf("package member %s changed: %v", name, err)
+		}
+	}
+}
+
 func buildA2ATestPair(t *testing.T, managed bool) string {
 	t.Helper()
 	return buildA2ATestPairWithLDFlags(t, managed, "")

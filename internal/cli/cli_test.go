@@ -1205,6 +1205,118 @@ func TestUpdateDowngradeFailureIsSafe(t *testing.T) {
 	}
 }
 
+func TestPackageManagedLifecycleFailsBeforeSideEffects(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		channel string
+		update  string
+		remove  string
+	}{
+		{channel: "homebrew", update: "brew upgrade kado", remove: "brew uninstall kado"},
+		{channel: "winget", update: "winget upgrade --id Kado.Kado --exact", remove: "winget uninstall --id Kado.Kado --exact"},
+		{channel: "scoop", update: "scoop update kado", remove: "scoop uninstall kado"},
+		{channel: "deb", update: "sudo apt-get install --only-upgrade kado", remove: "sudo apt-get remove kado"},
+		{channel: "rpm", update: "sudo dnf upgrade kado", remove: "sudo dnf remove kado"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.channel, func(t *testing.T) {
+			t.Parallel()
+			dependencies := dependencies{
+				newRelease: func(buildinfo.Info) (releaseCommands, error) {
+					t.Fatal("release state initialized")
+					return nil, nil
+				},
+				newAuth: func(string) (authCommands, error) {
+					t.Fatal("credential state initialized")
+					return nil, nil
+				},
+			}
+			for _, operation := range []struct {
+				args    []string
+				command string
+			}{
+				{args: []string{"update"}, command: test.update},
+				{args: []string{"uninstall", "--yes", "--purge-credentials"}, command: test.remove},
+			} {
+				var stdout, stderr bytes.Buffer
+				exitCode := runWithDependencies(
+					operation.args,
+					&stdout,
+					&stderr,
+					buildinfo.Info{InstallChannel: test.channel},
+					dependencies,
+				)
+				if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 ||
+					!strings.Contains(stderr.String(), "release_package_managed") ||
+					!strings.Contains(stderr.String(), operation.command) {
+					t.Fatalf(
+						"Run(%q) exit=%d stdout=%q stderr=%q",
+						operation.args,
+						exitCode,
+						stdout.String(),
+						stderr.String(),
+					)
+				}
+			}
+		})
+	}
+}
+
+func TestContainerManagedLifecycleFailsBeforeSideEffects(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"update", "--dry-run"},
+		{"uninstall", "--yes", "--purge-credentials"},
+	} {
+		var stdout, stderr bytes.Buffer
+		exitCode := runWithDependencies(
+			args,
+			&stdout,
+			&stderr,
+			buildinfo.Info{InstallChannel: "container"},
+			dependencies{
+				newRelease: func(buildinfo.Info) (releaseCommands, error) {
+					t.Fatal("release state initialized")
+					return nil, nil
+				},
+				newAuth: func(string) (authCommands, error) {
+					t.Fatal("credential state initialized")
+					return nil, nil
+				},
+			},
+		)
+		if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 ||
+			!strings.Contains(stderr.String(), "release_package_managed") ||
+			!strings.Contains(stderr.String(), "container image") {
+			t.Fatalf("Run(%q) exit=%d stdout=%q stderr=%q", args, exitCode, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestDirectAndDeveloperLifecycleStillUseReleaseState(t *testing.T) {
+	t.Parallel()
+
+	for _, channel := range []string{"direct", "unknown", ""} {
+		releases := &fakeReleaseCommands{}
+		var stdout, stderr bytes.Buffer
+		exitCode := runWithDependencies(
+			[]string{"update", "--dry-run"},
+			&stdout,
+			&stderr,
+			buildinfo.Info{InstallChannel: channel},
+			dependencies{newRelease: func(buildinfo.Info) (releaseCommands, error) {
+				return releases, nil
+			}},
+		)
+		if exitCode != 0 || stderr.Len() != 0 || !releases.options.DryRun {
+			t.Fatalf("channel=%q exit=%d stdout=%q stderr=%q options=%#v", channel, exitCode, stdout.String(), stderr.String(), releases.options)
+		}
+	}
+}
+
 func TestUninstallPreservesCredentialsUnlessPurgeIsExplicit(t *testing.T) {
 	t.Parallel()
 

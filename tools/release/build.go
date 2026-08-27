@@ -47,6 +47,8 @@ type buildInput struct {
 	publicKey    ed25519.PublicKey
 	publicPEM    []byte
 	keyID        string
+	channel      string
+	targets      []buildTarget
 }
 
 type builtFile struct {
@@ -122,8 +124,12 @@ func buildRelease(input buildInput) error {
 	if err != nil {
 		return err
 	}
-	targets := make([]releaseclient.Target, 0, len(releaseTargets))
-	for _, target := range releaseTargets {
+	buildTargets := input.targets
+	if len(buildTargets) == 0 {
+		buildTargets = releaseTargets
+	}
+	targets := make([]releaseclient.Target, 0, len(buildTargets))
+	for _, target := range buildTargets {
 		built, err := buildTargetArtifacts(
 			input,
 			target,

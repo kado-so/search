@@ -184,6 +184,22 @@ func TestPinnedGoVersionComesFromGoModToolchain(t *testing.T) {
 	}
 }
 
+func TestRunRejectsUnknownInstallChannelBeforeEnvironmentAccess(t *testing.T) {
+	t.Parallel()
+
+	err := run(options{
+		root:    t.TempDir(),
+		output:  t.TempDir(),
+		commit:  strings.Repeat("a", 40),
+		epoch:   315532800,
+		version: "1.2.3",
+		channel: "brew",
+	})
+	if err == nil || err.Error() != "--install-channel is invalid" {
+		t.Fatalf("run() error = %v", err)
+	}
+}
+
 func TestGeneratedInstallAndUninstallDocumentsEnforcePolicy(t *testing.T) {
 	t.Parallel()
 
