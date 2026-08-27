@@ -126,6 +126,37 @@ func TestPrepareA2ASourceRejectsSnapshotAfterReleaseTagAppears(t *testing.T) {
 	}
 }
 
+func TestPrepareA2ASourceIgnoresHostGitConfiguration(t *testing.T) {
+	fixture := newA2ASourceFixture(t)
+	configurationDirectory := t.TempDir()
+	attributesPath := filepath.Join(configurationDirectory, "attributes")
+	if err := os.WriteFile(attributesPath, []byte("* text eol=crlf\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configuration := []byte("[core]\n\tautocrlf = true\n\teol = crlf\n\tattributesFile = " + filepath.ToSlash(attributesPath) + "\n")
+	configurationPath := filepath.Join(configurationDirectory, "gitconfig")
+	if err := os.WriteFile(configurationPath, configuration, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", configurationPath)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "")
+	t.Setenv("GIT_ATTR_NOSYSTEM", "")
+
+	prepared, err := prepareA2ASource(
+		fixture.root,
+		fixture.source,
+		fixture.lockPath,
+		filepath.Join(t.TempDir(), "prepared"),
+		"go",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.TreeSHA256 != fixture.lock.PatchedTreeSHA256 {
+		t.Fatalf("prepared tree = %s", prepared.TreeSHA256)
+	}
+}
+
 func TestPrepareA2ASourceRejectsChangedInputsBeforeUse(t *testing.T) {
 	tests := []struct {
 		name   string

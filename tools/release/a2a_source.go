@@ -181,10 +181,11 @@ func prepareA2ASource(root, sourceRepository, lockPath, destination, goBinary st
 	}
 	archive, err := commandOutput(
 		sourceRepository,
-		nil,
+		a2aGitEnvironment(),
 		"git",
 		"-c", "core.autocrlf=false",
 		"-c", "core.eol=lf",
+		"-c", "core.attributesFile="+os.DevNull,
 		"archive", "--format=tar", lock.Commit,
 	)
 	if err != nil {
@@ -247,22 +248,23 @@ func prepareA2ASource(root, sourceRepository, lockPath, destination, goBinary st
 }
 
 func verifyA2ASourceRepository(repository string, lock a2aSourceLock) error {
-	origin, err := commandOutput(repository, nil, "git", "remote", "get-url", "origin")
+	environment := a2aGitEnvironment()
+	origin, err := commandOutput(repository, environment, "git", "remote", "get-url", "origin")
 	if err != nil || normalizeA2ARepository(string(origin)) != lock.Repository {
 		return errors.New("A2A source origin does not match the lock")
 	}
-	commit, err := commandOutput(repository, nil, "git", "rev-parse", lock.Commit+"^{commit}")
+	commit, err := commandOutput(repository, environment, "git", "rev-parse", lock.Commit+"^{commit}")
 	if err != nil || strings.TrimSpace(string(commit)) != lock.Commit {
 		return errors.New("A2A source commit is unavailable")
 	}
 	if lock.Tag != "" {
-		resolved, err := commandOutput(repository, nil, "git", "rev-parse", "refs/tags/"+lock.Tag+"^{commit}")
+		resolved, err := commandOutput(repository, environment, "git", "rev-parse", "refs/tags/"+lock.Tag+"^{commit}")
 		if err != nil || strings.TrimSpace(string(resolved)) != lock.Commit {
 			return errors.New("locked A2A tag does not resolve to the locked commit")
 		}
 		return nil
 	}
-	tags, err := commandOutput(repository, nil, "git", "tag", "--points-at", lock.Commit)
+	tags, err := commandOutput(repository, environment, "git", "tag", "--points-at", lock.Commit)
 	if err != nil {
 		return errors.New("A2A source tags could not be inspected")
 	}
@@ -279,6 +281,14 @@ func normalizeA2ARepository(value string) string {
 	value = strings.TrimSuffix(value, "/")
 	value = strings.TrimSuffix(value, ".git")
 	return value
+}
+
+func a2aGitEnvironment() []string {
+	return withReleaseEnvironment(sanitizedEnvironment(), map[string]string{
+		"GIT_ATTR_NOSYSTEM":   "1",
+		"GIT_CONFIG_GLOBAL":   os.DevNull,
+		"GIT_CONFIG_NOSYSTEM": "1",
+	})
 }
 
 func extractA2AArchive(encoded []byte, destination string) error {
@@ -397,10 +407,10 @@ func applyA2ASourcePatches(lockDirectory, sourceRoot string, patches []a2aLocked
 		if err != nil || bytes.Contains(value, []byte{'\r'}) || digestA2ABytes(value) != locked.SHA256 {
 			return "", errors.New("A2A patch checksum does not match the lock")
 		}
-		if _, err := commandOutput(sourceRoot, nil, "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", "--check", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
+		if _, err := commandOutput(sourceRoot, a2aGitEnvironment(), "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.attributesFile="+os.DevNull, "apply", "--check", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
 			return "", errors.New("A2A display patch does not apply cleanly")
 		}
-		if _, err := commandOutput(sourceRoot, nil, "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
+		if _, err := commandOutput(sourceRoot, a2aGitEnvironment(), "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.attributesFile="+os.DevNull, "apply", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
 			return "", errors.New("A2A display patch could not be applied")
 		}
 	}
