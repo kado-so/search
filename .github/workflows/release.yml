@@ -92,11 +92,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: depot-ubuntu-24.04
+          - runner: ubuntu-24.04
             archive: kado_${{ needs.build.outputs.version }}_linux_amd64.tar.gz
             binary: kado
-          - runner: depot-windows-2025
+          - runner: ubuntu-24.04-arm
+            archive: kado_${{ needs.build.outputs.version }}_linux_arm64.tar.gz
+            binary: kado
+          - runner: macos-15-intel
+            archive: kado_${{ needs.build.outputs.version }}_darwin_amd64.tar.gz
+            binary: kado
+          - runner: macos-15
+            archive: kado_${{ needs.build.outputs.version }}_darwin_arm64.tar.gz
+            binary: kado
+          - runner: windows-2025
             archive: kado_${{ needs.build.outputs.version }}_windows_amd64.zip
+            binary: kado.exe
+          - runner: windows-11-arm
+            archive: kado_${{ needs.build.outputs.version }}_windows_arm64.zip
             binary: kado.exe
     runs-on: ${{ matrix.runner }}
     steps:
@@ -117,6 +129,7 @@ jobs:
           test "$(./extracted/$BINARY version --json | jq -r '.kado.version')" = "$VERSION"
           test "$(./extracted/$BINARY version --json | jq -r '.schema_version')" = "kado.version.v1"
           ./extracted/kado-a2a --output json version >/dev/null
+          ./extracted/$BINARY a2a --output json version >/dev/null
           ./extracted/$BINARY release verify --directory "$PWD/release"
       - name: Smoke test Windows archive
         if: runner.os == 'Windows'
@@ -141,6 +154,8 @@ jobs:
           }
           & "extracted/kado-a2a.exe" --output json version | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "A2A version check failed" }
+          & "extracted/$env:BINARY" a2a --output json version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "namespaced A2A version check failed" }
           & "extracted/$env:BINARY" release verify --directory "$PWD/release"
           if ($LASTEXITCODE -ne 0) { throw "release verification failed" }
 

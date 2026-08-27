@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 type a2aFixtureInvocation struct {
@@ -25,6 +26,12 @@ type a2aProcessResult struct {
 	stdout   string
 	stderr   string
 	exitCode int
+}
+
+type a2aProcessRecord struct {
+	PID       int `json:"pid"`
+	ParentPID int `json:"parent_pid"`
+	ChildPID  int `json:"child_pid,omitempty"`
 }
 
 func TestActualA2ADispatchMatchesDirectSidecar(t *testing.T) {
@@ -360,4 +367,25 @@ func a2aTestBinarySuffix() string {
 		return ".exe"
 	}
 	return ""
+}
+
+func waitA2AProcessRecord(t *testing.T, path string) a2aProcessRecord {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		value, err := os.ReadFile(path)
+		if err == nil {
+			var record a2aProcessRecord
+			if json.Unmarshal(value, &record) == nil && record.PID > 0 && record.ParentPID > 0 {
+				return record
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("process record %q was not written", path)
+	return a2aProcessRecord{}
+}
+
+func processDescription(record a2aProcessRecord) string {
+	return fmt.Sprintf("sidecar=%d parent=%d child=%d", record.PID, record.ParentPID, record.ChildPID)
 }

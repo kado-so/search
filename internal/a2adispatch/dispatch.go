@@ -75,6 +75,14 @@ func forwardedArguments(arguments []string) ([]string, bool) {
 	return forwarded, true
 }
 
+// Matches reports whether arguments select the A2A namespace. The stable
+// Windows launcher uses this before activation so its Job Object contains the
+// complete launched process tree.
+func Matches(arguments []string) bool {
+	_, ok := forwardedArguments(arguments)
+	return ok
+}
+
 func commandIndex(arguments []string) (int, bool) {
 	if len(arguments) < 2 {
 		return 0, false

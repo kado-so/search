@@ -84,6 +84,26 @@ func TestForwardedArgumentsDoesNotMaintainAnUpstreamPolicy(t *testing.T) {
 	}
 }
 
+func TestMatchesUsesTheDispatchBoundary(t *testing.T) {
+	for _, test := range []struct {
+		arguments []string
+		matches   bool
+	}{
+		{arguments: []string{"kado", "a2a", "send", "hello"}, matches: true},
+		{arguments: []string{"kado", "--agent", "codex", "a2a", "--help"}, matches: true},
+		{arguments: []string{"kado", "help", "a2a"}, matches: true},
+		{arguments: []string{"kado", "--agent=codex", "help", "a2a", "task"}, matches: true},
+		{arguments: []string{"kado", "help"}},
+		{arguments: []string{"kado", "use", "send", "hello"}},
+		{arguments: []string{"kado", "search", "a2a"}},
+		{arguments: []string{"kado", "--agent"}},
+	} {
+		if got := Matches(test.arguments); got != test.matches {
+			t.Fatalf("Matches(%q) = %v, want %v", test.arguments, got, test.matches)
+		}
+	}
+}
+
 func TestVerifiedSidecarUsesCanonicalExecutableDirectory(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "installed bundle ü")

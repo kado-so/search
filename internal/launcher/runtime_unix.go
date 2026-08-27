@@ -8,7 +8,7 @@ import (
 	"syscall"
 )
 
-func runPayload(payload, launcherPath string, arguments []string, _ io.Reader, _, _ io.Writer) (int, bool) {
+func runPayload(payload, launcherPath string, arguments []string, _ io.Reader, _, _ io.Writer, _ bool) (int, bool) {
 	if len(arguments) == 0 {
 		arguments = []string{payload}
 	} else {

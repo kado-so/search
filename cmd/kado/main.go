@@ -11,7 +11,8 @@ import (
 
 func main() {
 	info := buildinfo.Current()
-	if code, handled := launcher.Dispatch(info, os.Args, os.Stdin, os.Stdout, os.Stderr); handled {
+	a2aInvocation := a2adispatch.Matches(os.Args)
+	if code, handled := launcher.Dispatch(info, os.Args, os.Stdin, os.Stdout, os.Stderr, a2aInvocation); handled {
 		os.Exit(code)
 	}
 	if code, handled := a2adispatch.Dispatch(info, os.Args, os.Stdin, os.Stdout, os.Stderr); handled {

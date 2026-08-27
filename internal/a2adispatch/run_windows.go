@@ -5,7 +5,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+
+	"github.com/kado-so/search/internal/processtree"
 )
+
+var ensureProcessTree = processtree.EnsureKillOnClose
 
 func runSidecar(
 	sidecar string,
@@ -13,6 +17,9 @@ func runSidecar(
 	stdin io.Reader,
 	stdout, stderr io.Writer,
 ) (int, error) {
+	if err := ensureProcessTree(); err != nil {
+		return 0, err
+	}
 	command := exec.Command(sidecar, arguments...)
 	command.Env = os.Environ()
 	command.Stdin = stdin

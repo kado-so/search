@@ -77,6 +77,7 @@ func Dispatch(
 	arguments []string,
 	stdin io.Reader,
 	stdout, stderr io.Writer,
+	containProcessTree bool,
 ) (int, bool) {
 	executable, err := currentExecutable()
 	if err != nil {
@@ -86,7 +87,7 @@ func Dispatch(
 		if samePath(executable, pinned) {
 			return 0, false
 		}
-		return runPayload(pinned, launcherPath, arguments, stdin, stdout, stderr)
+		return runPayload(pinned, launcherPath, arguments, stdin, stdout, stderr, containProcessTree)
 	}
 	if info.InstallChannel != "direct" || !installedExecutablePath(executable) || !directInstallation(executable) {
 		return 0, false
@@ -97,7 +98,7 @@ func Dispatch(
 		setFallbackEnvironment(executable)
 		return 0, false
 	}
-	return runPayload(payload, executable, arguments, stdin, stdout, stderr)
+	return runPayload(payload, executable, arguments, stdin, stdout, stderr, containProcessTree)
 }
 
 // CurrentInstallation returns the validated stable launcher selected by the
