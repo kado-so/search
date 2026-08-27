@@ -51,7 +51,22 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ steps.toolchain.outputs.version }}
-      - name: Export signed release build metadata
+      - name: Fetch locked official A2A source
+        id: a2a
+        run: |
+          lock="third_party/a2a-cli/upstream.lock.json"
+          repository="$(jq -r '.repository' "$lock")"
+          commit="$(jq -r '.commit' "$lock")"
+          test "$repository" = "https://github.com/a2aproject/a2a-cli"
+          printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'
+          checkout="$RUNNER_TEMP/kado-a2a-source"
+          git init "$checkout"
+          git -C "$checkout" remote add origin "$repository"
+          git -C "$checkout" fetch --force origin "$commit"
+          git -C "$checkout" fetch --force --tags origin
+          git -C "$checkout" checkout --detach "$commit"
+          echo "checkout=$checkout" >>"$GITHUB_OUTPUT"
+      - name: Build and sign the two-executable release
         env:
           KADO_RELEASE_SIGNING_KEY: ${{ secrets.KADO_RELEASE_SIGNING_KEY }}
           VERSION: ${{ steps.inputs.outputs.version }}
@@ -62,25 +77,7 @@ jobs:
             --version "$VERSION" \
             --commit "$COMMIT" \
             --source-date-epoch "$EPOCH" \
-            --write-goreleaser-env "$GITHUB_ENV"
-      - name: Build all release targets with GoReleaser
-        uses: goreleaser/goreleaser-action@v7
-        with:
-          distribution: goreleaser
-          version: v2.17.1
-          args: build --clean
-      - name: Finalize signed release
-        env:
-          KADO_RELEASE_SIGNING_KEY: ${{ secrets.KADO_RELEASE_SIGNING_KEY }}
-          VERSION: ${{ steps.inputs.outputs.version }}
-          COMMIT: ${{ steps.inputs.outputs.commit }}
-          EPOCH: ${{ steps.inputs.outputs.epoch }}
-        run: |
-          go run ./tools/release \
-            --version "$VERSION" \
-            --commit "$COMMIT" \
-            --source-date-epoch "$EPOCH" \
-            --prebuilt dist/goreleaser \
+            --a2a-source "${{ steps.a2a.outputs.checkout }}" \
             --out dist/release
       - uses: actions/upload-artifact@v7
         with:
@@ -117,7 +114,9 @@ jobs:
         run: |
           mkdir extracted
           tar -xzf "release/$ARCHIVE" -C extracted
-          test "$(./extracted/$BINARY version --json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')" = "$VERSION"
+          test "$(./extracted/$BINARY version --json | jq -r '.kado.version')" = "$VERSION"
+          test "$(./extracted/$BINARY version --json | jq -r '.schema_version')" = "kado.version.v1"
+          ./extracted/kado-a2a --output json version >/dev/null
           ./extracted/$BINARY release verify --directory "$PWD/release"
       - name: Smoke test Windows archive
         if: runner.os == 'Windows'
@@ -137,7 +136,11 @@ jobs:
           if ($ParseErrors.Count -ne 0) { throw "install.ps1 does not parse" }
           Expand-Archive -LiteralPath "release/$env:ARCHIVE" -DestinationPath extracted
           $identity = & "extracted/$env:BINARY" version --json | ConvertFrom-Json
-          if ($identity.version -ne $env:VERSION) { throw "version mismatch" }
+          if ($identity.schema_version -ne "kado.version.v1" -or $identity.kado.version -ne $env:VERSION) {
+            throw "version mismatch"
+          }
+          & "extracted/kado-a2a.exe" --output json version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "A2A version check failed" }
           & "extracted/$env:BINARY" release verify --directory "$PWD/release"
           if ($LASTEXITCODE -ne 0) { throw "release verification failed" }
 
@@ -175,5 +178,5 @@ jobs:
             --target "$COMMIT" \
             --title "Kado CLI $VERSION" \
             --generate-notes
-      - name: Promote stable CLI and latest skill channels
+      - name: Promote stable CLI channel
         run: ./scripts/publish-azure-assets.sh promote release

@@ -22,25 +22,27 @@ func TestArchivesHaveSafePathsAndModes(t *testing.T) {
 
 	builtAt := time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)
 	binary := []byte("test executable")
+	a2aBinary := []byte("test A2A executable")
 	license := []byte("license\n")
+	a2aLicense := []byte("A2A license\n")
 	guide := []byte("guide\n")
 
-	tarArchive, err := makeTarGzip(builtAt, "kado", binary, license, guide)
+	tarArchive, err := makeTarGzip(builtAt, "kado", binary, a2aBinary, license, a2aLicense, guide)
 	if err != nil {
 		t.Fatal(err)
 	}
-	extracted, err := releaseclient.ExtractBinary(tarArchive, "tar.gz", "kado")
-	if err != nil || !bytes.Equal(extracted, binary) {
-		t.Fatalf("ExtractBinary(tar.gz) = %q, %v", extracted, err)
+	extracted, err := releaseclient.ExtractBundle(tarArchive, "tar.gz", "kado")
+	if err != nil || !bytes.Equal(extracted.Kado, binary) || !bytes.Equal(extracted.A2A, a2aBinary) {
+		t.Fatalf("ExtractBundle(tar.gz) = %#v, %v", extracted, err)
 	}
 
-	zipArchive, err := makeZip(builtAt, "kado.exe", binary, license, guide)
+	zipArchive, err := makeZip(builtAt, "kado.exe", binary, a2aBinary, license, a2aLicense, guide)
 	if err != nil {
 		t.Fatal(err)
 	}
-	extracted, err = releaseclient.ExtractBinary(zipArchive, "zip", "kado.exe")
-	if err != nil || !bytes.Equal(extracted, binary) {
-		t.Fatalf("ExtractBinary(zip) = %q, %v", extracted, err)
+	extracted, err = releaseclient.ExtractBundle(zipArchive, "zip", "kado.exe")
+	if err != nil || !bytes.Equal(extracted.Kado, binary) || !bytes.Equal(extracted.A2A, a2aBinary) {
+		t.Fatalf("ExtractBundle(zip) = %#v, %v", extracted, err)
 	}
 }
 
@@ -164,6 +166,12 @@ func TestPinnedGoVersionComesFromGoModToolchain(t *testing.T) {
 	}
 	if version != "go1.26.4" {
 		t.Fatalf("pinnedGoVersion() = %q", version)
+	}
+	crlfVersion, err := pinnedGoVersion([]byte(
+		"module github.com/kado-so/search\r\n\r\ngo 1.26.0\r\n\r\ntoolchain go1.26.4\r\n",
+	))
+	if err != nil || crlfVersion != "go1.26.4" {
+		t.Fatalf("pinnedGoVersion(CRLF) = %q, %v", crlfVersion, err)
 	}
 	for _, invalid := range [][]byte{
 		[]byte("module github.com/kado-so/search\ngo 1.26.0\n"),

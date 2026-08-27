@@ -25,7 +25,8 @@ Continuous integration runs on pull requests and `main`:
 2. run `go test ./...`;
 3. run `go vet ./...`;
 4. check formatting and generated files; and
-5. cross-compile every supported target with GoReleaser.
+5. cross-compile every supported Kado/A2A executable pair with the pinned Go
+   toolchain and deterministic flags.
 
 A production release begins when an operator pushes a semantic `vX.Y.Z` tag.
 Merging to `main` runs CI but does not publish. The protected release workflow:
@@ -35,7 +36,8 @@ Merging to `main` runs CI but does not publish. The protected release workflow:
 3. reject an existing GitHub Release for that version;
 4. derive `SOURCE_DATE_EPOCH` from the commit;
 5. enter a reviewer-protected release environment;
-6. build all six targets once with the pinned GoReleaser version;
+6. verify the locked official A2A source, build all six A2A targets first, and
+   then build all six matching Kado targets with their exact sidecar identity;
 7. validate every signed artifact before publication;
 8. verify all bundles and smoke-test on native runners;
 9. expose the canonical build as one short-lived Actions artifact; and
@@ -232,7 +234,7 @@ Implemented in this repository:
 - asynchronous skill refresh and cached CLI update availability notices;
 - agent-first Unix and Windows installers;
 - Windows verified-candidate update handoff;
-- Depot CI, GoReleaser construction, native smoke jobs, and GitHub
+- Depot CI, deterministic paired release construction, native smoke jobs, and GitHub
   Releases.
 
 Required outside or after this repository change:

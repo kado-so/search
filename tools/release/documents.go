@@ -121,9 +121,10 @@ INSTALL-CLI.md" || {
   tar -xzf "$temporary/$archive" -C "$temporary"
   test -f "$temporary/kado" && test ! -L "$temporary/kado"
   test "$(executable_mode "$temporary/kado")" = "755"
-  identity="$("$temporary/kado" version --json)"
-  printf '%%s\n' "$identity" | grep -F "\"version\":\"${version}\"" >/dev/null
-  printf '%%s\n' "$identity" | grep -F "\"target\":\"${target_os}/${target_arch}\"" >/dev/null
+	identity="$("$temporary/kado" version --json)"
+	printf '%%s\n' "$identity" | grep -F '"schema_version":"kado.version.v1"' >/dev/null
+	printf '%%s\n' "$identity" | grep -F "\"kado\":{\"version\":\"${version}\"" >/dev/null
+	printf '%%s\n' "$identity" | grep -F "\"target\":\"${target_os}/${target_arch}\"" >/dev/null
   "$temporary/kado" release verify --directory "$temporary" >/dev/null
 
   mkdir -p "$install_dir"
@@ -277,8 +278,10 @@ try {
     Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/releases/$Version/$Archive" -OutFile (Join-Path $Temporary $Archive)
     Expand-Archive -LiteralPath (Join-Path $Temporary $Archive) -DestinationPath $Temporary
     $CandidateBinary = Join-Path $Temporary "kado.exe"
-    $Identity = & $CandidateBinary version --json | ConvertFrom-Json
-    if ($Identity.version -ne $Version -or $Identity.target -ne "windows/$Arch") {
+	$Identity = & $CandidateBinary version --json | ConvertFrom-Json
+	if ($Identity.schema_version -ne "kado.version.v1" -or
+	    $Identity.kado.version -ne $Version -or
+	    $Identity.kado.target -ne "windows/$Arch") {
       throw "candidate executable identity is invalid"
     }
     & $CandidateBinary release verify --directory $Temporary | Out-Null

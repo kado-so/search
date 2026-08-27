@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	SchemaVersion   = "kado.release.v1"
+	SchemaVersion   = "kado.release.v2"
 	Product         = "kado"
+	A2ARepository   = "https://github.com/a2aproject/a2a-cli"
+	A2AModule       = "github.com/a2aproject/a2a-cli"
 	MaxMetadataSize = 1 << 20
 	MaxArchiveSize  = 128 << 20
 )
@@ -54,22 +56,58 @@ type File struct {
 	Size   int64  `json:"size"`
 }
 
+// EmbeddedArtifact identifies an executable authenticated by its containing
+// release archive.
+type EmbeddedArtifact struct {
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+// A2AComponent identifies the exact official source and transformation used
+// for every bundled A2A CLI executable in a release.
+type A2AComponent struct {
+	Repository          string `json:"repository"`
+	Module              string `json:"module"`
+	Version             string `json:"version"`
+	Tag                 string `json:"tag"`
+	Commit              string `json:"commit"`
+	SourceArchiveSHA256 string `json:"source_archive_sha256"`
+	SourceTreeSHA256    string `json:"source_tree_sha256"`
+	PatchedTreeSHA256   string `json:"patched_tree_sha256"`
+	GoModSHA256         string `json:"go_mod_sha256"`
+	GoSumSHA256         string `json:"go_sum_sha256"`
+	LicenseSHA256       string `json:"license_sha256"`
+	GoToolchain         string `json:"go_toolchain"`
+	DisplayName         string `json:"display_name"`
+	PatchSetSHA256      string `json:"patch_set_sha256"`
+	BuiltAt             string `json:"built_at"`
+}
+
+// Components contains independently versioned software shipped by Kado.
+type Components struct {
+	A2ACLI A2AComponent `json:"a2a_cli"`
+}
+
 // Target identifies one supported executable package.
 type Target struct {
-	OS      string `json:"os"`
-	Arch    string `json:"arch"`
-	Archive File   `json:"archive"`
+	OS      string           `json:"os"`
+	Arch    string           `json:"arch"`
+	Archive File             `json:"archive"`
+	Sidecar EmbeddedArtifact `json:"sidecar"`
+	SBOM    File             `json:"sbom"`
 }
 
 // Metadata is the canonical signed release index.
 type Metadata struct {
-	SchemaVersion string   `json:"schema_version"`
-	Product       string   `json:"product"`
-	Version       string   `json:"version"`
-	Commit        string   `json:"commit"`
-	BuiltAt       string   `json:"built_at"`
-	KeyID         string   `json:"signing_key_id"`
-	Targets       []Target `json:"targets"`
+	SchemaVersion string     `json:"schema_version"`
+	Product       string     `json:"product"`
+	Version       string     `json:"version"`
+	Commit        string     `json:"commit"`
+	BuiltAt       string     `json:"built_at"`
+	KeyID         string     `json:"signing_key_id"`
+	Components    Components `json:"components"`
+	Provenance    File       `json:"provenance"`
+	Targets       []Target   `json:"targets"`
 }
 
 // CanonicalMetadata returns the only accepted release metadata encoding.
@@ -163,7 +201,14 @@ func (metadata Metadata) Validate() error {
 		builtAt.Format(time.RFC3339) != metadata.BuiltAt {
 		return errInvalidMetadata
 	}
-	files := make([]File, 0, len(metadata.Targets))
+	if err := metadata.Components.A2ACLI.validate(metadata.BuiltAt); err != nil {
+		return err
+	}
+	if metadata.Provenance.Name != "provenance.intoto.json" {
+		return errInvalidMetadata
+	}
+	files := make([]File, 0, 1+2*len(metadata.Targets))
+	files = append(files, metadata.Provenance)
 	seenTargets := make(map[string]struct{}, len(metadata.Targets))
 	seenFiles := make(map[string]struct{})
 	if !sort.SliceIsSorted(metadata.Targets, func(left, right int) bool {
@@ -186,7 +231,17 @@ func (metadata Metadata) Validate() error {
 		if _, _, ok := targetLayout(target.OS); !ok {
 			return errInvalidMetadata
 		}
-		files = append(files, target.Archive)
+		base := fmt.Sprintf("kado_%s_%s_%s", metadata.Version, target.OS, target.Arch)
+		expectedArchive := base + ".tar.gz"
+		if target.OS == "windows" {
+			expectedArchive = base + ".zip"
+		}
+		if target.Archive.Name != expectedArchive ||
+			target.SBOM.Name != base+".spdx.json" ||
+			!validEmbeddedArtifact(target.Sidecar) {
+			return errInvalidMetadata
+		}
+		files = append(files, target.Archive, target.SBOM)
 	}
 	for _, file := range files {
 		if err := validateFile(file); err != nil {
@@ -198,6 +253,45 @@ func (metadata Metadata) Validate() error {
 		seenFiles[file.Name] = struct{}{}
 	}
 	return nil
+}
+
+func (component A2AComponent) validate(releaseBuiltAt string) error {
+	if component.Repository != A2ARepository ||
+		component.Module != A2AModule ||
+		len(component.Version) > 48 ||
+		!versionPattern.MatchString(component.Version) ||
+		!commitPattern.MatchString(component.Commit) ||
+		component.DisplayName != "kado a2a" ||
+		!regexp.MustCompile(`^go[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(component.GoToolchain) ||
+		component.BuiltAt != releaseBuiltAt {
+		return errInvalidMetadata
+	}
+	if component.Tag == "none" {
+		if !strings.Contains(component.Version, component.Commit[:7]) {
+			return errInvalidMetadata
+		}
+	} else if !regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`).MatchString(component.Tag) ||
+		strings.TrimPrefix(component.Tag, "v") != component.Version {
+		return errInvalidMetadata
+	}
+	for _, digest := range []string{
+		component.SourceArchiveSHA256,
+		component.SourceTreeSHA256,
+		component.PatchedTreeSHA256,
+		component.GoModSHA256,
+		component.GoSumSHA256,
+		component.LicenseSHA256,
+		component.PatchSetSHA256,
+	} {
+		if !hexDigestPattern.MatchString(digest) {
+			return errInvalidMetadata
+		}
+	}
+	return nil
+}
+
+func validEmbeddedArtifact(artifact EmbeddedArtifact) bool {
+	return hexDigestPattern.MatchString(artifact.SHA256) && artifact.Size > 0
 }
 
 // TargetFor selects an exact supported operating-system and architecture pair.

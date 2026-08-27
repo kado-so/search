@@ -61,14 +61,22 @@ func VerifyLocalBundle(
 		info.Commit != metadata.Commit ||
 		info.Date != metadata.BuiltAt ||
 		info.Target != target.OS+"/"+target.Arch ||
-		info.ReleaseKeyID != metadata.KeyID {
+		info.ReleaseKeyID != metadata.KeyID ||
+		info.A2A.Version != metadata.Components.A2ACLI.Version ||
+		info.A2A.Tag != metadata.Components.A2ACLI.Tag ||
+		info.A2A.UpstreamCommit != metadata.Components.A2ACLI.Commit ||
+		info.A2A.Date != metadata.Components.A2ACLI.BuiltAt ||
+		info.A2A.Target != target.OS+"/"+target.Arch ||
+		info.A2A.PatchSet != "sha256:"+metadata.Components.A2ACLI.PatchSetSHA256 ||
+		info.A2A.ArtifactSHA256 != target.Sidecar.SHA256 ||
+		info.A2A.ArtifactSize != target.Sidecar.Size {
 		return Metadata{}, Target{}, ErrCandidate
 	}
 	archive, err := readAndVerifyLocal(absolute, target.Archive, MaxArchiveSize)
 	if err != nil {
 		return Metadata{}, Target{}, err
 	}
-	binary, err := VerifyTargetArchive(target, archive)
+	bundle, err := VerifyTargetBundle(target, archive)
 	if err != nil {
 		return Metadata{}, Target{}, err
 	}
@@ -77,7 +85,7 @@ func VerifyLocalBundle(
 		return Metadata{}, Target{}, ErrCandidate
 	}
 	running, err := os.ReadFile(executable)
-	if err != nil || !bytes.Equal(running, binary) {
+	if err != nil || !bytes.Equal(running, bundle.Kado) {
 		return Metadata{}, Target{}, ErrCandidate
 	}
 	return metadata, target, nil

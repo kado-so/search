@@ -56,7 +56,7 @@ Commands:
   uninstall         Remove the CLI
   release verify    Verify a release
   help              Show help
-  version           Show build information
+  version           Show bundle information
 
 Options:
   --agent identity   Explicitly select the calling agent identity
@@ -64,8 +64,8 @@ Options:
   --jsonl           Emit result and pagination records
   --width columns   Human output width (40 to 160)
   -h, --help        Show this help
-  -v, --version     Show bounded build information
-  version --json    Show executable provenance
+  -v, --version     Show Kado version
+  version --json    Show bundle provenance
 `
 
 type authCommands interface {
@@ -265,7 +265,13 @@ func run(
 		}
 		_, _ = io.WriteString(stdout, helpText)
 		return nil
-	case "version", "-v", "--version":
+	case "-v", "--version":
+		if len(args) != 1 {
+			return usageError("version does not accept arguments")
+		}
+		_, _ = fmt.Fprintln(stdout, info.Line())
+		return nil
+	case "version":
 		if len(args) == 2 && args[0] == "version" && args[1] == "--json" {
 			encoded, err := info.JSON()
 			if err != nil {
@@ -282,7 +288,7 @@ func run(
 		if len(args) != 1 {
 			return usageError("version does not accept arguments")
 		}
-		_, _ = fmt.Fprintln(stdout, info.Line())
+		_, _ = io.WriteString(stdout, info.BundleText())
 		return nil
 	case "auth":
 		return runAuth(args[1:], stdout, override, dependencies)

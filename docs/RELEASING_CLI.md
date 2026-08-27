@@ -17,8 +17,9 @@ Every release contains direct versioned binaries, versioned archives, an SPDX
 - `windows/arm64`
 
 Unix archives are `tar.gz` files. Windows archives are ZIP files. Each archive
-contains only `kado` or `kado.exe`,
-`LICENSE`, and `INSTALL-CLI.md`, with fixed safe modes and timestamps.
+contains exactly five root entries: `kado[.exe]`, `kado-a2a[.exe]`, `LICENSE`,
+`LICENSE-A2A-CLI`, and `INSTALL-CLI.md`. Executables use mode `0755`; support
+files use `0644`; timestamps and entry order are deterministic.
 
 ## Signing boundary
 
@@ -31,7 +32,7 @@ never prints it. No private or test signing key is stored in this repository.
 The corresponding public key and its SHA-256 key ID are non-secret. The builder
 stamps them into every executable and writes `release-public-key.pem` for
 independent verification. In-band signing-key rotation is deliberately
-unsupported in release protocol v1: an installed binary accepts only metadata
+unsupported in release protocol v2: an installed binary accepts only metadata
 signed by its embedded key. The metadata carries that key's ID, and the
 replacement executable must carry a public key with the same derived ID.
 Rotating the release key therefore
@@ -44,9 +45,12 @@ protected production seed and must not reuse a dry-run key.
 
 ## Local dry run
 
-Use the Go version pinned by the `toolchain` directive in `go.mod`. Generate
-prebuilt binaries with the pinned GoReleaser version, then finalize them with
-an ephemeral signing seed:
+Use the Go version pinned by the `toolchain` directive in `go.mod`. Provide a
+Git checkout of the official A2A CLI containing the commit in
+`third_party/a2a-cli/upstream.lock.json`. The release tool verifies the origin,
+commit or tag, source/tree/patch checksums, license, module checksums, and shared
+toolchain. It then builds each A2A executable first, hashes it, builds matching
+Kado with that identity stamped in, and signs the combined release:
 
 ```bash
 release_seed_file="$(mktemp "${TMPDIR:-/tmp}/kado-release-seed.XXXXXX")"
@@ -57,17 +61,7 @@ go run ./tools/release \
   --version 0.1.0 \
   --commit 0123456789abcdef0123456789abcdef01234567 \
   --source-date-epoch 1784851200 \
-  --write-goreleaser-env "$release_seed_file.env"
-set -a
-. "$release_seed_file.env"
-set +a
-
-goreleaser build --clean --snapshot
-go run ./tools/release \
-  --version 0.1.0 \
-  --commit 0123456789abcdef0123456789abcdef01234567 \
-  --source-date-epoch 1784851200 \
-  --prebuilt dist/goreleaser \
+  --a2a-source /absolute/path/to/a2a-cli \
   --out dist/release
 ```
 
@@ -80,13 +74,19 @@ output directory with one rename, so a partial build never looks complete.
 `release-metadata.json` is canonical JSON and binds:
 
 - version, source commit, UTC build time, and signing-key identity;
-- each platform archive by URL, size, and SHA-256.
+- exact A2A repository/module, tag or snapshot version, commit, source archive,
+  source tree, patched tree, module files, license, toolchain, display patch,
+  and build time;
+- each platform archive and SPDX 2.3 SBOM by URL, size, and SHA-256;
+- each embedded A2A executable by exact size and SHA-256; and
+- the SLSA v1-shaped in-toto provenance descriptor without claiming a SLSA
+  level.
 
-`release-metadata.json.sig` authenticates those exact bytes. Direct binaries,
-`checksums.txt`, SPDX SBOMs, SLSA/in-toto provenance, the install guide, and
-platform install/uninstall scripts remain standalone artifacts for operators
-and package systems. They are intentionally outside the self-updater's signed
-metadata and runtime trust path.
+`release-metadata.json.sig` authenticates those exact bytes. The archive digest
+authenticates both executables and all three support files as one unit. Signed
+SBOM and provenance descriptors authenticate the standalone supply-chain
+documents. Direct Kado binaries, `checksums.txt`, the install guide, and
+platform install/uninstall scripts remain standalone operator artifacts.
 
 The generated `INSTALL-CLI.md`, `install.sh`, and `install.ps1` implement the
 agent-first bootstrap from canonical `kado.so` HTTPS endpoints. For a new
@@ -149,10 +149,7 @@ must copy those exact release assets to `kado.so` using this mapping:
 | `install.ps1` | `/install.ps1` |
 | `release-metadata.json` | `/install/releases/stable/release-metadata.json` |
 | `release-metadata.json.sig` | `/install/releases/stable/release-metadata.json.sig` |
-| skill archives | `/install/skills/<name>/<variant>/<version>/<name>.tar.gz` |
-| skill metadata and signature | `/install/skills/<name>/<variant>/<version>/metadata.json[.sig]` |
-| catalog and signature | `/install/skills/latest/catalog.json[.sig]` |
 
-The publisher uploads immutable CLI and skill objects first, verifies their
-public bytes, publishes every signed skill variant,
-and promotes stable CLI metadata last.
+The publisher uploads and verifies immutable CLI objects first and promotes
+stable CLI metadata last. Skill publication is an independent workflow and is
+not an input or output of this CLI release build.

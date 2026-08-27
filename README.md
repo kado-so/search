@@ -130,9 +130,11 @@ on Windows. `host.json` and `identities.json` are non-secret local state.
 
 ## Releases and self-update
 
-GoReleaser cross-compiles binaries for Linux, macOS, and Windows. Kado's release
-finalizer packages and signs those binaries and generates SHA-256 checksums,
-SPDX SBOMs, SLSA/in-toto provenance, and local installers.
+Kado's release tool verifies the locked official A2A source, builds the A2A
+sidecar first, and then cross-compiles matching Kado binaries for Linux, macOS,
+and Windows with one pinned Go toolchain. It packages and signs each pair and
+generates SHA-256 checksums, combined SPDX SBOMs, SLSA-shaped/in-toto
+provenance, and local installers.
 
 Installed release binaries verify the signed metadata, selected platform
 archive, and candidate executable identity before activation. Direct installs

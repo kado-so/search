@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/launcher"
 )
 
@@ -374,6 +375,24 @@ func VerifyTargetArchive(target Target, archive []byte) ([]byte, error) {
 	return binary, nil
 }
 
+// VerifyTargetBundle authenticates and strictly extracts both executables from
+// a paired release archive.
+func VerifyTargetBundle(target Target, archive []byte) (ExecutableBundle, error) {
+	if err := VerifyFile(target.Archive, archive); err != nil {
+		return ExecutableBundle{}, ErrChecksum
+	}
+	binaryName, archiveFormat, ok := targetLayout(target.OS)
+	if !ok {
+		return ExecutableBundle{}, ErrChecksum
+	}
+	bundle, err := ExtractBundle(archive, archiveFormat, binaryName)
+	if err != nil || target.Sidecar.Size != int64(len(bundle.A2A)) ||
+		target.Sidecar.SHA256 != Digest(bundle.A2A) {
+		return ExecutableBundle{}, ErrChecksum
+	}
+	return bundle, nil
+}
+
 // Uninstall removes only the selected executable. Credentials and config are
 // deliberately outside this boundary.
 func Uninstall(targetPath string) error {
@@ -416,14 +435,7 @@ func VerifyExecutable(
 	if err := command.Run(); err != nil {
 		return ErrCandidate
 	}
-	var value struct {
-		Version      string `json:"version"`
-		Commit       string `json:"commit"`
-		BuiltAt      string `json:"built_at"`
-		Target       string `json:"target"`
-		ReleaseKeyID string `json:"release_key_id"`
-		PublicKey    string `json:"release_public_key"`
-	}
+	var value buildinfo.VersionReport
 	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&value); err != nil {
@@ -433,7 +445,7 @@ func VerifyExecutable(
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return ErrCandidate
 	}
-	publicKey, err := ParsePublicKey(value.PublicKey)
+	publicKey, err := ParsePublicKey(value.Kado.PublicKey)
 	if err != nil {
 		return ErrCandidate
 	}
@@ -441,11 +453,21 @@ func VerifyExecutable(
 	if err != nil {
 		return ErrCandidate
 	}
-	if value.Version != metadata.Version ||
-		value.Commit != metadata.Commit ||
-		value.BuiltAt != metadata.BuiltAt ||
-		value.Target != target.OS+"/"+target.Arch ||
-		value.ReleaseKeyID != metadata.KeyID ||
+	a2a := metadata.Components.A2ACLI
+	if value.SchemaVersion != buildinfo.VersionSchema ||
+		value.Kado.Version != metadata.Version ||
+		value.Kado.Commit != metadata.Commit ||
+		value.Kado.BuiltAt != metadata.BuiltAt ||
+		value.Kado.Target != target.OS+"/"+target.Arch ||
+		value.Kado.ReleaseKeyID != metadata.KeyID ||
+		value.Components.A2ACLI.Version != a2a.Version ||
+		value.Components.A2ACLI.Tag != a2a.Tag ||
+		value.Components.A2ACLI.UpstreamCommit != a2a.Commit ||
+		value.Components.A2ACLI.BuiltAt != a2a.BuiltAt ||
+		value.Components.A2ACLI.Target != target.OS+"/"+target.Arch ||
+		value.Components.A2ACLI.PatchSet != "sha256:"+a2a.PatchSetSHA256 ||
+		value.Components.A2ACLI.ArtifactSHA256 != target.Sidecar.SHA256 ||
+		value.Components.A2ACLI.ArtifactSize != target.Sidecar.Size ||
 		publicKeyID != metadata.KeyID {
 		return ErrCandidate
 	}

@@ -1,4 +1,4 @@
-// Command release finalizes and signs prebuilt Kado CLI release bundles.
+// Command release builds and signs paired Kado and official A2A CLI bundles.
 package main
 
 import (
@@ -34,13 +34,13 @@ var (
 )
 
 type options struct {
-	root          string
-	output        string
-	prebuilt      string
-	commit        string
-	epoch         int64
-	version       string
-	goreleaserEnv string
+	root      string
+	output    string
+	commit    string
+	epoch     int64
+	version   string
+	a2aSource string
+	a2aLock   string
 }
 
 type releaseIdentity struct {
@@ -54,21 +54,11 @@ func main() {
 	var configured options
 	flag.StringVar(&configured.root, "root", ".", "repository root")
 	flag.StringVar(&configured.output, "out", "dist/release", "output directory")
-	flag.StringVar(
-		&configured.prebuilt,
-		"prebuilt",
-		"",
-		"directory containing GoReleaser-built binaries",
-	)
 	flag.StringVar(&configured.commit, "commit", "", "exact 40-character source commit")
 	flag.Int64Var(&configured.epoch, "source-date-epoch", 0, "release UTC build timestamp")
 	flag.StringVar(&configured.version, "version", "", "semantic release version")
-	flag.StringVar(
-		&configured.goreleaserEnv,
-		"write-goreleaser-env",
-		"",
-		"append public build metadata to a GoReleaser environment file",
-	)
+	flag.StringVar(&configured.a2aSource, "a2a-source", "", "official A2A CLI Git checkout")
+	flag.StringVar(&configured.a2aLock, "a2a-lock", a2aDefaultLock, "repository-relative A2A source lock")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fatal(errors.New("release does not accept positional arguments"))
@@ -126,44 +116,65 @@ func run(configured options) error {
 	}
 	metadataURL := strings.TrimSuffix(source.InstallURL, "/") +
 		"/releases/stable/release-metadata.json"
-	if configured.goreleaserEnv != "" {
-		return writeGoReleaserEnvironment(
-			configured.goreleaserEnv,
-			source,
-			configured.commit,
-			builtAt,
-			releaseclient.PublicKeyText(public),
-			keyID,
-			metadataURL,
-		)
+	if configured.a2aSource == "" {
+		return errors.New("--a2a-source is required")
 	}
-	if configured.prebuilt == "" {
-		return errors.New("--prebuilt is required")
-	}
-	prebuilt := configured.prebuilt
-	if !filepath.IsAbs(prebuilt) {
-		prebuilt = filepath.Join(root, prebuilt)
+	a2aSource, err := filepath.Abs(configured.a2aSource)
+	if err != nil {
+		return errors.New("--a2a-source is invalid")
 	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
 		return errors.New("release output parent could not be created")
 	}
-	staging, err := os.MkdirTemp(filepath.Dir(output), ".kado-release-*")
+	workspace, err := os.MkdirTemp(filepath.Dir(output), ".kado-release-*")
 	if err != nil {
 		return errors.New("release staging directory could not be created")
 	}
-	defer os.RemoveAll(staging)
+	defer os.RemoveAll(workspace)
+	prepared, err := prepareA2ASource(
+		root,
+		a2aSource,
+		configured.a2aLock,
+		filepath.Join(workspace, "a2a-source"),
+		"go",
+	)
+	if err != nil {
+		return err
+	}
+	executables, err := buildExecutables(
+		root,
+		workspace,
+		"go",
+		source,
+		configured.commit,
+		builtAt,
+		public,
+		keyID,
+		metadataURL,
+		prepared,
+	)
+	if err != nil {
+		return err
+	}
+	staging := filepath.Join(workspace, "release")
+	if err := os.Mkdir(staging, 0o755); err != nil {
+		return errors.New("release artifact staging could not be created")
+	}
 	if err := buildRelease(buildInput{
-		root:       root,
-		output:     staging,
-		prebuilt:   prebuilt,
-		goBinary:   "go",
-		source:     source,
-		commit:     configured.commit,
-		builtAt:    builtAt,
-		privateKey: private,
-		publicKey:  public,
-		publicPEM:  publicPEM,
-		keyID:      keyID,
+		root:         root,
+		output:       staging,
+		kadoPrebuilt: executables.KadoDirectory,
+		a2aPrebuilt:  executables.A2ADirectory,
+		goBinary:     "go",
+		a2a:          prepared,
+		a2aLicense:   executables.A2ALicense,
+		source:       source,
+		commit:       configured.commit,
+		builtAt:      builtAt,
+		privateKey:   private,
+		publicKey:    public,
+		publicPEM:    publicPEM,
+		keyID:        keyID,
 	}); err != nil {
 		return err
 	}
@@ -177,39 +188,6 @@ func run(configured options) error {
 		output,
 	)
 	return nil
-}
-
-func writeGoReleaserEnvironment(
-	path string,
-	source releaseIdentity,
-	commit string,
-	builtAt time.Time,
-	publicKey string,
-	keyID string,
-	metadataURL string,
-) error {
-	values := []string{
-		"KADO_RELEASE_VERSION=" + source.Version,
-		"KADO_RELEASE_COMMIT=" + commit,
-		"KADO_RELEASE_DATE=" + builtAt.Format(time.RFC3339),
-		"KADO_RELEASE_PUBLIC_KEY=" + publicKey,
-		"KADO_RELEASE_KEY_ID=" + keyID,
-		"KADO_RELEASE_METADATA_URL=" + metadataURL,
-	}
-	for _, value := range values {
-		if strings.ContainsAny(value, "\r\n") {
-			return errors.New("GoReleaser environment value is invalid")
-		}
-	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return errors.New("GoReleaser environment file could not be opened")
-	}
-	defer file.Close()
-	if _, err := file.WriteString(strings.Join(values, "\n") + "\n"); err != nil {
-		return errors.New("GoReleaser environment file could not be written")
-	}
-	return file.Sync()
 }
 
 func newReleaseIdentity(version string) (releaseIdentity, error) {
@@ -264,7 +242,7 @@ func verifyGoVersion(root, goBinary string) error {
 
 func pinnedGoVersion(goMod []byte) (string, error) {
 	match := regexp.MustCompile(
-		`(?m)^toolchain[ \t]+(go[0-9]+\.[0-9]+\.[0-9]+)[ \t]*$`,
+		`(?m)^toolchain[ \t]+(go[0-9]+\.[0-9]+\.[0-9]+)[ \t]*\r?$`,
 	).FindSubmatch(goMod)
 	if len(match) != 2 {
 		return "", errors.New("go.mod must contain an exact toolchain directive")
