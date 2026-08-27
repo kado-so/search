@@ -4,15 +4,15 @@
   "module": "github.com/a2aproject/a2a-cli",
   "version": "0.0.0-20260827.fdbb3aa",
   "commit": "fdbb3aad6289c0070480147a29e04c3d46aa6c2f",
-  "source_archive_sha256": "34cb9ab264e8c11f7b081fb0ae701eb56164b7a6472d9455444df99399cb81d0",
-  "source_tree_sha256": "34cb9ab264e8c11f7b081fb0ae701eb56164b7a6472d9455444df99399cb81d0",
-  "patched_tree_sha256": "53e0e15970d246ede2e4db0e657d8910e55bdffaf0aaab408ef5c21e6cc277ec",
-  "go_mod_sha256": "6fb4857f02a8ca343b302d7b2ddbd1a5090dc42da8f80a1587ad7cb29688643f",
-  "go_sum_sha256": "9dc03b632203e02e7bb2dcec9f305b72d5b9ea0c0b1b959a2160b5f78abe9a18",
+  "source_archive_sha256": "6a37a7af5eda3e661e1595c06e765c4e35e6593a309fa3962e21e49750d82eee",
+  "source_tree_sha256": "6a37a7af5eda3e661e1595c06e765c4e35e6593a309fa3962e21e49750d82eee",
+  "patched_tree_sha256": "226c68422bc2da4db2e22890d43b693ef690a8f0c6a66f4cf7e0266ca07f27d6",
+  "go_mod_sha256": "0b9e77ee0cb95296033a70c440aad5dda553ed1d5d2565db4a174cc81e847823",
+  "go_sum_sha256": "bcc256055b687121ec44232e8972aaced17588c554c80df07ac7ab12c77ca7b1",
   "license": {
     "path": "LICENSE",
     "spdx": "Apache-2.0",
-    "sha256": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6"
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
   },
   "notice_files": [],
   "go_toolchain": "go1.26.4",

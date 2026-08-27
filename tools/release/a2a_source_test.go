@@ -334,7 +334,7 @@ func newA2ASourceFixture(t *testing.T) a2aSourceFixture {
 	runTestCommand(t, source, "git", "add", ".")
 	runTestCommand(t, source, "git", "commit", "--quiet", "-m", "fixture")
 	commit := strings.TrimSpace(string(runTestCommand(t, source, "git", "rev-parse", "HEAD")))
-	archive := runTestCommand(t, source, "git", "archive", "--format=tar", commit)
+	archive := runTestCommand(t, source, "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar", commit)
 	unpatched := filepath.Join(root, "unpatched")
 	if err := os.MkdirAll(unpatched, 0o755); err != nil {
 		t.Fatal(err)

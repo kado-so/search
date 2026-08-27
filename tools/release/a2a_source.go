@@ -179,7 +179,14 @@ func prepareA2ASource(root, sourceRepository, lockPath, destination, goBinary st
 	if err := verifyA2ASourceRepository(sourceRepository, lock); err != nil {
 		return a2aPreparedSource{}, err
 	}
-	archive, err := commandOutput(sourceRepository, nil, "git", "archive", "--format=tar", lock.Commit)
+	archive, err := commandOutput(
+		sourceRepository,
+		nil,
+		"git",
+		"-c", "core.autocrlf=false",
+		"-c", "core.eol=lf",
+		"archive", "--format=tar", lock.Commit,
+	)
 	if err != nil {
 		return a2aPreparedSource{}, errors.New("A2A source archive could not be created")
 	}
@@ -390,10 +397,10 @@ func applyA2ASourcePatches(lockDirectory, sourceRoot string, patches []a2aLocked
 		if err != nil || bytes.Contains(value, []byte{'\r'}) || digestA2ABytes(value) != locked.SHA256 {
 			return "", errors.New("A2A patch checksum does not match the lock")
 		}
-		if _, err := commandOutput(sourceRoot, nil, "git", "apply", "--check", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
+		if _, err := commandOutput(sourceRoot, nil, "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", "--check", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
 			return "", errors.New("A2A display patch does not apply cleanly")
 		}
-		if _, err := commandOutput(sourceRoot, nil, "git", "apply", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
+		if _, err := commandOutput(sourceRoot, nil, "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
 			return "", errors.New("A2A display patch could not be applied")
 		}
 	}
