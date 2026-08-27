@@ -1,0 +1,23 @@
+{
+  "@context": "https://kado.so/contexts/search-document/v2.jsonld",
+  "@id": "https://kado.so/search?q=v2%20queued",
+  "@type": "SearchResultsPage",
+  "schema_version": "kado.search-document.v2",
+  "search": {
+    "id": "execution_v2_queued",
+    "query": "v2 queued",
+    "created_at": "2026-07-29T00:00:00Z"
+  },
+  "state": {
+    "status": "queued"
+  },
+  "links": {
+    "self": "https://kado.so/search?q=v2%20queued",
+    "schema": "https://kado.so/schemas/search-document/v2.json",
+    "context": "https://kado.so/contexts/search-document/v2.jsonld"
+  },
+  "metadata": {
+    "revision": 1,
+    "generated_at": "2026-07-29T00:00:00Z"
+  }
+}

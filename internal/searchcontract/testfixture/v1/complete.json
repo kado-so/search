@@ -25,6 +25,10 @@
         "type": "software_application",
         "name": "Example application",
         "summary": "A public-safe application result with object data.",
+        "use": {
+          "protocol": "a2a",
+          "agent_card": "https://agents.example.com/billing/.well-known/agent-card.json"
+        },
         "data_schema": "https://kado.so/schemas/results/software-application/v1.json",
         "data": {
           "pricing_model": "usage",

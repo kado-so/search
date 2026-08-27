@@ -24,8 +24,9 @@ release descriptor an agent can use to:
 2. download the matching versioned Kado release from `kado.so`;
 3. verify the signed release metadata, archive checksum, and executable
    identity;
-4. install the executable in a user-writable directory, or run its signed
-   updater when that destination already contains Kado;
+4. install the Kado and `kado-a2a` executable pair in a user-writable
+   directory, or run their signed paired updater when a current direct
+   installation already exists;
 5. run `kado skill install` to install the general Kado CLI skill and the latest
    compatible signed Search skill, with bundled copies as an offline fallback;
 6. run idempotent `kado auth create` to create an identity or reuse an active
@@ -41,17 +42,22 @@ Initial bootstrap uses operating-system facilities or the agent's own HTTPS
 download capability. After bootstrap, the Kado executable owns verification,
 skill installation, and direct-install updates.
 
-Direct installations use a stable launcher beside a private
-`kado[.exe].d` directory of immutable payload versions. Update work starts only
-after a foreground command finishes. It never changes that command's selected
-binary; a completely verified activation is observed only by a later CLI
-start. Concurrent old and new invocations may finish normally. Existing direct
-installations enter this layout after one explicit `kado update`.
+Direct installations use a stable Kado launcher and an adjacent `kado-a2a`
+sidecar beside a private `kado[.exe].d` directory of immutable executable-pair
+versions. An activation record authenticates both members, and a later CLI
+start observes either the previous complete pair or the new complete pair.
+
+Pre-A2A direct installations cannot cross this bundle boundary with their old
+`kado update`. Close all Kado processes, run the current signed uninstall
+script with confirmation but without credential purge, and then run the current
+signed installer. This one-time reinstall preserves configuration, identities,
+and credentials.
 
 The target user locations are:
 
-- macOS and Linux: `$HOME/.local/bin/kado`
-- Windows: `%LOCALAPPDATA%\Kado\kado.exe`
+- macOS and Linux: `$HOME/.local/bin/kado` and `$HOME/.local/bin/kado-a2a`
+- Windows: `%LOCALAPPDATA%\Kado\kado.exe` and
+  `%LOCALAPPDATA%\Kado\kado-a2a.exe`
 
 The installation flow must explain how to add that directory to `PATH` when it
 is not already present. It must remain non-interactive when the agent supplies
@@ -91,16 +97,22 @@ A successful direct CLI update automatically syncs Kado-managed skill copies.
 If a skill update fails, the new CLI remains installed and reports the repair
 command. Skill removal does not remove the CLI or revoke credentials.
 
-## Future optional distribution channels
+## Package-manager distribution
 
-Only agent-first installation and direct downloads are in the initial
-distribution scope. These channels may be added later:
+Release builds also produce channel-stamped pairs and current package
+definitions for Homebrew, WinGet, Scoop, Debian, RPM, and containers. Each
+manager keeps the real `kado` and `kado-a2a` files together in one owned
+directory. Homebrew and Linux packages expose only a public Kado symlink;
+Scoop exposes only its Kado shim; WinGet declares only the Kado portable alias;
+and the container image starts the real Kado member of its private pair.
 
-1. a Kado-owned Homebrew tap for macOS and Linux;
-2. WinGet for Windows;
-3. Scoop for Windows;
-4. Debian and RPM repositories for managed Linux systems;
-5. container images for CI and ephemeral agents.
+Package-owned binaries do not run Kado's direct updater or uninstaller. They
+stop before release or credential state is opened and print the owning
+manager's exact command. Use `brew`, `winget`, `scoop`, `apt`, or `dnf` for the
+corresponding lifecycle. Replace or remove a container through its deployment
+tool. The manager may relocate, relink, or repair the package because Kado
+canonicalizes the running executable and verifies only the fixed sibling in
+that real directory.
 
 GitHub Releases are published now as a mirror of the exact `kado.so` release
 artifacts, but are not the CLI's runtime update origin.

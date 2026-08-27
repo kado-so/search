@@ -1,4 +1,4 @@
-// Command generate pins the released kado-app Search Document v1 artifacts.
+// Command generate pins the released kado-app Search Document v1 and v2 artifacts.
 package main
 
 import (
@@ -11,12 +11,17 @@ import (
 	"fmt"
 	"go/format"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 )
 
-const pinnedManifestSHA256 = "000f3f58ea4fcf2cc105e1f4904ea2d392df8088c79fa0cc0e7514436a7a2713"
+var pinnedManifestSHA256 = map[string]string{
+	"v1": "cb4344c5058880e95b41d6c6412b209fa8d16417e04d6eb5119d3771a3d9def9",
+	"v2": "81a52f900de7cc3ffd6b42fa8b1742163fa0e63b6b40d0c7a94eada408a125f0",
+}
 
 type manifest struct {
 	Contract      string                   `json:"contract"`
@@ -32,44 +37,49 @@ type manifestEntry struct {
 }
 
 func main() {
-	source := os.Getenv("KADO_APP_SEARCH_CONTRACT")
-	if source == "" {
-		source = filepath.Clean("../../../kado-app/contracts/search-document/v1")
+	sourceRoot := os.Getenv("KADO_APP_SEARCH_CONTRACT")
+	if sourceRoot == "" {
+		sourceRoot = filepath.Clean("../../../kado-app/contracts/search-document")
 	}
-	manifestBytes := mustRead(filepath.Join(source, "manifest.gen.json"))
-	mustChecksum("manifest.gen.json", manifestBytes, pinnedManifestSHA256)
+	assets := map[string][]byte{}
+	for _, version := range []string{"v1", "v2"} {
+		source := filepath.Join(sourceRoot, version)
+		manifestBytes := mustRead(filepath.Join(source, "manifest.gen.json"))
+		mustChecksum(version+"/manifest.gen.json", manifestBytes, pinnedManifestSHA256[version])
 
-	var release manifest
-	if err := json.Unmarshal(manifestBytes, &release); err != nil {
-		panic(fmt.Errorf("decode authoritative manifest: %w", err))
-	}
-	if release.Contract != "kado.search-document" ||
-		release.Version != "v1" ||
-		release.SchemaVersion != "kado.search-document.v1" {
-		panic("authoritative manifest does not describe Search Document v1")
-	}
+		var release manifest
+		if err := json.Unmarshal(manifestBytes, &release); err != nil {
+			panic(fmt.Errorf("decode authoritative %s manifest: %w", version, err))
+		}
+		if release.Contract != "kado.search-document" ||
+			release.Version != version ||
+			release.SchemaVersion != "kado.search-document."+version {
+			panic("authoritative manifest does not describe Search Document " + version)
+		}
 
-	assets := map[string][]byte{"manifest.gen.json": manifestBytes}
-	for _, name := range []string{"schema", "context", "semantics"} {
-		entry, ok := release.Artifacts[name]
-		if !ok {
-			panic("authoritative manifest is missing " + name)
+		assets[version+"/manifest.gen.json"] = manifestBytes
+		for _, name := range []string{"schema", "context", "semantics"} {
+			entry, ok := release.Artifacts[name]
+			if !ok {
+				panic("authoritative " + version + " manifest is missing " + name)
+			}
+			assets[version+"/"+entry.Path] = checkedRead(source, entry)
 		}
-		assets[entry.Path] = checkedRead(source, entry)
-	}
-	if err := os.MkdirAll("testfixture", 0o755); err != nil {
-		panic(fmt.Errorf("create fixture directory: %w", err))
-	}
-	for name, entry := range release.Fixtures {
-		if name == "" || filepath.Base(name) != name {
-			panic("authoritative manifest contains an unsafe fixture name")
+		fixtureRoot := filepath.Join("testfixture", version)
+		if err := os.MkdirAll(fixtureRoot, 0o755); err != nil {
+			panic(fmt.Errorf("create %s fixture directory: %w", version, err))
 		}
-		if err := os.WriteFile(
-			filepath.Join("testfixture", name+".json"),
-			checkedRead(source, entry),
-			0o644,
-		); err != nil {
-			panic(fmt.Errorf("write fixture %s: %w", name, err))
+		for name, entry := range release.Fixtures {
+			if name == "" || filepath.Base(name) != name {
+				panic("authoritative manifest contains an unsafe fixture name")
+			}
+			if err := os.WriteFile(
+				filepath.Join(fixtureRoot, name+".json"),
+				checkedRead(source, entry),
+				0o644,
+			); err != nil {
+				panic(fmt.Errorf("write %s fixture %s: %w", version, name, err))
+			}
 		}
 	}
 
@@ -104,13 +114,15 @@ func main() {
 
 func checkedRead(root string, entry manifestEntry) []byte {
 	if entry.Path == "" ||
-		filepath.IsAbs(entry.Path) ||
-		filepath.Clean(entry.Path) != entry.Path ||
+		path.IsAbs(entry.Path) ||
+		path.Clean(entry.Path) != entry.Path ||
+		strings.Contains(entry.Path, "\\") ||
 		entry.Path == ".." ||
 		len(entry.Path) >= 3 && entry.Path[:3] == "../" {
 		panic("authoritative manifest contains an unsafe artifact path")
 	}
-	value := mustRead(filepath.Join(root, entry.Path))
+	value := mustRead(filepath.Join(root, filepath.FromSlash(entry.Path)))
+	value = bytes.ReplaceAll(value, []byte("\r\n"), []byte("\n"))
 	mustChecksum(entry.Path, value, entry.SHA256)
 	return value
 }

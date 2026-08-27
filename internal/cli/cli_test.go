@@ -42,17 +42,21 @@ func TestHelpFormsAreBoundedAndSilentOnStderr(t *testing.T) {
 		if stderr.Len() != 0 {
 			t.Fatalf("Run(%q) stderr = %q", args, stderr.String())
 		}
-		if stdout.Len() == 0 || stdout.Len() > 1024 {
+		if stdout.Len() == 0 || stdout.Len() > 1152 {
 			t.Fatalf("Run(%q) help length = %d", args, stdout.Len())
+		}
+		if strings.Count(stdout.String(), "\n  a2a              A2A CLI\n") != 1 ||
+			strings.Contains(stdout.String(), "kado-a2a") {
+			t.Fatalf("Run(%q) help has the wrong A2A entry", args)
 		}
 	}
 }
 
-func TestVersionFormsAreSingleLineAndBounded(t *testing.T) {
+func TestShortVersionFormsRemainKadoOnly(t *testing.T) {
 	t.Parallel()
 
 	info := buildinfo.Info{Version: strings.Repeat("v", 100), Commit: "abc\nsecret", Date: "now"}
-	for _, args := range [][]string{{"version"}, {"-v"}, {"--version"}} {
+	for _, args := range [][]string{{"-v"}, {"--version"}} {
 		var stdout, stderr bytes.Buffer
 		exitCode := Run(args, &stdout, &stderr, info)
 
@@ -68,6 +72,24 @@ func TestVersionFormsAreSingleLineAndBounded(t *testing.T) {
 	}
 }
 
+func TestVersionReportsKadoAndA2APair(t *testing.T) {
+	t.Parallel()
+
+	info := buildinfo.Info{
+		Version: "1.2.3", Commit: "kado-commit", Date: "2026-08-27T00:00:00Z",
+		A2A: buildinfo.A2AInfo{Version: "0.3.1-dev", UpstreamCommit: "a2a-commit"},
+	}
+	var stdout, stderr bytes.Buffer
+	if exitCode := Run([]string{"version"}, &stdout, &stderr, info); exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	for _, value := range []string{"Kado:\n", "A2A CLI:\n", "kado-commit", "a2a-commit"} {
+		if !strings.Contains(stdout.String(), value) {
+			t.Fatalf("version output missing %q: %q", value, stdout.String())
+		}
+	}
+}
+
 func TestVersionJSONIsDeterministicExecutableProvenance(t *testing.T) {
 	t.Parallel()
 
@@ -78,13 +100,18 @@ func TestVersionJSONIsDeterministicExecutableProvenance(t *testing.T) {
 		Target:           "linux/arm64",
 		ReleaseKeyID:     "sha256:abc",
 		ReleasePublicKey: "public",
+		A2A: buildinfo.A2AInfo{
+			Version: "0.3.1-dev", Tag: "none", UpstreamCommit: "fedcba9876543210",
+			Date: "2026-07-24T00:00:00Z", Target: "linux/arm64",
+			PatchSet: "sha256:patch", ArtifactSHA256: "sha256:artifact", ArtifactSize: 12345,
+		},
 	}
 	var stdout, stderr bytes.Buffer
 	exitCode := Run([]string{"version", "--json"}, &stdout, &stderr, info)
 	if exitCode != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
 	}
-	want := "{\"version\":\"0.1.0\",\"commit\":\"0123456789abcdef\",\"built_at\":\"2026-07-24T00:00:00Z\",\"target\":\"linux/arm64\",\"release_key_id\":\"sha256:abc\",\"release_public_key\":\"public\"}\n"
+	want := "{\"schema_version\":\"kado.version.v1\",\"kado\":{\"version\":\"0.1.0\",\"commit\":\"0123456789abcdef\",\"built_at\":\"2026-07-24T00:00:00Z\",\"target\":\"linux/arm64\",\"release_key_id\":\"sha256:abc\",\"release_public_key\":\"public\"},\"components\":{\"a2a_cli\":{\"version\":\"0.3.1-dev\",\"tag\":\"none\",\"upstream_commit\":\"fedcba9876543210\",\"built_at\":\"2026-07-24T00:00:00Z\",\"target\":\"linux/arm64\",\"patch_set\":\"sha256:patch\",\"artifact_sha256\":\"sha256:artifact\",\"artifact_size\":12345}}}\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}
@@ -1175,6 +1202,118 @@ func TestUpdateDowngradeFailureIsSafe(t *testing.T) {
 			stdout.String(),
 			stderr.String(),
 		)
+	}
+}
+
+func TestPackageManagedLifecycleFailsBeforeSideEffects(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		channel string
+		update  string
+		remove  string
+	}{
+		{channel: "homebrew", update: "brew upgrade kado", remove: "brew uninstall kado"},
+		{channel: "winget", update: "winget upgrade --id Kado.Kado --exact", remove: "winget uninstall --id Kado.Kado --exact"},
+		{channel: "scoop", update: "scoop update kado", remove: "scoop uninstall kado"},
+		{channel: "deb", update: "sudo apt-get install --only-upgrade kado", remove: "sudo apt-get remove kado"},
+		{channel: "rpm", update: "sudo dnf upgrade kado", remove: "sudo dnf remove kado"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.channel, func(t *testing.T) {
+			t.Parallel()
+			dependencies := dependencies{
+				newRelease: func(buildinfo.Info) (releaseCommands, error) {
+					t.Fatal("release state initialized")
+					return nil, nil
+				},
+				newAuth: func(string) (authCommands, error) {
+					t.Fatal("credential state initialized")
+					return nil, nil
+				},
+			}
+			for _, operation := range []struct {
+				args    []string
+				command string
+			}{
+				{args: []string{"update"}, command: test.update},
+				{args: []string{"uninstall", "--yes", "--purge-credentials"}, command: test.remove},
+			} {
+				var stdout, stderr bytes.Buffer
+				exitCode := runWithDependencies(
+					operation.args,
+					&stdout,
+					&stderr,
+					buildinfo.Info{InstallChannel: test.channel},
+					dependencies,
+				)
+				if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 ||
+					!strings.Contains(stderr.String(), "release_package_managed") ||
+					!strings.Contains(stderr.String(), operation.command) {
+					t.Fatalf(
+						"Run(%q) exit=%d stdout=%q stderr=%q",
+						operation.args,
+						exitCode,
+						stdout.String(),
+						stderr.String(),
+					)
+				}
+			}
+		})
+	}
+}
+
+func TestContainerManagedLifecycleFailsBeforeSideEffects(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"update", "--dry-run"},
+		{"uninstall", "--yes", "--purge-credentials"},
+	} {
+		var stdout, stderr bytes.Buffer
+		exitCode := runWithDependencies(
+			args,
+			&stdout,
+			&stderr,
+			buildinfo.Info{InstallChannel: "container"},
+			dependencies{
+				newRelease: func(buildinfo.Info) (releaseCommands, error) {
+					t.Fatal("release state initialized")
+					return nil, nil
+				},
+				newAuth: func(string) (authCommands, error) {
+					t.Fatal("credential state initialized")
+					return nil, nil
+				},
+			},
+		)
+		if exitCode != diagnostic.ExitFailure || stdout.Len() != 0 ||
+			!strings.Contains(stderr.String(), "release_package_managed") ||
+			!strings.Contains(stderr.String(), "container image") {
+			t.Fatalf("Run(%q) exit=%d stdout=%q stderr=%q", args, exitCode, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestDirectAndDeveloperLifecycleStillUseReleaseState(t *testing.T) {
+	t.Parallel()
+
+	for _, channel := range []string{"direct", "unknown", ""} {
+		releases := &fakeReleaseCommands{}
+		var stdout, stderr bytes.Buffer
+		exitCode := runWithDependencies(
+			[]string{"update", "--dry-run"},
+			&stdout,
+			&stderr,
+			buildinfo.Info{InstallChannel: channel},
+			dependencies{newRelease: func(buildinfo.Info) (releaseCommands, error) {
+				return releases, nil
+			}},
+		)
+		if exitCode != 0 || stderr.Len() != 0 || !releases.options.DryRun {
+			t.Fatalf("channel=%q exit=%d stdout=%q stderr=%q options=%#v", channel, exitCode, stdout.String(), stderr.String(), releases.options)
+		}
 	}
 }
 

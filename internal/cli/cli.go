@@ -25,6 +25,7 @@ import (
 	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/config"
 	"github.com/kado-so/search/internal/diagnostic"
+	"github.com/kado-so/search/internal/installchannel"
 	"github.com/kado-so/search/internal/keystore"
 	"github.com/kado-so/search/internal/launcher"
 	"github.com/kado-so/search/internal/localstate"
@@ -34,6 +35,7 @@ import (
 	"github.com/kado-so/search/internal/searchclient"
 	"github.com/kado-so/search/internal/searchcontract"
 	"github.com/kado-so/search/internal/searchoutput"
+	"github.com/kado-so/search/internal/shellcompletion"
 	"github.com/kado-so/search/internal/skillclient"
 )
 
@@ -44,6 +46,7 @@ Usage:
 
 Commands:
   search <query>   Run an authenticated Search
+  a2a              A2A CLI
   auth create      Create/authenticate an identity
   auth link        Link agents
   auth status      Show identity state
@@ -55,8 +58,9 @@ Commands:
   update            Install signed CLI release
   uninstall         Remove the CLI
   release verify    Verify a release
+  completion        Generate shell completion
   help              Show help
-  version           Show build information
+  version           Show bundle information
 
 Options:
   --agent identity   Explicitly select the calling agent identity
@@ -64,8 +68,8 @@ Options:
   --jsonl           Emit result and pagination records
   --width columns   Human output width (40 to 160)
   -h, --help        Show this help
-  -v, --version     Show bounded build information
-  version --json    Show executable provenance
+  -v, --version     Show Kado version
+  version --json    Show bundle provenance
 `
 
 type authCommands interface {
@@ -208,6 +212,7 @@ func maybeScheduleMaintenance(args []string, stderr io.Writer, info buildinfo.In
 	if info.Version == "" || info.Version == "dev" ||
 		info.ReleasePublicKey == "" || info.ReleaseMetadataURL == "" ||
 		os.Getenv("KADO_MAINTENANCE_CHILD") != "" ||
+		shellcompletion.Matches(args) ||
 		len(args) >= 3 && args[0] == "skill" && args[1] == "update" &&
 			args[2] == "--background" {
 		return
@@ -244,6 +249,12 @@ func run(
 	info buildinfo.Info,
 	dependencies dependencies,
 ) error {
+	if len(args) > 0 && shellcompletion.IsHidden(args[0]) {
+		if err := shellcompletion.Execute(args, stdout, io.Discard); err != nil {
+			_, _ = io.WriteString(stdout, ":1\n")
+		}
+		return nil
+	}
 	override, args, err := parseGlobalOptions(args)
 	if err != nil {
 		return err
@@ -265,7 +276,13 @@ func run(
 		}
 		_, _ = io.WriteString(stdout, helpText)
 		return nil
-	case "version", "-v", "--version":
+	case "-v", "--version":
+		if len(args) != 1 {
+			return usageError("version does not accept arguments")
+		}
+		_, _ = fmt.Fprintln(stdout, info.Line())
+		return nil
+	case "version":
 		if len(args) == 2 && args[0] == "version" && args[1] == "--json" {
 			encoded, err := info.JSON()
 			if err != nil {
@@ -282,7 +299,7 @@ func run(
 		if len(args) != 1 {
 			return usageError("version does not accept arguments")
 		}
-		_, _ = fmt.Fprintln(stdout, info.Line())
+		_, _ = io.WriteString(stdout, info.BundleText())
 		return nil
 	case "auth":
 		return runAuth(args[1:], stdout, override, dependencies)
@@ -298,6 +315,11 @@ func run(
 		return runUninstall(args[1:], stdout, info, override, dependencies)
 	case "release":
 		return runRelease(args[1:], stdout, info, dependencies)
+	case "completion":
+		if err := shellcompletion.Execute(args, stdout, io.Discard); err != nil {
+			return usageError("usage: kado completion <bash|zsh|fish|powershell> [--no-descriptions]")
+		}
+		return nil
 	default:
 		return usageError("unknown command; run 'kado help' for usage")
 	}
@@ -647,6 +669,9 @@ func runUpdate(
 			return usageError("usage: kado update [--dry-run] [--allow-downgrade]")
 		}
 	}
+	if err := packageManagedDiagnostic("update", info.InstallChannel); err != nil {
+		return err
+	}
 	if dependencies.newRelease == nil {
 		return releaseDiagnostic(errors.New("release support unavailable"))
 	}
@@ -729,6 +754,9 @@ func runUninstall(
 			"uninstall requires --yes; credentials are preserved unless --purge-credentials is explicit",
 		)
 	}
+	if err := packageManagedDiagnostic("uninstall", info.InstallChannel); err != nil {
+		return err
+	}
 	if purgeCredentials {
 		if dependencies.newAuth == nil {
 			return authDiagnostic("revoke", errors.New("authentication unavailable"))
@@ -764,6 +792,58 @@ func runUninstall(
 		_, _ = fmt.Fprintln(stdout, "removed kado; credentials were preserved")
 	}
 	return nil
+}
+
+func packageManagedDiagnostic(action, channel string) error {
+	type instructions struct {
+		owner     string
+		update    string
+		uninstall string
+	}
+	channels := map[string]instructions{
+		installchannel.Homebrew: {
+			owner: "Homebrew", update: "brew upgrade kado", uninstall: "brew uninstall kado",
+		},
+		installchannel.WinGet: {
+			owner: "WinGet", update: "winget upgrade --id Kado.Kado --exact", uninstall: "winget uninstall --id Kado.Kado --exact",
+		},
+		installchannel.Scoop: {
+			owner: "Scoop", update: "scoop update kado", uninstall: "scoop uninstall kado",
+		},
+		installchannel.Deb: {
+			owner: "the Debian package manager", update: "sudo apt-get install --only-upgrade kado", uninstall: "sudo apt-get remove kado",
+		},
+		installchannel.RPM: {
+			owner: "the RPM package manager", update: "sudo dnf upgrade kado", uninstall: "sudo dnf remove kado",
+		},
+	}
+	if channel == installchannel.Container {
+		return diagnostic.New(
+			"release_package_managed",
+			"this Kado executable belongs to a container image; replace or remove the container through its owning deployment tool",
+			diagnostic.ExitFailure,
+			nil,
+		)
+	}
+	instruction, ok := channels[channel]
+	if !ok {
+		return nil
+	}
+	command := instruction.update
+	if action == "uninstall" {
+		command = instruction.uninstall
+	}
+	return diagnostic.New(
+		"release_package_managed",
+		fmt.Sprintf(
+			"this Kado installation is managed by %s; run `%s` to %s it",
+			instruction.owner,
+			command,
+			action,
+		),
+		diagnostic.ExitFailure,
+		nil,
+	)
 }
 
 func releaseDiagnostic(cause error) error {

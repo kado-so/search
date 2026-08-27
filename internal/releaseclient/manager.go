@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kado-so/search/internal/buildinfo"
 	"github.com/kado-so/search/internal/launcher"
 )
 
@@ -232,8 +233,10 @@ func (manager Manager) Update(ctx context.Context, options Options) (Result, err
 	var result Result
 	var updateErr error
 	lockErr := launcher.WithUpdateLock(options.LauncherPath, func() error {
-		if _, activeVersion, err := launcher.Active(options.LauncherPath); err == nil {
+		if _, activeVersion, err := launcher.ActiveBundle(options.LauncherPath); err == nil {
 			options.CurrentVersion = activeVersion
+		} else {
+			return ErrInstall
 		}
 		result, updateErr = manager.update(ctx, options)
 		return updateErr
@@ -259,14 +262,6 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 		FromVersion: options.CurrentVersion,
 		Target:      goos + "/" + goarch,
 		DryRun:      options.DryRun,
-	}
-	targetSnapshot := ""
-	if !options.DryRun && options.LauncherPath == "" {
-		var snapshotErr error
-		targetSnapshot, snapshotErr = snapshotExecutable(options.TargetPath)
-		if snapshotErr != nil {
-			return result, ErrInstall
-		}
 	}
 	fetcher := manager.Fetcher
 	if fetcher == nil {
@@ -312,6 +307,9 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 			return result, ErrDowngrade
 		}
 		if comparison == 0 && !options.DryRun {
+			if options.LauncherPath == "" {
+				return result, ErrInstall
+			}
 			return result, nil
 		}
 	}
@@ -320,14 +318,14 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 	if err != nil {
 		return result, err
 	}
-	binary, err := VerifyTargetArchive(target, archive)
+	bundle, err := VerifyTargetBundle(target, archive)
 	if err != nil {
 		return result, err
 	}
 	if options.TargetPath == "" {
 		return result, ErrInstall
 	}
-	candidate, cleanup, err := writeCandidate(options.TargetPath, binary)
+	candidate, cleanup, err := writeCandidate(options.TargetPath, bundle.Kado)
 	if err != nil {
 		return result, ErrInstall
 	}
@@ -342,21 +340,19 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 	if options.DryRun {
 		return result, nil
 	}
-	pending := false
 	if options.LauncherPath != "" {
-		err = launcher.InstallVersionLocked(
+		err = launcher.InstallBundleVersionLocked(
 			options.LauncherPath,
 			metadata.Version,
-			candidate,
+			launcher.ExecutableBundle{Kado: bundle.Kado, A2A: bundle.A2A},
 		)
 	} else {
-		pending, err = manager.installCandidate(candidate, options.TargetPath, targetSnapshot)
+		return result, ErrInstall
 	}
 	if err != nil {
 		return result, ErrInstall
 	}
 	result.Changed = true
-	result.Pending = pending
 	return result, nil
 }
 
@@ -374,8 +370,26 @@ func VerifyTargetArchive(target Target, archive []byte) ([]byte, error) {
 	return binary, nil
 }
 
-// Uninstall removes only the selected executable. Credentials and config are
-// deliberately outside this boundary.
+// VerifyTargetBundle authenticates and strictly extracts both executables from
+// a paired release archive.
+func VerifyTargetBundle(target Target, archive []byte) (ExecutableBundle, error) {
+	if err := VerifyFile(target.Archive, archive); err != nil {
+		return ExecutableBundle{}, ErrChecksum
+	}
+	binaryName, archiveFormat, ok := targetLayout(target.OS)
+	if !ok {
+		return ExecutableBundle{}, ErrChecksum
+	}
+	bundle, err := ExtractBundle(archive, archiveFormat, binaryName)
+	if err != nil || target.Sidecar.Size != int64(len(bundle.A2A)) ||
+		target.Sidecar.SHA256 != Digest(bundle.A2A) {
+		return ExecutableBundle{}, ErrChecksum
+	}
+	return bundle, nil
+}
+
+// Uninstall removes the direct executable pair and managed activation state.
+// Credentials and config are deliberately outside this boundary.
 func Uninstall(targetPath string) error {
 	if err := validateTargetPath(targetPath, true); err != nil {
 		return ErrUninstall
@@ -391,10 +405,18 @@ func Uninstall(targetPath string) error {
 	if err := os.Remove(targetPath); err != nil {
 		return ErrUninstall
 	}
+	_ = os.Remove(filepath.Join(filepath.Dir(targetPath), a2aInstalledName(targetPath)))
 	_ = os.Remove(filepath.Join(filepath.Dir(targetPath), "kado.install.json"))
 	_ = os.RemoveAll(targetPath + ".d")
 	_ = syncDirectory(filepath.Dir(targetPath))
 	return nil
+}
+
+func a2aInstalledName(targetPath string) string {
+	if strings.HasSuffix(strings.ToLower(filepath.Base(targetPath)), ".exe") {
+		return "kado-a2a.exe"
+	}
+	return "kado-a2a"
 }
 
 // VerifyExecutable executes only the extracted same-platform candidate and
@@ -416,14 +438,7 @@ func VerifyExecutable(
 	if err := command.Run(); err != nil {
 		return ErrCandidate
 	}
-	var value struct {
-		Version      string `json:"version"`
-		Commit       string `json:"commit"`
-		BuiltAt      string `json:"built_at"`
-		Target       string `json:"target"`
-		ReleaseKeyID string `json:"release_key_id"`
-		PublicKey    string `json:"release_public_key"`
-	}
+	var value buildinfo.VersionReport
 	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&value); err != nil {
@@ -433,7 +448,7 @@ func VerifyExecutable(
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return ErrCandidate
 	}
-	publicKey, err := ParsePublicKey(value.PublicKey)
+	publicKey, err := ParsePublicKey(value.Kado.PublicKey)
 	if err != nil {
 		return ErrCandidate
 	}
@@ -441,11 +456,21 @@ func VerifyExecutable(
 	if err != nil {
 		return ErrCandidate
 	}
-	if value.Version != metadata.Version ||
-		value.Commit != metadata.Commit ||
-		value.BuiltAt != metadata.BuiltAt ||
-		value.Target != target.OS+"/"+target.Arch ||
-		value.ReleaseKeyID != metadata.KeyID ||
+	a2a := metadata.Components.A2ACLI
+	if value.SchemaVersion != buildinfo.VersionSchema ||
+		value.Kado.Version != metadata.Version ||
+		value.Kado.Commit != metadata.Commit ||
+		value.Kado.BuiltAt != metadata.BuiltAt ||
+		value.Kado.Target != target.OS+"/"+target.Arch ||
+		value.Kado.ReleaseKeyID != metadata.KeyID ||
+		value.Components.A2ACLI.Version != a2a.Version ||
+		value.Components.A2ACLI.Tag != a2a.Tag ||
+		value.Components.A2ACLI.UpstreamCommit != a2a.Commit ||
+		value.Components.A2ACLI.BuiltAt != a2a.BuiltAt ||
+		value.Components.A2ACLI.Target != target.OS+"/"+target.Arch ||
+		value.Components.A2ACLI.PatchSet != "sha256:"+a2a.PatchSetSHA256 ||
+		value.Components.A2ACLI.ArtifactSHA256 != target.Sidecar.SHA256 ||
+		value.Components.A2ACLI.ArtifactSize != target.Sidecar.Size ||
 		publicKeyID != metadata.KeyID {
 		return ErrCandidate
 	}

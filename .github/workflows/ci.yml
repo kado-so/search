@@ -35,9 +35,510 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
           git diff --exit-code
-      - name: Build all release targets with GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+      - name: Cross-build the Kado executable
+        shell: bash
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            suffix=""
+            if test "$goos" = windows; then suffix=".exe"; fi
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/kado-$goos-$goarch$suffix" ./cmd/kado
+          done
+
+  build-candidate:
+    runs-on: depot-ubuntu-24.04
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
         with:
-          distribution: goreleaser
-          version: v2.17.1
-          args: build --clean --snapshot
+          fetch-depth: 0
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - id: identity
+        shell: bash
+        run: |
+          version="0.0.0-ci.${GITHUB_RUN_ID}"
+          commit="$(git rev-parse HEAD)"
+          epoch="$(git show -s --format=%ct HEAD)"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+          echo "epoch=$epoch" >>"$GITHUB_OUTPUT"
+      - id: a2a
+        name: Fetch locked official A2A source
+        shell: bash
+        run: |
+          lock="third_party/a2a-cli/upstream.lock.json"
+          repository="$(jq -r '.repository' "$lock")"
+          commit="$(jq -r '.commit' "$lock")"
+          test "$repository" = "https://github.com/a2aproject/a2a-cli"
+          printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'
+          checkout="$RUNNER_TEMP/kado-a2a-source"
+          git init "$checkout"
+          git -C "$checkout" remote add origin "$repository"
+          git -C "$checkout" fetch --force origin "$commit"
+          git -C "$checkout" fetch --force --tags origin
+          git -C "$checkout" checkout --detach "$commit"
+          echo "checkout=$checkout" >>"$GITHUB_OUTPUT"
+      - name: Build signed six-target candidate
+        shell: bash
+        env:
+          KADO_RELEASE_SIGNING_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        run: |
+          go run ./tools/release \
+            --version "${{ steps.identity.outputs.version }}" \
+            --commit "${{ steps.identity.outputs.commit }}" \
+            --source-date-epoch "${{ steps.identity.outputs.epoch }}" \
+            --a2a-source "${{ steps.a2a.outputs.checkout }}" \
+            --out dist/qualification
+      - name: Build signed package-channel candidates
+        shell: bash
+        env:
+          KADO_RELEASE_SIGNING_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        run: |
+          for channel in homebrew winget scoop deb rpm container; do
+            go run ./tools/release \
+              --version "${{ steps.identity.outputs.version }}" \
+              --commit "${{ steps.identity.outputs.commit }}" \
+              --source-date-epoch "${{ steps.identity.outputs.epoch }}" \
+              --a2a-source "${{ steps.a2a.outputs.checkout }}" \
+              --install-channel "$channel" \
+              --out "dist/qualification/packages/$channel"
+          done
+      - name: Qualify Search use against official local echo agent
+        shell: bash
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/kado-candidate"
+          tar -xzf "dist/qualification/kado_${VERSION}_linux_amd64.tar.gz" \
+            -C "$RUNNER_TEMP/kado-candidate"
+          KADO_A2A_QUALIFICATION_BINARY="$RUNNER_TEMP/kado-candidate/kado" \
+            go test ./cmd/kado \
+              -run '^(TestA2ACandidate|TestSearchUseInvokesOfficialLocalEchoAgent$)' \
+              -count=1 -timeout=10m
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: dist/qualification/
+          if-no-files-found: error
+          retention-days: 14
+
+  native-lifecycle:
+    needs: build-candidate
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            race: true
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            race: true
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            race: true
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+            race: true
+          - runner: windows-2025
+            goos: windows
+            goarch: amd64
+            race: true
+          - runner: windows-11-arm
+            goos: windows
+            goarch: arm64
+            race: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: release
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - name: Verify native target
+        shell: bash
+        env:
+          EXPECTED_GOOS: ${{ matrix.goos }}
+          EXPECTED_GOARCH: ${{ matrix.goarch }}
+        run: |
+          test "$(go env GOOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOARCH)" = "$EXPECTED_GOARCH"
+      - name: Test A2A lifecycle, completion, and version presentation
+        run: go test ./internal/a2adispatch ./internal/buildinfo ./internal/cli ./internal/launcher ./internal/shellcompletion ./cmd/kado -count=1 -timeout=15m
+      - name: Test Windows Job Object
+        if: runner.os == 'Windows'
+        run: go test ./internal/processtree -count=1
+      - name: Race-test A2A lifecycle, completion, and version presentation
+        if: matrix.race
+        run: go test -race ./internal/a2adispatch ./internal/buildinfo ./internal/cli ./internal/launcher ./internal/shellcompletion ./cmd/kado -count=1 -timeout=20m
+      - name: Qualify signed Unix candidate
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/kado-candidate"
+          tar -xzf "release/kado_${VERSION}_${TARGET_OS}_${TARGET_ARCH}.tar.gz" \
+            -C "$RUNNER_TEMP/kado-candidate"
+          export KADO_A2A_QUALIFICATION_BINARY="$RUNNER_TEMP/kado-candidate/kado"
+          go test ./cmd/kado -run '^TestA2ACandidate' -count=1 -timeout=10m
+          "$KADO_A2A_QUALIFICATION_BINARY" release verify --directory "$PWD/release"
+      - name: Qualify signed Windows candidate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          $candidate = Join-Path $env:RUNNER_TEMP 'kado-candidate'
+          Expand-Archive -LiteralPath "release/kado_$env:VERSION`_windows_$env:TARGET_ARCH.zip" -DestinationPath $candidate
+          $env:KADO_A2A_QUALIFICATION_BINARY = Join-Path $candidate 'kado.exe'
+          go test ./cmd/kado -run '^TestA2ACandidate' -count=1 -timeout=10m
+          if ($LASTEXITCODE -ne 0) { throw 'candidate qualification failed' }
+          & $env:KADO_A2A_QUALIFICATION_BINARY release verify --directory (Join-Path $PWD 'release')
+          if ($LASTEXITCODE -ne 0) { throw 'candidate verification failed' }
+
+  package-pair-smoke:
+    needs: build-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            channel: homebrew
+            os: linux
+            arch: amd64
+            update: brew upgrade kado
+            uninstall: brew uninstall kado
+          - runner: ubuntu-24.04-arm
+            channel: homebrew
+            os: linux
+            arch: arm64
+            update: brew upgrade kado
+            uninstall: brew uninstall kado
+          - runner: macos-15-intel
+            channel: homebrew
+            os: darwin
+            arch: amd64
+            update: brew upgrade kado
+            uninstall: brew uninstall kado
+          - runner: macos-15
+            channel: homebrew
+            os: darwin
+            arch: arm64
+            update: brew upgrade kado
+            uninstall: brew uninstall kado
+          - runner: windows-2025
+            channel: scoop
+            os: windows
+            arch: amd64
+            update: scoop update kado
+            uninstall: scoop uninstall kado
+          - runner: windows-11-arm
+            channel: scoop
+            os: windows
+            arch: arm64
+            update: scoop update kado
+            uninstall: scoop uninstall kado
+          - runner: windows-2025
+            channel: winget
+            os: windows
+            arch: amd64
+            update: winget upgrade --id Kado.Kado --exact
+            uninstall: winget uninstall --id Kado.Kado --exact
+          - runner: windows-11-arm
+            channel: winget
+            os: windows
+            arch: arm64
+            update: winget upgrade --id Kado.Kado --exact
+            uninstall: winget uninstall --id Kado.Kado --exact
+          - runner: ubuntu-24.04
+            channel: deb
+            os: linux
+            arch: amd64
+            update: sudo apt-get install --only-upgrade kado
+            uninstall: sudo apt-get remove kado
+          - runner: ubuntu-24.04-arm
+            channel: deb
+            os: linux
+            arch: arm64
+            update: sudo apt-get install --only-upgrade kado
+            uninstall: sudo apt-get remove kado
+          - runner: ubuntu-24.04
+            channel: rpm
+            os: linux
+            arch: amd64
+            update: sudo dnf upgrade kado
+            uninstall: sudo dnf remove kado
+          - runner: ubuntu-24.04-arm
+            channel: rpm
+            os: linux
+            arch: arm64
+            update: sudo dnf upgrade kado
+            uninstall: sudo dnf remove kado
+          - runner: ubuntu-24.04
+            channel: container
+            os: linux
+            arch: amd64
+            update: container image
+            uninstall: container image
+          - runner: ubuntu-24.04-arm
+            channel: container
+            os: linux
+            arch: arm64
+            update: container image
+            uninstall: container image
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: release
+      - name: Exercise Unix package-owned pair
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+          CHANNEL: ${{ matrix.channel }}
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          UPDATE_COMMAND: ${{ matrix.update }}
+          UNINSTALL_COMMAND: ${{ matrix.uninstall }}
+        run: |
+          digest() {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" | awk '{print $1}'
+            else
+              shasum -a 256 "$1" | awk '{print $1}'
+            fi
+          }
+          if test "$CHANNEL" = homebrew; then
+            ruby -c "release/packages/homebrew/kado.rb"
+          fi
+          if test "$CHANNEL" = deb; then
+            (cd "release/packages/deb" && sh ./build-deb.sh "$TARGET_ARCH")
+            dpkg-deb --info "release/packages/deb/kado_${VERSION}_${TARGET_ARCH}.deb" >/dev/null
+          fi
+          if test "$CHANNEL" = container; then
+            image="kado-package-smoke:${VERSION}-${TARGET_ARCH}"
+            docker build --build-arg TARGETARCH="$TARGET_ARCH" -t "$image" "release/packages/container"
+            docker run --rm "$image" a2a --output json version >/dev/null
+          fi
+          package_root="$RUNNER_TEMP/Kado package ü/$CHANNEL/$VERSION/libexec"
+          public_root="$RUNNER_TEMP/Kado public ü"
+          mkdir -p "$package_root" "$public_root"
+          archive="release/packages/$CHANNEL/kado_${VERSION}_${TARGET_OS}_${TARGET_ARCH}.tar.gz"
+          tar -xzf "$archive" -C "$package_root"
+          if test "$CHANNEL" = container; then
+            kado="$package_root/kado"
+          else
+            ln -s "$package_root/kado" "$public_root/kado"
+            kado="$public_root/kado"
+          fi
+          before_kado="$(digest "$package_root/kado")"
+          before_a2a="$(digest "$package_root/kado-a2a")"
+          "$kado" a2a --output json version >/dev/null
+          if "$kado" update 2>update.err; then exit 1; fi
+          grep -F "$UPDATE_COMMAND" update.err
+          if "$kado" uninstall --yes --purge-credentials 2>uninstall.err; then exit 1; fi
+          grep -F "$UNINSTALL_COMMAND" uninstall.err
+          test "$(digest "$package_root/kado")" = "$before_kado"
+          test "$(digest "$package_root/kado-a2a")" = "$before_a2a"
+          cp "$package_root/kado-a2a" "$package_root/kado-a2a.good"
+          printf x >>"$package_root/kado-a2a"
+          if "$kado" a2a --output json version; then exit 1; fi
+          mv "$package_root/kado-a2a.good" "$package_root/kado-a2a"
+          "$kado" a2a --output json version >/dev/null
+      - name: Exercise Windows package-owned pair
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+          CHANNEL: ${{ matrix.channel }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          UPDATE_COMMAND: ${{ matrix.update }}
+          UNINSTALL_COMMAND: ${{ matrix.uninstall }}
+        run: |
+          if ($env:CHANNEL -eq 'winget') {
+            $winget = Get-Command winget -ErrorAction SilentlyContinue
+            if ($null -eq $winget) {
+              Write-Host 'WinGet CLI is unavailable on this native runner; manifest validation runs on Windows amd64.'
+            } else {
+              & $winget.Source --version
+              $validation = (& $winget.Source validate --manifest "release/packages/winget/manifests" 2>&1 | Out-String)
+              $validationExit = $LASTEXITCODE
+              Write-Host $validation
+              if ($validationExit -ne 0) {
+                $warningLines = @($validation -split "`r?`n" | Where-Object { $_ -like 'Manifest Warning:*' })
+                $knownWarningExitCodes = @(1, -1978335192)
+                $knownSchemaWarnings =
+                  $knownWarningExitCodes.Contains($validationExit) -and
+                  $validation.Contains('Manifest validation succeeded with warnings.') -and
+                  !$validation.Contains('Manifest Error:') -and
+                  $warningLines.Count -eq 3 -and
+                  ($warningLines | Where-Object {
+                    $_ -notmatch '^Manifest Warning: The schema header URL does not match the expected pattern\.' -or
+                    $_ -notmatch 'https://aka\.ms/winget-manifest\.' -or
+                    $_ -notmatch '\.1\.12\.0\.schema\.json'
+                  }).Count -eq 0 -and
+                  $validation.Contains('File: Kado.Kado.installer.yaml') -and
+                  $validation.Contains('File: Kado.Kado.locale.en-US.yaml') -and
+                  $validation.Contains('File: Kado.Kado.yaml')
+                if (!$knownSchemaWarnings) { throw "WinGet manifest validation failed with exit $validationExit" }
+              }
+            }
+          }
+          $root = Join-Path $env:RUNNER_TEMP "Kado package ü\$env:CHANNEL"
+          $versionRoot = Join-Path $root $env:VERSION
+          $current = Join-Path $root 'current'
+          New-Item -ItemType Directory -Force -Path $versionRoot | Out-Null
+          Expand-Archive -LiteralPath "release/packages/$env:CHANNEL/kado_$env:VERSION`_windows_$env:TARGET_ARCH.zip" -DestinationPath $versionRoot
+          New-Item -ItemType Junction -Path $current -Target $versionRoot | Out-Null
+          $kado = Join-Path $current 'kado.exe'
+          $sidecar = Join-Path $versionRoot 'kado-a2a.exe'
+          $beforeKado = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $versionRoot 'kado.exe')).Hash
+          $beforeA2A = (Get-FileHash -Algorithm SHA256 -LiteralPath $sidecar).Hash
+          & $kado a2a --output json version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'package delegation failed' }
+          $update = (& $kado update 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0 -or !$update.Contains($env:UPDATE_COMMAND)) { throw "update refusal mismatch: $update" }
+          $uninstall = (& $kado uninstall --yes --purge-credentials 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0 -or !$uninstall.Contains($env:UNINSTALL_COMMAND)) { throw "uninstall refusal mismatch: $uninstall" }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $versionRoot 'kado.exe')).Hash -ne $beforeKado) { throw 'Kado changed' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $sidecar).Hash -ne $beforeA2A) { throw 'sidecar changed' }
+          Copy-Item -LiteralPath $sidecar -Destination "$sidecar.good"
+          Add-Content -LiteralPath $sidecar -Value x -NoNewline
+          & $kado a2a --output json version | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw 'tampered sidecar executed' }
+          Move-Item -Force -LiteralPath "$sidecar.good" -Destination $sidecar
+          & $kado a2a --output json version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'repaired sidecar did not execute' }
+
+  unix-completion-engines:
+    needs: build-candidate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: release
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - name: Install completion engines
+        run: sudo apt-get update && sudo apt-get install --yes bash-completion zsh fish expect
+      - name: Exercise Bash, Zsh, and Fish completion engines
+        shell: bash
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/kado-bin" "$RUNNER_TEMP/kado-completion"
+          tar -xzf "release/kado_${VERSION}_linux_amd64.tar.gz" -C "$RUNNER_TEMP/kado-bin"
+          export PATH="$RUNNER_TEMP/kado-bin:$PATH"
+          export TERM=xterm
+
+          kado completion bash >"$RUNNER_TEMP/kado-completion/kado.bash"
+          kado completion zsh >"$RUNNER_TEMP/kado-completion/_kado"
+          expect <<'EXPECT'
+          set timeout 15
+
+          spawn env PS1=KADO-BASH-PROMPT bash --noprofile --norc -i
+          expect "KADO-BASH-PROMPT"
+          send "source /usr/share/bash-completion/bash_completion\r"
+          expect "KADO-BASH-PROMPT"
+          send "source $env(RUNNER_TEMP)/kado-completion/kado.bash\r"
+          expect "KADO-BASH-PROMPT"
+          send "kado a\t\t"
+          expect "A2A CLI"
+          set bash_id $spawn_id
+          close -i $bash_id
+          wait -i $bash_id
+
+          spawn env PROMPT=KADO-ZSH-PROMPT zsh -f
+          expect "KADO-ZSH-PROMPT"
+          send "autoload -Uz compinit; compinit\r"
+          expect "KADO-ZSH-PROMPT"
+          send "source $env(RUNNER_TEMP)/kado-completion/_kado\r"
+          expect "KADO-ZSH-PROMPT"
+          send "kado a\t\t"
+          expect "A2A CLI"
+          set zsh_id $spawn_id
+          close -i $zsh_id
+          wait -i $zsh_id
+          EXPECT
+
+          kado completion fish >"$RUNNER_TEMP/kado-completion/kado.fish"
+          fish_output="$(fish -C "source $RUNNER_TEMP/kado-completion/kado.fish" -c "complete -C 'kado a'")"
+          grep -q '^a2a' <<<"$fish_output"
+
+  powershell-completion-engine:
+    needs: build-candidate
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: release
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - name: Exercise PowerShell completion engine
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+        run: |
+          $binDirectory = Join-Path $env:RUNNER_TEMP 'kado-bin'
+          $completionDirectory = Join-Path $env:RUNNER_TEMP 'kado-completion'
+          New-Item -ItemType Directory -Force -Path $binDirectory, $completionDirectory | Out-Null
+          Expand-Archive -LiteralPath "release/kado_$env:VERSION`_windows_amd64.zip" -DestinationPath $binDirectory
+          $kado = Join-Path $binDirectory 'kado.exe'
+          $completion = Join-Path $completionDirectory 'completion.ps1'
+          & $kado completion powershell | Set-Content -LiteralPath $completion -Encoding utf8
+          . $completion
+          Set-Alias -Name kado -Value $kado
+          $line = 'kado a'
+          $matches = (TabExpansion2 -inputScript $line -cursorColumn $line.Length).CompletionMatches
+          if ($matches.CompletionText -notcontains 'a2a') {
+            throw "PowerShell completion did not return a2a: $($matches.CompletionText -join ', ')"
+          }

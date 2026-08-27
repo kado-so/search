@@ -14,8 +14,8 @@ from work required before the first production release.
 - Direct installations are self-updating.
 - Package-manager installations remain managed by their package manager.
 - The complete active skill catalog is bundled with the CLI and tested as one compatible unit.
-- Windows direct update uses a helper handoff; it does not rename the running
-  executable in-process.
+- Windows direct update leaves the stable launcher untouched and publishes a
+  complete immutable executable-pair activation.
 
 ## Release pipeline
 
@@ -25,7 +25,8 @@ Continuous integration runs on pull requests and `main`:
 2. run `go test ./...`;
 3. run `go vet ./...`;
 4. check formatting and generated files; and
-5. cross-compile every supported target with GoReleaser.
+5. cross-compile every supported Kado/A2A executable pair with the pinned Go
+   toolchain and deterministic flags.
 
 A production release begins when an operator pushes a semantic `vX.Y.Z` tag.
 Merging to `main` runs CI but does not publish. The protected release workflow:
@@ -35,7 +36,8 @@ Merging to `main` runs CI but does not publish. The protected release workflow:
 3. reject an existing GitHub Release for that version;
 4. derive `SOURCE_DATE_EPOCH` from the commit;
 5. enter a reviewer-protected release environment;
-6. build all six targets once with the pinned GoReleaser version;
+6. verify the locked official A2A source, build all six A2A targets first, and
+   then build all six matching Kado targets with their exact sidecar identity;
 7. validate every signed artifact before publication;
 8. verify all bundles and smoke-test on native runners;
 9. expose the canonical build as one short-lived Actions artifact; and
@@ -158,48 +160,40 @@ Every installed executable needs an installation channel:
 - `container`
 
 Direct installers write a protected adjacent receipt. Packages stamp the
-channel at build time or install their own non-direct receipt. A missing receipt
-is accepted only by a canonical direct release as a legacy migration case; an
-invalid or explicitly non-direct receipt disables launcher management.
+channel at build time. A missing receipt is accepted only by a canonical
+direct release as a legacy migration case; an invalid or explicitly non-direct
+receipt disables launcher management.
 
-For a direct installation, `kado update` installs a signed immutable payload
-and appends an activation record. Automatic maintenance uses the same path.
+For a current direct installation, `kado update` installs a signed immutable
+Kado/A2A executable pair and appends an activation-v2 record that authenticates
+both members. Automatic maintenance uses the same path.
 
-## Launcher and Windows migration
+Package-managed `kado update` and `kado uninstall` calls fail before release
+or credential state is initialized. The diagnostic names the owner and exact
+manager command. Container builds instead direct the caller to the deployment
+tool because Kado cannot know whether Docker, Podman, Kubernetes, or another
+orchestrator owns that image.
 
-The executable on `PATH` is a stable launcher. The same signed release binary
-acts as both the launcher and payload, which keeps release protocol v1 and its
-archive layout compatible with already-released clients. Payloads live under
-`kado[.exe].d/versions/<version>/`; immutable activation records select the
-newest complete payload. The launcher selects once at process start. Unix uses
-`exec`, while Windows waits as the payload's console parent and returns its exit
-status.
+All channels use one runtime rule: canonicalize the real Kado executable and
+accept only the regular, non-symlink `kado-a2a` sibling whose bounded size and
+SHA-256 match the values stamped into Kado. No channel searches `PATH`, the
+current directory, or environment overrides for the sidecar.
 
-The first explicit update from the legacy Windows layout still needs the
-existing helper because Windows locks the legacy running executable:
+## Launcher and pre-A2A migration
 
-1. the running CLI downloads and verifies the candidate;
-2. it writes the candidate next to the installed executable;
-3. it starts the candidate in an internal `update-helper` mode with the parent
-   PID, expected target digest, and an unguessable transaction token;
-4. the original process exits;
-5. the helper waits for that exact parent process to terminate;
-6. it revalidates the target and candidate;
-7. it moves the old executable to a rollback path and the launcher-capable
-   candidate into place;
-8. it starts `kado version --json`, which bootstraps and selects the immutable
-   payload;
-9. it restores the rollback on failed verification; and
-10. it removes the helper and rollback on success.
+The Kado executable on `PATH` remains the stable launcher. Immutable payloads
+live under `kado[.exe].d/versions/<version>/` as complete `kado` and `kado-a2a`
+pairs. Activation v2 is the logical commit: it records the exact relative path,
+bounded size, and SHA-256 digest of each role. Readers select the newest valid
+pair without locking and fall back to an older complete pair after corruption
+or interruption.
 
-After migration, Windows updates never replace the stable launcher and do not
-need the helper. OS-backed update locks disappear after a crash. Old payload
-cleanup is best effort because an overlapping Windows process may still hold
-one open.
-
-The helper is implemented in the release client and cross-compiles for both
-Windows targets. The release workflow must pass its native locked-file and
-replacement smoke tests before publication.
+There is no automatic compatibility bridge from a pre-A2A direct install. Its
+old updater understands only the previous single-executable release contract.
+The supported migration is to close every Kado process, use the current signed
+uninstaller without credential purge, and run the current signed installer.
+The uninstaller removes executables and managed activation state but preserves
+configuration, identities, and credentials by default.
 
 ## Secondary channel list
 
@@ -232,8 +226,14 @@ Implemented in this repository:
 - asynchronous skill refresh and cached CLI update availability notices;
 - agent-first Unix and Windows installers;
 - Windows verified-candidate update handoff;
-- Depot CI, GoReleaser construction, native smoke jobs, and GitHub
-  Releases.
+- Depot CI, deterministic paired release construction, native smoke jobs, and
+  GitHub Releases;
+- closed direct/Homebrew/WinGet/Scoop/deb/rpm/container build identities;
+- manager-native Homebrew, Scoop, and WinGet definitions plus Debian, RPM, and
+  container build definitions, backed by compact signed-checksum package
+  artifact sets; and
+- six-target package-pair release gates covering canonical links/junctions,
+  lifecycle refusal, tamper rejection, repair, and unchanged pair hashes.
 
 Required outside or after this repository change:
 

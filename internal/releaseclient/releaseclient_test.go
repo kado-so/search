@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,70 +25,47 @@ import (
 	"github.com/kado-so/search/internal/launcher"
 )
 
-func TestCleanInstallUpdateDowngradeDryRunAndUninstall(t *testing.T) {
+func TestLegacyDirectUpdateRequiresManualReinstallAndUninstallPreservesState(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	targetPath := filepath.Join(root, executableName(runtime.GOOS))
 	credential := filepath.Join(root, "credential-record")
+	configuration := filepath.Join(root, "config-record")
 	if err := os.WriteFile(credential, []byte("preserve"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	first := newReleaseFixture(t, "0.1.0", runtime.GOOS, runtime.GOARCH)
-	manager := first.manager(t)
-	result, err := manager.Update(context.Background(), Options{
-		TargetPath: targetPath,
-	})
-	if err != nil || !result.Changed || result.ToVersion != "0.1.0" {
-		t.Fatalf("first install result=%#v error=%v", result, err)
+	if err := os.WriteFile(configuration, []byte("preserve-config"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	assertFileContent(t, targetPath, first.binary)
-
-	second := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
-	manager = second.manager(t)
-	result, err = manager.Update(context.Background(), Options{
+	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
+	if _, err := fixture.manager(t).Update(context.Background(), Options{
 		TargetPath:     targetPath,
 		CurrentVersion: "0.1.0",
-		DryRun:         true,
-	})
-	if err != nil || result.Changed || !result.DryRun {
-		t.Fatalf("dry run result=%#v error=%v", result, err)
+	}); !errors.Is(err, ErrInstall) {
+		t.Fatalf("legacy direct update error = %v", err)
 	}
-	assertFileContent(t, targetPath, first.binary)
 
-	result, err = manager.Update(context.Background(), Options{
-		TargetPath:     targetPath,
-		CurrentVersion: "0.1.0",
-	})
-	if err != nil || !result.Changed {
-		t.Fatalf("update result=%#v error=%v", result, err)
+	if err := os.WriteFile(targetPath, []byte("installed-kado"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	assertFileContent(t, targetPath, second.binary)
-
-	downgrade := first.manager(t)
-	if _, err := downgrade.Update(context.Background(), Options{
-		TargetPath:     targetPath,
-		CurrentVersion: "0.2.0",
-	}); !errors.Is(err, ErrDowngrade) {
-		t.Fatalf("downgrade error = %v", err)
+	sidecarPath := filepath.Join(root, a2aInstalledName(targetPath))
+	if err := os.WriteFile(sidecarPath, []byte("installed-a2a"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := downgrade.Update(context.Background(), Options{
-		TargetPath:     targetPath,
-		CurrentVersion: "0.2.0",
-		AllowDowngrade: true,
-	}); err != nil {
-		t.Fatalf("explicit downgrade error = %v", err)
+	if err := os.Mkdir(targetPath+".d", 0o700); err != nil {
+		t.Fatal(err)
 	}
-	assertFileContent(t, targetPath, first.binary)
-
 	if err := Uninstall(targetPath); err != nil {
 		t.Fatalf("Uninstall error = %v", err)
 	}
-	if _, err := os.Stat(targetPath); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("executable still exists: %v", err)
+	for _, removed := range []string{targetPath, sidecarPath, targetPath + ".d"} {
+		if _, err := os.Stat(removed); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("managed path still exists: %s: %v", removed, err)
+		}
 	}
 	assertFileContent(t, credential, []byte("preserve"))
+	assertFileContent(t, configuration, []byte("preserve-config"))
 }
 
 func TestManagedUpdateLeavesLauncherAndRunningVersionUntouched(t *testing.T) {
@@ -99,12 +77,15 @@ func TestManagedUpdateLeavesLauncherAndRunningVersionUntouched(t *testing.T) {
 	if err := os.WriteFile(launcherPath, stable, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	initial := filepath.Join(root, "initial")
-	if err := os.WriteFile(initial, []byte("payload-0.1.0"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := launcher.WithUpdateLock(launcherPath, func() error {
-		return launcher.InstallVersionLocked(launcherPath, "0.1.0", initial)
+		return launcher.InstallBundleVersionLocked(
+			launcherPath,
+			"0.1.0",
+			launcher.ExecutableBundle{
+				Kado: []byte("payload-0.1.0"),
+				A2A:  []byte("a2a-0.1.0"),
+			},
+		)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +105,44 @@ func TestManagedUpdateLeavesLauncherAndRunningVersionUntouched(t *testing.T) {
 		t.Fatalf("active payload=%q version=%q error=%v", payload, version, err)
 	}
 	assertFileContent(t, payload, fixture.binary)
+	pair, bundleVersion, err := launcher.ActiveBundle(launcherPath)
+	if err != nil || bundleVersion != "0.2.0" || pair.Kado != payload {
+		t.Fatalf("active bundle=%#v version=%q error=%v", pair, bundleVersion, err)
+	}
+	assertFileContent(t, pair.A2A, []byte("fixture-a2a-sidecar"))
+}
+
+func TestSingleExecutableActivationCannotCrossBundleBoundary(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	launcherPath := filepath.Join(root, executableName(runtime.GOOS))
+	stable := []byte("stable-launcher")
+	if err := os.WriteFile(launcherPath, stable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyCandidate := filepath.Join(root, "legacy-candidate")
+	if err := os.WriteFile(legacyCandidate, []byte("legacy-payload"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := launcher.WithUpdateLock(launcherPath, func() error {
+		return launcher.InstallVersionLocked(launcherPath, "0.1.0", legacyCandidate)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
+	if _, err := fixture.manager(t).Update(context.Background(), Options{
+		TargetPath:   launcherPath,
+		LauncherPath: launcherPath,
+	}); !errors.Is(err, ErrInstall) {
+		t.Fatalf("single-executable migration error = %v", err)
+	}
+	assertFileContent(t, launcherPath, stable)
+	payload, version, err := launcher.Active(launcherPath)
+	if err != nil || version != "0.1.0" {
+		t.Fatalf("legacy activation changed: payload=%q version=%q error=%v", payload, version, err)
+	}
+	assertFileContent(t, payload, []byte("legacy-payload"))
 }
 
 func TestUpdateRejectsTamperChecksumAndUnsupportedPlatform(t *testing.T) {
@@ -590,6 +609,43 @@ func TestVerifyMetadataRejectsInBandSigningKeyRotation(t *testing.T) {
 	}
 }
 
+func TestMetadataRejectsMalformedA2AAndSupplyChainIdentity(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Metadata)
+	}{
+		{name: "A2A commit", mutate: func(value *Metadata) { value.Components.A2ACLI.Commit = "invalid" }},
+		{name: "A2A license", mutate: func(value *Metadata) { value.Components.A2ACLI.LicenseSHA256 = "invalid" }},
+		{name: "A2A patch", mutate: func(value *Metadata) { value.Components.A2ACLI.PatchSetSHA256 = "invalid" }},
+		{name: "sidecar digest", mutate: func(value *Metadata) { value.Targets[0].Sidecar.SHA256 = "invalid" }},
+		{name: "sidecar size", mutate: func(value *Metadata) { value.Targets[0].Sidecar.Size = 0 }},
+		{name: "SBOM name", mutate: func(value *Metadata) { value.Targets[0].SBOM.Name = "wrong.spdx.json" }},
+		{name: "provenance name", mutate: func(value *Metadata) { value.Provenance.Name = "wrong.intoto.json" }},
+		{name: "archive digest", mutate: func(value *Metadata) { value.Targets[0].Archive.SHA256 = "invalid" }},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newReleaseFixture(t, "0.2.0", runtime.GOOS, runtime.GOARCH)
+			var metadata Metadata
+			if err := json.Unmarshal(fixture.fetch[fixture.metadataURL], &metadata); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&metadata)
+			encoded, err := CanonicalMetadata(metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			signature := ed25519.Sign(fixture.privateKey, encoded)
+			if _, err := VerifyMetadata(encoded, signature, fixture.publicKey); !errors.Is(err, errInvalidMetadata) {
+				t.Fatalf("VerifyMetadata() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestVersionPolicyUsesSemverPrereleaseOrdering(t *testing.T) {
 	t.Parallel()
 
@@ -697,10 +753,15 @@ func TestNativeSignedUpdateSmoke(t *testing.T) {
 	}
 	metadataFor := func(version string) Metadata {
 		return Metadata{
-			Version: version,
-			Commit:  "0123456789abcdef0123456789abcdef01234567",
-			BuiltAt: "2026-07-24T00:00:00Z",
-			KeyID:   keyID,
+			Version:    version,
+			Commit:     "0123456789abcdef0123456789abcdef01234567",
+			BuiltAt:    "2026-07-24T00:00:00Z",
+			KeyID:      keyID,
+			Components: fixtureComponents("2026-07-24T00:00:00Z"),
+			Targets: []Target{{
+				OS: runtime.GOOS, Arch: runtime.GOARCH,
+				Sidecar: fixtureSidecar(),
+			}},
 		}
 	}
 	publicKeyText := PublicKeyText(public)
@@ -746,16 +807,18 @@ func TestNativeSignedUpdateSmoke(t *testing.T) {
 		t.Fatalf("updated executable failed: %v", err)
 	}
 	var version struct {
-		Version      string `json:"version"`
-		Target       string `json:"target"`
-		ReleaseKeyID string `json:"release_key_id"`
+		Kado struct {
+			Version      string `json:"version"`
+			Target       string `json:"target"`
+			ReleaseKeyID string `json:"release_key_id"`
+		} `json:"kado"`
 	}
 	if err := json.Unmarshal(output, &version); err != nil {
 		t.Fatal(err)
 	}
-	if version.Version != "0.2.0" ||
-		version.Target != runtime.GOOS+"/"+runtime.GOARCH ||
-		version.ReleaseKeyID != keyID {
+	if version.Kado.Version != "0.2.0" ||
+		version.Kado.Target != runtime.GOOS+"/"+runtime.GOARCH ||
+		version.Kado.ReleaseKeyID != keyID {
 		t.Fatalf("updated executable identity = %#v", version)
 	}
 }
@@ -819,6 +882,7 @@ func newReleaseFixtureWithBinary(
 		}
 	}
 	binary := []byte("candidate-" + version + "-" + selectedOS + "-" + selectedArch)
+	provenance := file("provenance.intoto.json", []byte("provenance\n"))
 	targets := make([]Target, 0, len(supported))
 	var selected Target
 	keys := make([]string, 0, len(supported))
@@ -847,6 +911,8 @@ func newReleaseFixtureWithBinary(
 			OS:      goos,
 			Arch:    goarch,
 			Archive: file(baseName+archiveSuffix, archive),
+			Sidecar: fixtureSidecar(),
+			SBOM:    file(baseName+".spdx.json", []byte("sbom-"+goos+"-"+goarch+"\n")),
 		}
 		if goos == selectedOS && goarch == selectedArch {
 			selected = target
@@ -861,6 +927,8 @@ func newReleaseFixtureWithBinary(
 		Commit:        "0123456789abcdef0123456789abcdef01234567",
 		BuiltAt:       "2026-07-24T00:00:00Z",
 		KeyID:         keyID,
+		Components:    fixtureComponents("2026-07-24T00:00:00Z"),
+		Provenance:    provenance,
 		Targets:       targets,
 	}
 	metadataBytes, err := CanonicalMetadata(metadata)
@@ -885,13 +953,29 @@ func newReleaseFixtureWithBinary(
 func buildStampedExecutable(t *testing.T, metadata Metadata, publicKey string) string {
 	t.Helper()
 	output := filepath.Join(t.TempDir(), executableName(runtime.GOOS))
+	target, err := metadata.TargetFor(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		if len(metadata.Targets) != 1 {
+			t.Fatal(err)
+		}
+		target = metadata.Targets[0]
+	}
+	a2a := metadata.Components.A2ACLI
 	ldflags := "-s -w -buildid=" +
 		" -X github.com/kado-so/search/internal/buildinfo.Version=" + metadata.Version +
 		" -X github.com/kado-so/search/internal/buildinfo.Commit=" + metadata.Commit +
 		" -X github.com/kado-so/search/internal/buildinfo.Date=" + metadata.BuiltAt +
 		" -X github.com/kado-so/search/internal/buildinfo.Target=" + runtime.GOOS + "/" + runtime.GOARCH +
 		" -X github.com/kado-so/search/internal/buildinfo.ReleaseKeyID=" + metadata.KeyID +
-		" -X github.com/kado-so/search/internal/buildinfo.ReleasePublicKey=" + publicKey
+		" -X github.com/kado-so/search/internal/buildinfo.ReleasePublicKey=" + publicKey +
+		" -X github.com/kado-so/search/internal/buildinfo.A2AVersion=" + a2a.Version +
+		" -X github.com/kado-so/search/internal/buildinfo.A2ATag=" + a2a.Tag +
+		" -X github.com/kado-so/search/internal/buildinfo.A2AUpstreamCommit=" + a2a.Commit +
+		" -X github.com/kado-so/search/internal/buildinfo.A2ADate=" + a2a.BuiltAt +
+		" -X github.com/kado-so/search/internal/buildinfo.A2ATarget=" + runtime.GOOS + "/" + runtime.GOARCH +
+		" -X github.com/kado-so/search/internal/buildinfo.A2APatchSet=sha256:" + a2a.PatchSetSHA256 +
+		" -X github.com/kado-so/search/internal/buildinfo.A2AArtifactSHA256=" + target.Sidecar.SHA256 +
+		" -X github.com/kado-so/search/internal/buildinfo.A2AArtifactSize=" + strconv.FormatInt(target.Sidecar.Size, 10)
 	command := exec.Command(
 		"go",
 		"build",
@@ -908,6 +992,26 @@ func buildStampedExecutable(t *testing.T, metadata Metadata, publicKey string) s
 		t.Fatalf("go build error = %v\n%s", err, value)
 	}
 	return output
+}
+
+func fixtureComponents(builtAt string) Components {
+	return Components{A2ACLI: A2AComponent{
+		Repository: A2ARepository, Module: A2AModule,
+		Version: "0.0.0-89abcde", Tag: "none",
+		Commit:              "89abcdef0123456789abcdef0123456789abcdef",
+		SourceArchiveSHA256: strings.Repeat("1", 64),
+		SourceTreeSHA256:    strings.Repeat("2", 64),
+		PatchedTreeSHA256:   strings.Repeat("3", 64),
+		GoModSHA256:         strings.Repeat("4", 64), GoSumSHA256: strings.Repeat("5", 64),
+		LicenseSHA256: strings.Repeat("6", 64), GoToolchain: "go1.26.4",
+		DisplayName: "kado a2a", PatchSetSHA256: strings.Repeat("7", 64),
+		BuiltAt: builtAt,
+	}}
+}
+
+func fixtureSidecar() EmbeddedArtifact {
+	value := []byte("fixture-a2a-sidecar")
+	return EmbeddedArtifact{SHA256: Digest(value), Size: int64(len(value))}
 }
 
 func (fixture *releaseFixture) manager(t *testing.T) Manager {
@@ -949,16 +1053,25 @@ func (fetcher mapFetcher) Fetch(
 
 func validArchive(t *testing.T, format, binaryName string, binary []byte) []byte {
 	t.Helper()
+	sidecarName, ok := a2aExecutableName(binaryName)
+	if !ok {
+		t.Fatalf("unsupported executable name %q", binaryName)
+	}
+	sidecar := []byte("fixture-a2a-sidecar")
 	if format == "zip" {
 		return makeTestZip(t, []zipEntry{
 			{name: binaryName, mode: 0o755, value: binary},
+			{name: sidecarName, mode: 0o755, value: sidecar},
 			{name: "LICENSE", mode: 0o644, value: []byte("license")},
+			{name: "LICENSE-A2A-CLI", mode: 0o644, value: []byte("a2a-license")},
 			{name: "INSTALL-CLI.md", mode: 0o644, value: []byte("guide")},
 		})
 	}
 	return makeTestTar(t, []tarEntry{
 		{name: binaryName, mode: 0o755, value: binary},
+		{name: sidecarName, mode: 0o755, value: sidecar},
 		{name: "LICENSE", mode: 0o644, value: []byte("license")},
+		{name: "LICENSE-A2A-CLI", mode: 0o644, value: []byte("a2a-license")},
 		{name: "INSTALL-CLI.md", mode: 0o644, value: []byte("guide")},
 	})
 }

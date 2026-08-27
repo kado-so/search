@@ -33,17 +33,22 @@ var releaseTargets = []buildTarget{
 }
 
 type buildInput struct {
-	root       string
-	output     string
-	prebuilt   string
-	goBinary   string
-	source     releaseIdentity
-	commit     string
-	builtAt    time.Time
-	privateKey ed25519.PrivateKey
-	publicKey  ed25519.PublicKey
-	publicPEM  []byte
-	keyID      string
+	root         string
+	output       string
+	kadoPrebuilt string
+	a2aPrebuilt  string
+	goBinary     string
+	a2a          a2aPreparedSource
+	a2aLicense   []byte
+	source       releaseIdentity
+	commit       string
+	builtAt      time.Time
+	privateKey   ed25519.PrivateKey
+	publicKey    ed25519.PublicKey
+	publicPEM    []byte
+	keyID        string
+	channel      string
+	targets      []buildTarget
 }
 
 type builtFile struct {
@@ -57,10 +62,6 @@ func buildRelease(input buildInput) error {
 	license, err := os.ReadFile(filepath.Join(input.root, "LICENSE"))
 	if err != nil {
 		return errors.New("release license is unavailable")
-	}
-	modules, err := loadModules(input)
-	if err != nil {
-		return err
 	}
 	guide := []byte(installGuide(input.source, input.keyID))
 	installUnix := []byte(installUnixScript(input.source, input.keyID))
@@ -123,41 +124,18 @@ func buildRelease(input buildInput) error {
 	if err != nil {
 		return err
 	}
-	skillSet, err := makeSkillReleases(
-		input.source.InstallURL,
-		input.privateKey,
-	)
-	if err != nil {
-		return err
+	buildTargets := input.targets
+	if len(buildTargets) == 0 {
+		buildTargets = releaseTargets
 	}
-	if _, err := add("skills/catalog.json", skillSet.Catalog, 0o644); err != nil {
-		return err
-	}
-	if _, err := add("skills/catalog.json.sig", skillSet.Signature, 0o644); err != nil {
-		return err
-	}
-	for _, skill := range skillSet.Releases {
-		prefix := filepath.Join("skills", skill.Name, skill.Variant, skill.Version)
-		if _, err := add(filepath.Join(prefix, skill.Name+".tar.gz"), skill.Archive, 0o644); err != nil {
-			return err
-		}
-		if _, err := add(filepath.Join(prefix, "metadata.json"), skill.Metadata, 0o644); err != nil {
-			return err
-		}
-		if _, err := add(filepath.Join(prefix, "metadata.json.sig"), skill.Signature, 0o644); err != nil {
-			return err
-		}
-	}
-
-	targets := make([]releaseclient.Target, 0, len(releaseTargets))
-	for _, target := range releaseTargets {
+	targets := make([]releaseclient.Target, 0, len(buildTargets))
+	for _, target := range buildTargets {
 		built, err := buildTargetArtifacts(
 			input,
 			target,
 			assetBase,
 			license,
 			guide,
-			modules,
 			add,
 			register,
 		)
@@ -168,8 +146,11 @@ func buildRelease(input buildInput) error {
 	}
 	targets = releaseclient.SortedTargets(targets)
 
-	provenance := makeProvenance(input, files)
-	_, err = add("provenance.intoto.json", provenance, 0o644)
+	provenance, err := makeProvenance(input, files, targets)
+	if err != nil {
+		return err
+	}
+	provenanceFile, err := add("provenance.intoto.json", provenance, 0o644)
 	if err != nil {
 		return err
 	}
@@ -185,7 +166,25 @@ func buildRelease(input buildInput) error {
 		Commit:        input.commit,
 		BuiltAt:       input.builtAt.Format(time.RFC3339),
 		KeyID:         input.keyID,
-		Targets:       targets,
+		Components: releaseclient.Components{A2ACLI: releaseclient.A2AComponent{
+			Repository:          input.a2a.Lock.Repository,
+			Module:              input.a2a.Lock.Module,
+			Version:             input.a2a.Lock.Version,
+			Tag:                 a2aTagValue(input.a2a.Lock.Tag),
+			Commit:              input.a2a.Lock.Commit,
+			SourceArchiveSHA256: input.a2a.Lock.SourceArchiveSHA256,
+			SourceTreeSHA256:    input.a2a.Lock.SourceTreeSHA256,
+			PatchedTreeSHA256:   input.a2a.Lock.PatchedTreeSHA256,
+			GoModSHA256:         input.a2a.Lock.GoModSHA256,
+			GoSumSHA256:         input.a2a.Lock.GoSumSHA256,
+			LicenseSHA256:       input.a2a.Lock.License.SHA256,
+			GoToolchain:         input.a2a.Lock.GoToolchain,
+			DisplayName:         input.a2a.Lock.DisplayName,
+			PatchSetSHA256:      input.a2a.PatchSetSHA256,
+			BuiltAt:             input.builtAt.Format(time.RFC3339),
+		}},
+		Provenance: provenanceFile,
+		Targets:    targets,
 	}
 	metadataBytes, err := releaseclient.CanonicalMetadata(metadata)
 	if err != nil {
@@ -217,7 +216,7 @@ func buildRelease(input buildInput) error {
 		return errors.New("release metadata signature self-check failed")
 	}
 	for _, target := range targets {
-		if _, err := releaseclient.VerifyTargetArchive(
+		if _, err := releaseclient.VerifyTargetBundle(
 			target,
 			files[target.Archive.Name].data,
 		); err != nil {
@@ -248,7 +247,6 @@ func buildTargetArtifacts(
 	assetBase string,
 	license []byte,
 	guide []byte,
-	modules []module,
 	add func(string, []byte, fs.FileMode) (releaseclient.File, error),
 	register func(string, []byte, releaseclient.File) error,
 ) (releaseclient.Target, error) {
@@ -268,11 +266,11 @@ func buildTargetArtifacts(
 	)
 	versionedBinaryName := base + suffix
 	binaryPath := filepath.Join(input.output, versionedBinaryName)
-	prebuiltPath := filepath.Join(input.prebuilt, versionedBinaryName)
+	prebuiltPath := filepath.Join(input.kadoPrebuilt, versionedBinaryName)
 	binary, err := os.ReadFile(prebuiltPath)
 	if err != nil {
 		return releaseclient.Target{}, fmt.Errorf(
-			"GoReleaser binary is unavailable for %s/%s",
+			"Kado binary is unavailable for %s/%s",
 			target.goos,
 			target.goarch,
 		)
@@ -294,10 +292,22 @@ func buildTargetArtifacts(
 	if err := os.Chmod(binaryPath, filesMode); err != nil {
 		return releaseclient.Target{}, errors.New("release binary mode could not be set")
 	}
+	a2aArtifactName := executableArtifactName("kado-a2a", input.source.Version, target)
+	a2aBinary, err := os.ReadFile(filepath.Join(input.a2aPrebuilt, a2aArtifactName))
+	if err != nil || len(a2aBinary) == 0 {
+		return releaseclient.Target{}, fmt.Errorf(
+			"A2A binary is unavailable for %s/%s",
+			target.goos,
+			target.goarch,
+		)
+	}
 
 	sbomName := base + ".spdx.json"
-	sbom := makeSBOM(input, target, sbomName, modules)
-	_, err = add(sbomName, sbom, 0o644)
+	sbom, err := makeSBOM(input, target, sbomName, binary, a2aBinary)
+	if err != nil {
+		return releaseclient.Target{}, err
+	}
+	sbomFile, err := add(sbomName, sbom, 0o644)
 	if err != nil {
 		return releaseclient.Target{}, err
 	}
@@ -305,9 +315,9 @@ func buildTargetArtifacts(
 	var archive []byte
 	if archiveFormat == "zip" {
 		archiveName = base + ".zip"
-		archive, err = makeZip(input.builtAt, binaryName, binary, license, guide)
+		archive, err = makeZip(input.builtAt, binaryName, binary, a2aBinary, license, input.a2aLicense, guide)
 	} else {
-		archive, err = makeTarGzip(input.builtAt, binaryName, binary, license, guide)
+		archive, err = makeTarGzip(input.builtAt, binaryName, binary, a2aBinary, license, input.a2aLicense, guide)
 	}
 	if err != nil {
 		return releaseclient.Target{}, err
@@ -327,6 +337,11 @@ func buildTargetArtifacts(
 		OS:      target.goos,
 		Arch:    target.goarch,
 		Archive: archiveFile,
+		Sidecar: releaseclient.EmbeddedArtifact{
+			SHA256: releaseclient.Digest(a2aBinary),
+			Size:   int64(len(a2aBinary)),
+		},
+		SBOM: sbomFile,
 	}, nil
 }
 
@@ -334,7 +349,9 @@ func makeTarGzip(
 	builtAt time.Time,
 	binaryName string,
 	binary []byte,
+	a2aBinary []byte,
 	license []byte,
+	a2aLicense []byte,
 	guide []byte,
 ) ([]byte, error) {
 	var output bytes.Buffer
@@ -351,7 +368,9 @@ func makeTarGzip(
 		data []byte
 	}{
 		{name: binaryName, mode: 0o755, data: binary},
+		{name: a2aExecutableForArchive(binaryName), mode: 0o755, data: a2aBinary},
 		{name: "LICENSE", mode: 0o644, data: license},
+		{name: "LICENSE-A2A-CLI", mode: 0o644, data: a2aLicense},
 		{name: "INSTALL-CLI.md", mode: 0o644, data: guide},
 	} {
 		header := &tar.Header{
@@ -388,7 +407,9 @@ func makeZip(
 	builtAt time.Time,
 	binaryName string,
 	binary []byte,
+	a2aBinary []byte,
 	license []byte,
+	a2aLicense []byte,
 	guide []byte,
 ) ([]byte, error) {
 	var output bytes.Buffer
@@ -399,7 +420,9 @@ func makeZip(
 		data []byte
 	}{
 		{name: binaryName, mode: 0o755, data: binary},
+		{name: a2aExecutableForArchive(binaryName), mode: 0o755, data: a2aBinary},
 		{name: "LICENSE", mode: 0o644, data: license},
+		{name: "LICENSE-A2A-CLI", mode: 0o644, data: a2aLicense},
 		{name: "INSTALL-CLI.md", mode: 0o644, data: guide},
 	} {
 		header := &zip.FileHeader{Name: entry.name, Method: zip.Store}
@@ -417,6 +440,13 @@ func makeZip(
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+func a2aExecutableForArchive(binaryName string) string {
+	if binaryName == "kado.exe" {
+		return "kado-a2a.exe"
+	}
+	return "kado-a2a"
 }
 
 func makeChecksums(files map[string]builtFile) []byte {

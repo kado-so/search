@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"runtime"
 
 	"golang.org/x/sys/windows"
 )
@@ -24,6 +25,8 @@ func withPlatformLock(root string, action func() error) error {
 		return errors.New("launcher update mutex is unavailable")
 	}
 	defer windows.CloseHandle(handle)
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	wait, err := windows.WaitForSingleObject(handle, windows.INFINITE)
 	if err != nil || wait != windows.WAIT_OBJECT_0 && wait != windows.WAIT_ABANDONED {
 		return errors.New("launcher update mutex could not be acquired")

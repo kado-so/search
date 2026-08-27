@@ -1,0 +1,28 @@
+{
+  "@context": "https://kado.so/contexts/search-document/v2.jsonld",
+  "@id": "https://kado.so/search?q=v2%20running",
+  "@type": "SearchResultsPage",
+  "schema_version": "kado.search-document.v2",
+  "search": {
+    "id": "execution_v2_running",
+    "query": "v2 running",
+    "created_at": "2026-07-29T00:00:00Z",
+    "started_at": "2026-07-29T00:00:01Z"
+  },
+  "state": {
+    "status": "running",
+    "progress": {
+      "percent": 40,
+      "message": "Searching public sources."
+    }
+  },
+  "links": {
+    "self": "https://kado.so/search?q=v2%20running",
+    "schema": "https://kado.so/schemas/search-document/v2.json",
+    "context": "https://kado.so/contexts/search-document/v2.jsonld"
+  },
+  "metadata": {
+    "revision": 2,
+    "generated_at": "2026-07-29T00:00:01Z"
+  }
+}

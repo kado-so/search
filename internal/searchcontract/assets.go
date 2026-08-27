@@ -13,14 +13,49 @@ import (
 )
 
 const (
-	SchemaVersion      = "kado.search-document.v1"
-	ContextURL         = "https://kado.so/contexts/search-document/v1.jsonld"
-	SchemaURL          = "https://kado.so/schemas/search-document/v1.json"
-	SemanticRules      = "kado.search-document-semantics.v1"
-	pinnedManifestHash = "000f3f58ea4fcf2cc105e1f4904ea2d392df8088c79fa0cc0e7514436a7a2713"
+	SchemaVersionV1 = "kado.search-document.v1"
+	SchemaVersionV2 = "kado.search-document.v2"
+	ContextURLV1    = "https://kado.so/contexts/search-document/v1.jsonld"
+	ContextURLV2    = "https://kado.so/contexts/search-document/v2.jsonld"
+	SchemaURLV1     = "https://kado.so/schemas/search-document/v1.json"
+	SchemaURLV2     = "https://kado.so/schemas/search-document/v2.json"
+	SemanticRulesV1 = "kado.search-document-semantics.v1"
+	SemanticRulesV2 = "kado.search-document-semantics.v2"
+
+	// The Search client requests v1 by default. These aliases preserve its
+	// existing public constants while validation and rendering accept v1/v2.
+	SchemaVersion = SchemaVersionV1
+	ContextURL    = ContextURLV1
+	SchemaURL     = SchemaURLV1
+	SemanticRules = SemanticRulesV1
+
 	maxAssetBytes      = 256 * 1024
-	maxGeneratedAssets = 4
+	maxGeneratedAssets = 8
 )
+
+type contractIdentity struct {
+	version       string
+	schemaVersion string
+	contextURL    string
+	schemaURL     string
+	semanticRules string
+	manifestHash  string
+}
+
+var contractIdentities = map[string]contractIdentity{
+	SchemaVersionV1: {
+		version: "v1", schemaVersion: SchemaVersionV1,
+		contextURL: ContextURLV1, schemaURL: SchemaURLV1,
+		semanticRules: SemanticRulesV1,
+		manifestHash:  "cb4344c5058880e95b41d6c6412b209fa8d16417e04d6eb5119d3771a3d9def9",
+	},
+	SchemaVersionV2: {
+		version: "v2", schemaVersion: SchemaVersionV2,
+		contextURL: ContextURLV2, schemaURL: SchemaURLV2,
+		semanticRules: SemanticRulesV2,
+		manifestHash:  "81a52f900de7cc3ffd6b42fa8b1742163fa0e63b6b40d0c7a94eada408a125f0",
+	},
+}
 
 type releaseManifest struct {
 	Contract      string                   `json:"contract"`
@@ -36,6 +71,7 @@ type manifestEntry struct {
 }
 
 type releasedAssets struct {
+	identity  contractIdentity
 	manifest  releaseManifest
 	schema    []byte
 	context   []byte
@@ -43,64 +79,73 @@ type releasedAssets struct {
 }
 
 var (
-	assetsOnce sync.Once
-	assetsV1   releasedAssets
-	assetsErr  error
+	assetsOnce      sync.Once
+	assetsByVersion map[string]releasedAssets
+	assetsErr       error
 )
 
-func loadReleasedAssets() (releasedAssets, error) {
+func loadReleasedAssets(schemaVersion string) (releasedAssets, error) {
 	assetsOnce.Do(func() {
-		assetsV1, assetsErr = decodeReleasedAssets()
+		assetsByVersion, assetsErr = decodeReleasedAssets()
 	})
-	return assetsV1, assetsErr
+	if assetsErr != nil {
+		return releasedAssets{}, assetsErr
+	}
+	assets, ok := assetsByVersion[schemaVersion]
+	if !ok {
+		return releasedAssets{}, fmt.Errorf("unsupported Search contract version")
+	}
+	return assets, nil
 }
 
-func decodeReleasedAssets() (releasedAssets, error) {
+func decodeReleasedAssets() (map[string]releasedAssets, error) {
 	if len(generatedCompressedAssets) == 0 ||
 		len(generatedCompressedAssets) > maxGeneratedAssets {
-		return releasedAssets{}, fmt.Errorf("invalid generated Search contract assets")
+		return nil, fmt.Errorf("invalid generated Search contract assets")
 	}
-	manifestBytes, err := generatedAsset("manifest.gen.json")
-	if err != nil ||
-		checksum(manifestBytes) != pinnedManifestHash {
-		return releasedAssets{}, fmt.Errorf("invalid generated Search contract manifest")
+	decoded := make(map[string]releasedAssets, len(contractIdentities))
+	for schemaVersion, identity := range contractIdentities {
+		prefix := identity.version + "/"
+		manifestBytes, err := generatedAsset(prefix + "manifest.gen.json")
+		if err != nil || checksum(manifestBytes) != identity.manifestHash {
+			return nil, fmt.Errorf("invalid generated Search contract manifest")
+		}
+		var manifest releaseManifest
+		if err := decodeJSON(manifestBytes, &manifest); err != nil ||
+			manifest.Contract != "kado.search-document" ||
+			manifest.Version != identity.version ||
+			manifest.SchemaVersion != identity.schemaVersion {
+			return nil, fmt.Errorf("invalid generated Search contract manifest")
+		}
+		schema, err := checkedGeneratedAsset(prefix, manifest.Artifacts["schema"])
+		if err != nil {
+			return nil, err
+		}
+		context, err := checkedGeneratedAsset(prefix, manifest.Artifacts["context"])
+		if err != nil {
+			return nil, err
+		}
+		semantics, err := checkedGeneratedAsset(prefix, manifest.Artifacts["semantics"])
+		if err != nil {
+			return nil, err
+		}
+		if manifest.Artifacts["schema"].URL != identity.schemaURL ||
+			manifest.Artifacts["context"].URL != identity.contextURL {
+			return nil, fmt.Errorf("invalid generated Search contract URLs")
+		}
+		decoded[schemaVersion] = releasedAssets{
+			identity: identity, manifest: manifest,
+			schema: schema, context: context, semantics: semantics,
+		}
 	}
-	var manifest releaseManifest
-	if err := decodeJSON(manifestBytes, &manifest); err != nil ||
-		manifest.Contract != "kado.search-document" ||
-		manifest.Version != "v1" ||
-		manifest.SchemaVersion != SchemaVersion {
-		return releasedAssets{}, fmt.Errorf("invalid generated Search contract manifest")
-	}
-	schema, err := checkedGeneratedAsset(manifest.Artifacts["schema"])
-	if err != nil {
-		return releasedAssets{}, err
-	}
-	context, err := checkedGeneratedAsset(manifest.Artifacts["context"])
-	if err != nil {
-		return releasedAssets{}, err
-	}
-	semantics, err := checkedGeneratedAsset(manifest.Artifacts["semantics"])
-	if err != nil {
-		return releasedAssets{}, err
-	}
-	if manifest.Artifacts["schema"].URL != SchemaURL ||
-		manifest.Artifacts["context"].URL != ContextURL {
-		return releasedAssets{}, fmt.Errorf("invalid generated Search contract URLs")
-	}
-	return releasedAssets{
-		manifest:  manifest,
-		schema:    schema,
-		context:   context,
-		semantics: semantics,
-	}, nil
+	return decoded, nil
 }
 
-func checkedGeneratedAsset(entry manifestEntry) ([]byte, error) {
+func checkedGeneratedAsset(prefix string, entry manifestEntry) ([]byte, error) {
 	if entry.Path == "" || entry.SHA256 == "" {
 		return nil, fmt.Errorf("generated Search contract artifact is missing")
 	}
-	value, err := generatedAsset(entry.Path)
+	value, err := generatedAsset(prefix + entry.Path)
 	if err != nil || checksum(value) != entry.SHA256 {
 		return nil, fmt.Errorf("generated Search contract artifact checksum failed")
 	}

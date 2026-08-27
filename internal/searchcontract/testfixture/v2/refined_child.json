@@ -1,0 +1,47 @@
+{
+  "@context": "https://kado.so/contexts/search-document/v2.jsonld",
+  "@id": "https://kado.so/search/execution_v2_child/refined-query",
+  "@type": "SearchResultsPage",
+  "schema_version": "kado.search-document.v2",
+  "search": {
+    "id": "execution_v2_child",
+    "parent_execution_ref": "execution_v2_parent",
+    "root_execution_ref": "execution_v2_root",
+    "query": "refined query",
+    "created_at": "2026-07-29T00:00:04Z",
+    "started_at": "2026-07-29T00:00:05Z",
+    "completed_at": "2026-07-29T00:00:07Z"
+  },
+  "state": {
+    "status": "complete"
+  },
+  "result_set": {
+    "@type": "ItemList",
+    "result_type": "mixed_results",
+    "items": [],
+    "pagination": {
+      "kind": "cursor",
+      "page_size": 20,
+      "returned": 0,
+      "total": 0,
+      "has_more": false,
+      "next_cursor": null,
+      "previous_cursor": null
+    },
+    "links": {
+      "self": "https://kado.so/search/execution_v2_child/refined-query",
+      "next": null,
+      "previous": null
+    }
+  },
+  "questions": [],
+  "links": {
+    "self": "https://kado.so/search/execution_v2_child/refined-query",
+    "schema": "https://kado.so/schemas/search-document/v2.json",
+    "context": "https://kado.so/contexts/search-document/v2.jsonld"
+  },
+  "metadata": {
+    "revision": 1,
+    "generated_at": "2026-07-29T00:00:07Z"
+  }
+}

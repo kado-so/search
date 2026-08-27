@@ -1,3 +1,6 @@
+# Additional current GitHub-hosted labels not yet in actionlint v1.7.7's catalog.
 self-hosted-runner:
   labels:
     - "depot-*"
+    - macos-15-intel
+    - windows-11-arm

@@ -17,23 +17,80 @@ import (
 func TestReleasedFixturesValidateThroughSchemaJSONLDAndSemantics(t *testing.T) {
 	t.Parallel()
 
-	names, err := testfixture.Names()
-	if err != nil {
-		t.Fatalf("testfixture.Names() error = %v", err)
+	for _, version := range []testfixture.Version{testfixture.V1, testfixture.V2} {
+		version := version
+		names, err := testfixture.NamesVersion(version)
+		if err != nil {
+			t.Fatalf("testfixture.NamesVersion(%s) error = %v", version, err)
+		}
+		for _, name := range names {
+			name := name
+			t.Run(string(version)+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				encoded := fixtureVersionBytes(t, version, name)
+				document, err := Validate(encoded)
+				if err != nil {
+					t.Fatalf("Validate(%s/%s) error = %v", version, name, err)
+				}
+				identity := contractIdentities[document.SchemaVersion]
+				if document.Context != identity.contextURL ||
+					document.Links.Schema != identity.schemaURL {
+					t.Fatalf("Validate(%s/%s) identity = %#v", version, name, document)
+				}
+			})
+		}
 	}
-	for _, name := range names {
-		name := name
-		t.Run(name, func(t *testing.T) {
+}
+
+func TestUseIsFirstClassClosedAndOptionalInV1AndV2(t *testing.T) {
+	t.Parallel()
+
+	for _, fixture := range []struct {
+		version testfixture.Version
+		name    string
+	}{
+		{version: testfixture.V1, name: "complete"},
+		{version: testfixture.V2, name: "complete_no_questions"},
+	} {
+		fixture := fixture
+		t.Run(string(fixture.version), func(t *testing.T) {
 			t.Parallel()
-			encoded := fixtureBytes(t, name)
+			encoded := fixtureVersionBytes(t, fixture.version, fixture.name)
 			document, err := Validate(encoded)
-			if err != nil {
-				t.Fatalf("Validate(%s) error = %v", name, err)
+			if err != nil || document.ResultSet == nil || len(document.ResultSet.Items) < 2 {
+				t.Fatalf("Validate(use fixture) document=%#v error=%v", document, err)
 			}
-			if document.SchemaVersion != SchemaVersion ||
-				document.Context != ContextURL ||
-				document.Links.Schema != SchemaURL {
-				t.Fatalf("Validate(%s) identity = %#v", name, document)
+			use := document.ResultSet.Items[0].Use
+			if use == nil || use.Protocol != "a2a" ||
+				use.AgentCard != "https://agents.example.com/billing/.well-known/agent-card.json" {
+				t.Fatalf("first-class use = %#v", use)
+			}
+			if document.ResultSet.Items[1].Use != nil {
+				t.Fatalf("ordinary sibling inherited use = %#v", document.ResultSet.Items[1].Use)
+			}
+		})
+	}
+}
+
+func TestUseRejectsUnknownMissingOpenAndCredentialedVariants(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		use  map[string]any
+	}{
+		{name: "unknown protocol", use: map[string]any{"protocol": "mcp", "agent_card": "https://example.com/card.json"}},
+		{name: "missing member", use: map[string]any{"protocol": "a2a"}},
+		{name: "open object", use: map[string]any{"protocol": "a2a", "agent_card": "https://example.com/card.json", "transport": "rest"}},
+		{name: "credentials", use: map[string]any{"protocol": "a2a", "agent_card": "https://user:secret@example.com/card.json"}},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			value := completeFixtureValue(t)
+			resultItems(value)[0].(map[string]any)["use"] = test.use
+			if _, err := Validate(mustMarshalDocument(t, value)); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate(%s) error = %v", test.name, err)
 			}
 		})
 	}
@@ -318,6 +375,10 @@ func TestEveryReleasedSemanticRuleHasARejectingMutation(t *testing.T) {
 			items[1].(map[string]any)["position"] = float64(3)
 			items[2].(map[string]any)["position"] = float64(2)
 		}},
+		{"USE_AGENT_CARD_INVALID", "complete", func(value map[string]any) {
+			resultItems(value)[0].(map[string]any)["use"].(map[string]any)["agent_card"] =
+				"https://user:secret@example.com/card.json"
+		}},
 		{"SEARCH_STARTED_BEFORE_CREATED", "running", func(value map[string]any) {
 			search := value["search"].(map[string]any)
 			search["created_at"] = "2026-07-23T00:00:00.000000002Z"
@@ -361,7 +422,7 @@ func TestEveryReleasedSemanticRuleHasARejectingMutation(t *testing.T) {
 			if err := json.Unmarshal(encoded, &document); err != nil {
 				t.Fatalf("json.Unmarshal(document) error = %v", err)
 			}
-			if err := validateSemantics(document); !errors.Is(err, ErrInvalid) {
+			if err := validateSemantics(document, contractIdentities[document.SchemaVersion]); !errors.Is(err, ErrInvalid) {
 				t.Fatalf("validateSemantics(%s) error = %v", test.code, err)
 			}
 			if _, err := Validate(encoded); !errors.Is(err, ErrInvalid) {
@@ -380,9 +441,7 @@ func TestPinnedGeneratedAssetsMatchAuthoritativeSibling(t *testing.T) {
 		if !ok {
 			t.Fatal("runtime.Caller() failed")
 		}
-		source = filepath.Clean(
-			filepath.Join(filepath.Dir(file), "../../../kado-app/contracts/search-document/v1"),
-		)
+		source = filepath.Clean(filepath.Join(filepath.Dir(file), "../../../kado-app/contracts/search-document"))
 	}
 	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
 		t.Skip("authoritative sibling kado-app contract is not checked out")
@@ -394,6 +453,7 @@ func TestPinnedGeneratedAssetsMatchAuthoritativeSibling(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFile(%s) error = %v", name, err)
 		}
+		want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))
 		got, err := generatedAsset(name)
 		if err != nil {
 			t.Fatalf("generatedAsset(%s) error = %v", name, err)
@@ -409,6 +469,15 @@ func fixtureBytes(t *testing.T, name string) []byte {
 	value, err := testfixture.Load(name)
 	if err != nil {
 		t.Fatalf("testfixture.Load(%s) error = %v", name, err)
+	}
+	return value
+}
+
+func fixtureVersionBytes(t *testing.T, version testfixture.Version, name string) []byte {
+	t.Helper()
+	value, err := testfixture.LoadVersion(version, name)
+	if err != nil {
+		t.Fatalf("testfixture.LoadVersion(%s, %s) error = %v", version, name, err)
 	}
 	return value
 }
@@ -460,15 +529,23 @@ func mustMarshalDocument(t *testing.T, value any) []byte {
 
 func compactDocument(t *testing.T, encoded []byte) map[string]any {
 	t.Helper()
-	contract, err := compiledV1()
+	var document Document
+	if err := decodeJSON(encoded, &document); err != nil {
+		t.Fatalf("decodeJSON(document identity) error = %v", err)
+	}
+	contract, err := compiledContractFor(document.SchemaVersion)
 	if err != nil {
-		t.Fatalf("compiledV1() error = %v", err)
+		t.Fatalf("compiledContractFor(%s) error = %v", document.SchemaVersion, err)
 	}
 	var value any
 	if err := decodeJSON(encoded, &value); err != nil {
 		t.Fatalf("decodeJSON(document) error = %v", err)
 	}
-	compacted, err := expandAndCompactJSONLD(value, contract.context)
+	compacted, err := expandAndCompactJSONLD(
+		value,
+		contractIdentities[document.SchemaVersion],
+		contract.context,
+	)
 	if err != nil {
 		t.Fatalf("expandAndCompactJSONLD() error = %v", err)
 	}

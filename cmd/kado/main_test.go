@@ -28,7 +28,7 @@ func TestActualCLIUsesConfiguredFileCredentialBackend(t *testing.T) {
 	}
 
 	moduleRoot := cliModuleRoot(t)
-	binaryPath := filepath.Join(root, "kado")
+	binaryPath := filepath.Join(root, kadoTestBinaryName())
 	build := exec.Command("go", "build", "-o", binaryPath, "./cmd/kado")
 	build.Dir = moduleRoot
 	if output, err := build.CombinedOutput(); err != nil {
