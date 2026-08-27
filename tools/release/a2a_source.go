@@ -401,9 +401,11 @@ func applyA2ASourcePatches(lockDirectory, sourceRoot string, patches []a2aLocked
 }
 
 func digestA2ASourceTree(root string) (string, error) {
+	// Git archive headers and executable-bit round-tripping differ between
+	// supported hosts. Entry safety is enforced during extraction; the locked
+	// identity intentionally covers canonical paths and bytes only.
 	type entry struct {
 		path string
-		mode uint32
 		data []byte
 	}
 	var entries []entry
@@ -426,11 +428,7 @@ func digestA2ASourceTree(root string) (string, error) {
 		if err != nil {
 			return err
 		}
-		mode := uint32(0o644)
-		if info.Mode()&0o111 != 0 {
-			mode = 0o755
-		}
-		entries = append(entries, entry{path: filepath.ToSlash(relative), mode: mode, data: value})
+		entries = append(entries, entry{path: filepath.ToSlash(relative), data: value})
 		return nil
 	})
 	if err != nil {
@@ -443,9 +441,6 @@ func digestA2ASourceTree(root string) (string, error) {
 			return "", err
 		}
 		_, _ = io.WriteString(hash, item.path)
-		if err := binary.Write(hash, binary.BigEndian, item.mode); err != nil {
-			return "", err
-		}
 		if err := binary.Write(hash, binary.BigEndian, uint64(len(item.data))); err != nil {
 			return "", err
 		}

@@ -4,9 +4,9 @@
   "module": "github.com/a2aproject/a2a-cli",
   "version": "0.0.0-20260827.fdbb3aa",
   "commit": "fdbb3aad6289c0070480147a29e04c3d46aa6c2f",
-  "source_archive_sha256": "e57ad46d845c02437dae32ec62bf7340498769b6ceee6cc6a0f3d06ce9b94ee2",
-  "source_tree_sha256": "e57ad46d845c02437dae32ec62bf7340498769b6ceee6cc6a0f3d06ce9b94ee2",
-  "patched_tree_sha256": "deca53a940b0167ec93df9facb086608ad15abf14e0b1432e6911a78e8851828",
+  "source_archive_sha256": "34cb9ab264e8c11f7b081fb0ae701eb56164b7a6472d9455444df99399cb81d0",
+  "source_tree_sha256": "34cb9ab264e8c11f7b081fb0ae701eb56164b7a6472d9455444df99399cb81d0",
+  "patched_tree_sha256": "53e0e15970d246ede2e4db0e657d8910e55bdffaf0aaab408ef5c21e6cc277ec",
   "go_mod_sha256": "6fb4857f02a8ca343b302d7b2ddbd1a5090dc42da8f80a1587ad7cb29688643f",
   "go_sum_sha256": "9dc03b632203e02e7bb2dcec9f305b72d5b9ea0c0b1b959a2160b5f78abe9a18",
   "license": {
