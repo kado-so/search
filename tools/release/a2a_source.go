@@ -224,8 +224,11 @@ func prepareA2ASource(root, sourceRepository, lockPath, destination, goBinary st
 		return a2aPreparedSource{}, errors.New("A2A applied patch set does not match the lock")
 	}
 	patchedTree, err := digestA2ASourceTree(destination)
-	if err != nil || patchedTree != lock.PatchedTreeSHA256 {
+	if err != nil {
 		return a2aPreparedSource{}, errors.New("patched A2A source tree checksum does not match the lock")
+	}
+	if patchedTree != lock.PatchedTreeSHA256 {
+		return a2aPreparedSource{}, fmt.Errorf("patched A2A source tree checksum does not match the lock: got %s", patchedTree)
 	}
 	environment := withReleaseEnvironment(sanitizedEnvironment(), map[string]string{
 		"GOTOOLCHAIN": "local",
