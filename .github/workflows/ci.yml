@@ -387,8 +387,27 @@ jobs:
           UNINSTALL_COMMAND: ${{ matrix.uninstall }}
         run: |
           if ($env:CHANNEL -eq 'winget') {
-            winget validate --manifest "release/packages/winget/manifests"
-            if ($LASTEXITCODE -ne 0) { throw 'WinGet manifest validation failed' }
+            winget --version
+            $validation = (& winget validate --manifest "release/packages/winget/manifests" 2>&1 | Out-String)
+            $validationExit = $LASTEXITCODE
+            Write-Host $validation
+            if ($validationExit -ne 0) {
+              $warningLines = @($validation -split "`r?`n" | Where-Object { $_ -like 'Manifest Warning:*' })
+              $knownSchemaWarnings =
+                $validationExit -eq 1 -and
+                $validation.Contains('Manifest validation succeeded with warnings.') -and
+                !$validation.Contains('Manifest Error:') -and
+                $warningLines.Count -eq 3 -and
+                ($warningLines | Where-Object {
+                  $_ -notmatch '^Manifest Warning: The schema header URL does not match the expected pattern\.' -or
+                  $_ -notmatch 'https://aka\.ms/winget-manifest\.' -or
+                  $_ -notmatch '\.1\.12\.0\.schema\.json'
+                }).Count -eq 0 -and
+                $validation.Contains('File: Kado.Kado.installer.yaml') -and
+                $validation.Contains('File: Kado.Kado.locale.en-US.yaml') -and
+                $validation.Contains('File: Kado.Kado.yaml')
+              if (!$knownSchemaWarnings) { throw "WinGet manifest validation failed with exit $validationExit" }
+            }
           }
           $root = Join-Path $env:RUNNER_TEMP "Kado package ü\$env:CHANNEL"
           $versionRoot = Join-Path $root $env:VERSION
@@ -447,13 +466,27 @@ jobs:
           export TERM=xterm
 
           kado completion bash >"$RUNNER_TEMP/kado-completion/kado.bash"
-          bash_input=$'source /usr/share/bash-completion/bash_completion\nsource '"$RUNNER_TEMP"$'/kado-completion/kado.bash\nkado a\t\t\nexit\n'
-          bash_output="$(printf '%s' "$bash_input" | script -qefc 'bash --noprofile --norc -i' /dev/null)"
+          bash_output="$({
+            printf 'source /usr/share/bash-completion/bash_completion\nsource %s/kado-completion/kado.bash\n' "$RUNNER_TEMP"
+            sleep 1
+            printf 'kado a\t\t'
+            sleep 1
+            printf '\003'
+            sleep 1
+            printf 'exit 0\n'
+          } | script -qefc 'bash --noprofile --norc -i' /dev/null)"
           grep -q 'a2a.*A2A CLI' <<<"$bash_output"
 
           kado completion zsh >"$RUNNER_TEMP/kado-completion/_kado"
-          zsh_input=$'autoload -Uz compinit; compinit\nsource '"$RUNNER_TEMP"$'/kado-completion/_kado\nkado a\t\t\nexit\n'
-          zsh_output="$(printf '%s' "$zsh_input" | script -qefc 'zsh -f' /dev/null)"
+          zsh_output="$({
+            printf 'autoload -Uz compinit; compinit\nsource %s/kado-completion/_kado\n' "$RUNNER_TEMP"
+            sleep 1
+            printf 'kado a\t\t'
+            sleep 1
+            printf '\003'
+            sleep 1
+            printf 'exit 0\n'
+          } | script -qefc 'zsh -f' /dev/null)"
           grep -q 'a2a.*A2A CLI' <<<"$zsh_output"
 
           kado completion fish >"$RUNNER_TEMP/kado-completion/kado.fish"
