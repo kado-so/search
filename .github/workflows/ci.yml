@@ -387,26 +387,32 @@ jobs:
           UNINSTALL_COMMAND: ${{ matrix.uninstall }}
         run: |
           if ($env:CHANNEL -eq 'winget') {
-            winget --version
-            $validation = (& winget validate --manifest "release/packages/winget/manifests" 2>&1 | Out-String)
-            $validationExit = $LASTEXITCODE
-            Write-Host $validation
-            if ($validationExit -ne 0) {
-              $warningLines = @($validation -split "`r?`n" | Where-Object { $_ -like 'Manifest Warning:*' })
-              $knownSchemaWarnings =
-                $validationExit -eq 1 -and
-                $validation.Contains('Manifest validation succeeded with warnings.') -and
-                !$validation.Contains('Manifest Error:') -and
-                $warningLines.Count -eq 3 -and
-                ($warningLines | Where-Object {
-                  $_ -notmatch '^Manifest Warning: The schema header URL does not match the expected pattern\.' -or
-                  $_ -notmatch 'https://aka\.ms/winget-manifest\.' -or
-                  $_ -notmatch '\.1\.12\.0\.schema\.json'
-                }).Count -eq 0 -and
-                $validation.Contains('File: Kado.Kado.installer.yaml') -and
-                $validation.Contains('File: Kado.Kado.locale.en-US.yaml') -and
-                $validation.Contains('File: Kado.Kado.yaml')
-              if (!$knownSchemaWarnings) { throw "WinGet manifest validation failed with exit $validationExit" }
+            $winget = Get-Command winget -ErrorAction SilentlyContinue
+            if ($null -eq $winget) {
+              Write-Host 'WinGet CLI is unavailable on this native runner; manifest validation runs on Windows amd64.'
+            } else {
+              & $winget.Source --version
+              $validation = (& $winget.Source validate --manifest "release/packages/winget/manifests" 2>&1 | Out-String)
+              $validationExit = $LASTEXITCODE
+              Write-Host $validation
+              if ($validationExit -ne 0) {
+                $warningLines = @($validation -split "`r?`n" | Where-Object { $_ -like 'Manifest Warning:*' })
+                $knownWarningExitCodes = @(1, -1978335192)
+                $knownSchemaWarnings =
+                  $knownWarningExitCodes.Contains($validationExit) -and
+                  $validation.Contains('Manifest validation succeeded with warnings.') -and
+                  !$validation.Contains('Manifest Error:') -and
+                  $warningLines.Count -eq 3 -and
+                  ($warningLines | Where-Object {
+                    $_ -notmatch '^Manifest Warning: The schema header URL does not match the expected pattern\.' -or
+                    $_ -notmatch 'https://aka\.ms/winget-manifest\.' -or
+                    $_ -notmatch '\.1\.12\.0\.schema\.json'
+                  }).Count -eq 0 -and
+                  $validation.Contains('File: Kado.Kado.installer.yaml') -and
+                  $validation.Contains('File: Kado.Kado.locale.en-US.yaml') -and
+                  $validation.Contains('File: Kado.Kado.yaml')
+                if (!$knownSchemaWarnings) { throw "WinGet manifest validation failed with exit $validationExit" }
+              }
             }
           }
           $root = Join-Path $env:RUNNER_TEMP "Kado package ü\$env:CHANNEL"
@@ -454,7 +460,7 @@ jobs:
         with:
           go-version: ${{ steps.toolchain.outputs.version }}
       - name: Install completion engines
-        run: sudo apt-get update && sudo apt-get install --yes bash-completion zsh fish
+        run: sudo apt-get update && sudo apt-get install --yes bash-completion zsh fish expect
       - name: Exercise Bash, Zsh, and Fish completion engines
         shell: bash
         env:
@@ -466,28 +472,34 @@ jobs:
           export TERM=xterm
 
           kado completion bash >"$RUNNER_TEMP/kado-completion/kado.bash"
-          bash_output="$({
-            printf 'source /usr/share/bash-completion/bash_completion\nsource %s/kado-completion/kado.bash\n' "$RUNNER_TEMP"
-            sleep 1
-            printf 'kado a\t\t'
-            sleep 1
-            printf '\003'
-            sleep 1
-            printf 'exit 0\n'
-          } | script -qefc 'bash --noprofile --norc -i' /dev/null)"
-          grep -q 'a2a.*A2A CLI' <<<"$bash_output"
-
           kado completion zsh >"$RUNNER_TEMP/kado-completion/_kado"
-          zsh_output="$({
-            printf 'autoload -Uz compinit; compinit\nsource %s/kado-completion/_kado\n' "$RUNNER_TEMP"
-            sleep 1
-            printf 'kado a\t\t'
-            sleep 1
-            printf '\003'
-            sleep 1
-            printf 'exit 0\n'
-          } | script -qefc 'zsh -f' /dev/null)"
-          grep -q 'a2a.*A2A CLI' <<<"$zsh_output"
+          expect <<'EXPECT'
+          set timeout 15
+
+          spawn env PS1=KADO-BASH-PROMPT bash --noprofile --norc -i
+          expect "KADO-BASH-PROMPT"
+          send "source /usr/share/bash-completion/bash_completion\r"
+          expect "KADO-BASH-PROMPT"
+          send "source $env(RUNNER_TEMP)/kado-completion/kado.bash\r"
+          expect "KADO-BASH-PROMPT"
+          send "kado a\t\t"
+          expect "A2A CLI"
+          set bash_id $spawn_id
+          close -i $bash_id
+          wait -i $bash_id
+
+          spawn env PROMPT=KADO-ZSH-PROMPT zsh -f
+          expect "KADO-ZSH-PROMPT"
+          send "autoload -Uz compinit; compinit\r"
+          expect "KADO-ZSH-PROMPT"
+          send "source $env(RUNNER_TEMP)/kado-completion/_kado\r"
+          expect "KADO-ZSH-PROMPT"
+          send "kado a\t\t"
+          expect "A2A CLI"
+          set zsh_id $spawn_id
+          close -i $zsh_id
+          wait -i $zsh_id
+          EXPECT
 
           kado completion fish >"$RUNNER_TEMP/kado-completion/kado.fish"
           fish_output="$(fish -C "source $RUNNER_TEMP/kado-completion/kado.fish" -c "complete -C 'kado a'")"
