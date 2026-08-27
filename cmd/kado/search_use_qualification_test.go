@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -23,6 +24,7 @@ import (
 )
 
 const a2aQualificationBinaryEnvironment = "KADO_A2A_QUALIFICATION_BINARY"
+const a2aQualificationDocumentsEnvironment = "KADO_A2A_QUALIFICATION_SEARCH_DOCUMENTS"
 
 func TestSearchUseInvokesOfficialLocalEchoAgent(t *testing.T) {
 	binary := os.Getenv(a2aQualificationBinaryEnvironment)
@@ -53,7 +55,7 @@ func TestSearchUseInvokesOfficialLocalEchoAgent(t *testing.T) {
 	} {
 		fixture := fixture
 		t.Run(string(fixture.version), func(t *testing.T) {
-			searchJSON, err := testfixture.LoadVersion(fixture.version, fixture.name)
+			searchJSON, err := loadQualificationSearchDocument(fixture.version, fixture.name)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,6 +69,13 @@ func TestSearchUseInvokesOfficialLocalEchoAgent(t *testing.T) {
 			}
 
 			use := extractFirstUse(t, rendered)
+			jsonl, err := searchoutput.Render(searchJSON, nil, searchoutput.Options{Mode: searchoutput.ModeJSONL})
+			if err != nil {
+				t.Fatalf("validate and render Search JSONL: %v", err)
+			}
+			if jsonlUse := extractFirstJSONLUse(t, jsonl); jsonlUse != use {
+				t.Fatalf("JSONL use = %+v, JSON use = %+v", jsonlUse, use)
+			}
 			if use.Protocol != "a2a" {
 				t.Fatalf("unsupported result use protocol %q", use.Protocol)
 			}
@@ -90,6 +99,13 @@ func TestSearchUseInvokesOfficialLocalEchoAgent(t *testing.T) {
 	}
 }
 
+func loadQualificationSearchDocument(version testfixture.Version, fixtureName string) ([]byte, error) {
+	if directory := strings.TrimSpace(os.Getenv(a2aQualificationDocumentsEnvironment)); directory != "" {
+		return os.ReadFile(filepath.Join(directory, string(version)+".json"))
+	}
+	return testfixture.LoadVersion(version, fixtureName)
+}
+
 type resultUse struct {
 	Protocol  string `json:"protocol"`
 	AgentCard string `json:"agent_card"`
@@ -111,6 +127,27 @@ func extractFirstUse(t *testing.T, document []byte) resultUse {
 		t.Fatal("Search result omitted use")
 	}
 	return *value.ResultSet.Items[0].Use
+}
+
+func extractFirstJSONLUse(t *testing.T, document []byte) resultUse {
+	t.Helper()
+	for _, line := range bytes.Split(document, []byte{'\n'}) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var value struct {
+			Kind string     `json:"kind"`
+			Use  *resultUse `json:"use"`
+		}
+		if err := json.Unmarshal(line, &value); err != nil {
+			t.Fatal(err)
+		}
+		if value.Kind == "result" && value.Use != nil {
+			return *value.Use
+		}
+	}
+	t.Fatal("Search JSONL result omitted use")
+	return resultUse{}
 }
 
 func replaceFirstAgentCard(t *testing.T, document []byte, cardURL string) []byte {
