@@ -377,12 +377,15 @@ func newA2ASourceFixture(t *testing.T) a2aSourceFixture {
 	}
 	toolchain := strings.TrimSpace(string(runTestCommand(t, root, "go", "env", "GOVERSION")))
 	lock := a2aSourceLock{
-		SchemaVersion:       a2aSourceLockSchema,
-		Repository:          a2aRepository,
-		Module:              a2aModule,
-		Version:             "0.0.0-20260827." + commit[:7],
-		Commit:              commit,
-		SourceArchiveSHA256: digestA2ABytes(archive),
+		SchemaVersion: a2aSourceLockSchema,
+		Repository:    a2aRepository,
+		Module:        a2aModule,
+		Version:       "0.0.0-20260827." + commit[:7],
+		Commit:        commit,
+		// Git's raw tar headers vary between Git implementations and versions.
+		// Lock the validated archive contents using the canonical extracted-tree
+		// digest so the same commit verifies on every release host.
+		SourceArchiveSHA256: sourceTree,
 		SourceTreeSHA256:    sourceTree,
 		PatchedTreeSHA256:   patchedTree,
 		GoModSHA256:         digestA2ABytes(archivedGoMod),

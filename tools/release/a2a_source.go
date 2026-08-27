@@ -180,8 +180,8 @@ func prepareA2ASource(root, sourceRepository, lockPath, destination, goBinary st
 		return a2aPreparedSource{}, err
 	}
 	archive, err := commandOutput(sourceRepository, nil, "git", "archive", "--format=tar", lock.Commit)
-	if err != nil || digestA2ABytes(archive) != lock.SourceArchiveSHA256 {
-		return a2aPreparedSource{}, errors.New("A2A source archive checksum does not match the lock")
+	if err != nil {
+		return a2aPreparedSource{}, errors.New("A2A source archive could not be created")
 	}
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return a2aPreparedSource{}, errors.New("A2A source destination could not be created")
@@ -196,7 +196,13 @@ func prepareA2ASource(root, sourceRepository, lockPath, destination, goBinary st
 		return a2aPreparedSource{}, err
 	}
 	sourceTree, err := digestA2ASourceTree(destination)
-	if err != nil || sourceTree != lock.SourceTreeSHA256 {
+	if err != nil {
+		return a2aPreparedSource{}, errors.New("A2A source tree checksum does not match the lock")
+	}
+	if sourceTree != lock.SourceArchiveSHA256 {
+		return a2aPreparedSource{}, errors.New("A2A source archive contents checksum does not match the lock")
+	}
+	if sourceTree != lock.SourceTreeSHA256 {
 		return a2aPreparedSource{}, errors.New("A2A source tree checksum does not match the lock")
 	}
 	if err := verifyA2ASourceFiles(destination, lock); err != nil {
