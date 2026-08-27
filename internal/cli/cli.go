@@ -44,6 +44,7 @@ Usage:
 
 Commands:
   search <query>   Run an authenticated Search
+  a2a              A2A CLI
   auth create      Create/authenticate an identity
   auth link        Link agents
   auth status      Show identity state

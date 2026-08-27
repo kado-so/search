@@ -42,8 +42,12 @@ func TestHelpFormsAreBoundedAndSilentOnStderr(t *testing.T) {
 		if stderr.Len() != 0 {
 			t.Fatalf("Run(%q) stderr = %q", args, stderr.String())
 		}
-		if stdout.Len() == 0 || stdout.Len() > 1024 {
+		if stdout.Len() == 0 || stdout.Len() > 1152 {
 			t.Fatalf("Run(%q) help length = %d", args, stdout.Len())
+		}
+		if strings.Count(stdout.String(), "\n  a2a              A2A CLI\n") != 1 ||
+			strings.Contains(stdout.String(), "kado-a2a") {
+			t.Fatalf("Run(%q) help has the wrong A2A entry", args)
 		}
 	}
 }
