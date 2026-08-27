@@ -6,6 +6,8 @@ Results: 4
 Page 1 — cursor pagination, returned 4/4, total unknown, more true
 1. Example application [software_application]
    A public-safe application result with object data.
+   Use (a2a): https://agents.example.com/billing/.well-known/agent-card.
+              json
    Data: {"pricing_model":"usage","tags":["AI","検索"]}
 2. Example dataset [dataset]
    A dataset result with array data.

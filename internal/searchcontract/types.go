@@ -31,16 +31,19 @@ type Document struct {
 	Search        Search     `json:"search"`
 	State         State      `json:"state"`
 	ResultSet     *ResultSet `json:"result_set,omitempty"`
+	Questions     []Question `json:"questions,omitempty"`
 	Links         Links      `json:"links"`
 	Metadata      Metadata   `json:"metadata"`
 }
 
 type Search struct {
-	ID          string  `json:"id"`
-	Query       string  `json:"query"`
-	CreatedAt   string  `json:"created_at"`
-	StartedAt   *string `json:"started_at,omitempty"`
-	CompletedAt *string `json:"completed_at,omitempty"`
+	ID                 string  `json:"id"`
+	Query              string  `json:"query"`
+	CreatedAt          string  `json:"created_at"`
+	StartedAt          *string `json:"started_at,omitempty"`
+	CompletedAt        *string `json:"completed_at,omitempty"`
+	ParentExecutionRef *string `json:"parent_execution_ref,omitempty"`
+	RootExecutionRef   *string `json:"root_execution_ref,omitempty"`
 }
 
 type State struct {
@@ -57,9 +60,10 @@ type Progress struct {
 }
 
 type Question struct {
-	ID      string   `json:"id"`
-	Prompt  string   `json:"prompt"`
-	Options []string `json:"options"`
+	ID         string   `json:"id"`
+	Prompt     string   `json:"prompt"`
+	Options    []string `json:"options"`
+	AnswerKind string   `json:"answer_kind,omitempty"`
 }
 
 type Failure struct {
@@ -85,7 +89,13 @@ type Item struct {
 	Name       string          `json:"name"`
 	Summary    string          `json:"summary"`
 	DataSchema *string         `json:"data_schema,omitempty"`
+	Use        *Use            `json:"use,omitempty"`
 	Data       json.RawMessage `json:"data"`
+}
+
+type Use struct {
+	Protocol  string `json:"protocol"`
+	AgentCard string `json:"agent_card"`
 }
 
 type Pagination struct {

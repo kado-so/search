@@ -25,9 +25,9 @@ type compiledContract struct {
 }
 
 var (
-	contractOnce sync.Once
-	contractV1   compiledContract
-	contractErr  error
+	contractsOnce      sync.Once
+	contractsByVersion map[string]compiledContract
+	contractsErr       error
 )
 
 func Validate(encoded []byte) (Document, error) {
@@ -48,15 +48,16 @@ func Validate(encoded []byte) (Document, error) {
 		if err != nil {
 			return Document{}, ErrInvalid
 		}
-		if major != 1 {
+		if major != 1 && major != 2 {
 			return Document{}, &UnsupportedVersionError{Major: major}
 		}
 	}
-	if version.SchemaVersion != SchemaVersion {
+	identity, supported := contractIdentities[version.SchemaVersion]
+	if !supported {
 		return Document{}, ErrInvalid
 	}
 
-	contract, err := compiledV1()
+	contract, err := compiledContractFor(version.SchemaVersion)
 	if err != nil {
 		return Document{}, ErrInvalid
 	}
@@ -70,62 +71,75 @@ func Validate(encoded []byte) (Document, error) {
 	}
 	var document Document
 	if err := decodeJSON(encoded, &document); err != nil ||
-		validateSemantics(document) != nil ||
+		validateSemantics(document, identity) != nil ||
 		validateJSONLD(jsonLDValue, document, contract.context) != nil {
 		return Document{}, ErrInvalid
 	}
 	return document, nil
 }
 
-func compiledV1() (compiledContract, error) {
-	contractOnce.Do(func() {
-		assets, err := loadReleasedAssets()
-		if err != nil || validateSemanticArtifact(assets.semantics) != nil {
-			contractErr = ErrInvalid
+func compiledContractFor(schemaVersion string) (compiledContract, error) {
+	contractsOnce.Do(func() {
+		assetsV1, err := loadReleasedAssets(SchemaVersionV1)
+		if err != nil || validateSemanticArtifact(assetsV1) != nil {
+			contractsErr = ErrInvalid
 			return
 		}
-		schemaValue, err := jsonschema.UnmarshalJSON(bytes.NewReader(assets.schema))
-		if err != nil {
-			contractErr = ErrInvalid
+		assetsV2, err := loadReleasedAssets(SchemaVersionV2)
+		if err != nil || validateSemanticArtifact(assetsV2) != nil {
+			contractsErr = ErrInvalid
 			return
 		}
 		compiler := jsonschema.NewCompiler()
 		compiler.DefaultDraft(jsonschema.Draft2020)
-		if err := compiler.AddResource(SchemaURL, schemaValue); err != nil {
-			contractErr = ErrInvalid
-			return
+		for _, assets := range []releasedAssets{assetsV1, assetsV2} {
+			schemaValue, schemaErr := jsonschema.UnmarshalJSON(bytes.NewReader(assets.schema))
+			if schemaErr != nil || compiler.AddResource(assets.identity.schemaURL, schemaValue) != nil {
+				contractsErr = ErrInvalid
+				return
+			}
 		}
-		schema, err := compiler.Compile(SchemaURL)
-		if err != nil {
-			contractErr = ErrInvalid
-			return
+		contractsByVersion = make(map[string]compiledContract, 2)
+		for _, assets := range []releasedAssets{assetsV1, assetsV2} {
+			schema, compileErr := compiler.Compile(assets.identity.schemaURL)
+			var context any
+			if compileErr != nil || decodeJSON(assets.context, &context) != nil {
+				contractsErr = ErrInvalid
+				return
+			}
+			contractsByVersion[assets.identity.schemaVersion] = compiledContract{
+				schema: schema, context: context,
+			}
 		}
-		var context any
-		if err := decodeJSON(assets.context, &context); err != nil {
-			contractErr = ErrInvalid
-			return
-		}
-		contractV1 = compiledContract{schema: schema, context: context}
 	})
-	return contractV1, contractErr
+	if contractsErr != nil {
+		return compiledContract{}, contractsErr
+	}
+	contract, ok := contractsByVersion[schemaVersion]
+	if !ok {
+		return compiledContract{}, ErrInvalid
+	}
+	return contract, nil
 }
 
 type localContextLoader struct {
-	context any
+	contextURL string
+	context    any
 }
 
 func (loader localContextLoader) LoadDocument(url string) (*ld.RemoteDocument, error) {
-	if url != ContextURL {
+	if url != loader.contextURL {
 		return nil, fmt.Errorf("remote JSON-LD documents are disabled")
 	}
 	return &ld.RemoteDocument{
-		DocumentURL: ContextURL,
+		DocumentURL: loader.contextURL,
 		Document:    loader.context,
 	}, nil
 }
 
 func validateJSONLD(value any, document Document, context any) error {
-	compacted, err := expandAndCompactJSONLD(value, context)
+	identity := contractIdentities[document.SchemaVersion]
+	compacted, err := expandAndCompactJSONLD(value, identity, context)
 	if err != nil {
 		return ErrInvalid
 	}
@@ -162,21 +176,32 @@ func validateJSONLD(value any, document Document, context any) error {
 		if !ok || !sameJSONValue(document.ResultSet.Items[index].Data, object["data"]) {
 			return ErrInvalid
 		}
+		compactedUse, hasUse := object["use"]
+		if document.ResultSet.Items[index].Use == nil {
+			if hasUse {
+				return ErrInvalid
+			}
+			continue
+		}
+		encodedUse, marshalErr := json.Marshal(document.ResultSet.Items[index].Use)
+		if marshalErr != nil || !hasUse || !sameJSONValue(encodedUse, compactedUse) {
+			return ErrInvalid
+		}
 	}
 	return nil
 }
 
-func expandAndCompactJSONLD(value any, context any) (map[string]any, error) {
+func expandAndCompactJSONLD(value any, identity contractIdentity, context any) (map[string]any, error) {
 	processor := ld.NewJsonLdProcessor()
 	options := ld.NewJsonLdOptions("")
 	options.ProcessingMode = ld.JsonLd_1_1
-	options.DocumentLoader = localContextLoader{context: context}
+	options.DocumentLoader = localContextLoader{contextURL: identity.contextURL, context: context}
 	expanded, err := processor.Expand(value, options)
-	if err != nil || len(expanded) == 0 || !canonicalExpandedTerms(expanded) {
+	if err != nil || len(expanded) == 0 || !canonicalExpandedTerms(expanded, identity) {
 		return nil, ErrInvalid
 	}
-	compacted, err := processor.Compact(expanded, ContextURL, options)
-	if err != nil || compacted["@context"] != ContextURL {
+	compacted, err := processor.Compact(expanded, identity.contextURL, options)
+	if err != nil || compacted["@context"] != identity.contextURL {
 		return nil, ErrInvalid
 	}
 	return compacted, nil
@@ -197,11 +222,11 @@ func compactedValues(object map[string]any, term string) []any {
 	return []any{value}
 }
 
-func canonicalExpandedTerms(value any) bool {
+func canonicalExpandedTerms(value any, identity contractIdentity) bool {
 	switch value := value.(type) {
 	case []any:
 		for _, child := range value {
-			if !canonicalExpandedTerms(child) {
+			if !canonicalExpandedTerms(child, identity) {
 				return false
 			}
 		}
@@ -211,11 +236,11 @@ func canonicalExpandedTerms(value any) bool {
 				!strings.HasPrefix(term, "https://schema.org/") &&
 				!strings.HasPrefix(
 					term,
-					"https://kado.so/vocab/search-document/v1#",
+					"https://kado.so/vocab/search-document/"+identity.version+"#",
 				) {
 				return false
 			}
-			if term != "@value" && !canonicalExpandedTerms(child) {
+			if term != "@value" && !canonicalExpandedTerms(child, identity) {
 				return false
 			}
 		}

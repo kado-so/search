@@ -210,6 +210,14 @@ func renderHuman(pages []validatedPage, width int) ([]byte, error) {
 				width,
 			)
 			writeWrapped(&output, "   ", item.Summary, width)
+			if item.Use != nil {
+				writeWrapped(
+					&output,
+					"   Use ("+item.Use.Protocol+"): ",
+					item.Use.AgentCard,
+					width,
+				)
+			}
 			preview := compactPreview(item.Data, maximumDataPreview)
 			writeWrapped(&output, "   Data: ", preview, width)
 		}
@@ -251,16 +259,17 @@ type jsonlSearch struct {
 }
 
 type jsonlItem struct {
-	Kind       string          `json:"kind"`
-	PageIndex  int             `json:"page_index"`
-	SearchID   string          `json:"search_id"`
-	ID         string          `json:"id"`
-	Position   int             `json:"position"`
-	Type       string          `json:"type"`
-	Name       string          `json:"name"`
-	Summary    string          `json:"summary"`
-	DataSchema *string         `json:"data_schema,omitempty"`
-	Data       json.RawMessage `json:"data"`
+	Kind       string              `json:"kind"`
+	PageIndex  int                 `json:"page_index"`
+	SearchID   string              `json:"search_id"`
+	ID         string              `json:"id"`
+	Position   int                 `json:"position"`
+	Type       string              `json:"type"`
+	Name       string              `json:"name"`
+	Summary    string              `json:"summary"`
+	DataSchema *string             `json:"data_schema,omitempty"`
+	Use        *searchcontract.Use `json:"use,omitempty"`
+	Data       json.RawMessage     `json:"data"`
 }
 
 type jsonlPagination struct {
@@ -300,6 +309,7 @@ func renderJSONL(pages []validatedPage) ([]byte, error) {
 				Name:       item.Name,
 				Summary:    item.Summary,
 				DataSchema: item.DataSchema,
+				Use:        item.Use,
 				Data:       item.Data,
 			}); err != nil {
 				return nil, err

@@ -17,21 +17,77 @@ import (
 func TestCanonicalJSONIsTheExactUnmodifiedServerDocument(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"complete", "complete_page"} {
-		name := name
-		t.Run(name, func(t *testing.T) {
+	for _, fixture := range []struct {
+		version testfixture.Version
+		name    string
+	}{
+		{version: testfixture.V1, name: "complete"},
+		{version: testfixture.V1, name: "complete_page"},
+		{version: testfixture.V2, name: "complete_no_questions"},
+		{version: testfixture.V2, name: "complete_page"},
+	} {
+		fixture := fixture
+		t.Run(string(fixture.version)+"/"+fixture.name, func(t *testing.T) {
 			t.Parallel()
-			canonical := releasedFixture(t, name)
+			canonical := releasedVersionFixture(t, fixture.version, fixture.name)
 			rendered, err := Render(canonical, nil, Options{Mode: ModeJSON})
 			if err != nil {
 				t.Fatalf("Render(JSON) error = %v", err)
 			}
 			if !bytes.Equal(rendered, canonical) {
-				t.Fatalf("Render(JSON) changed canonical %s bytes", name)
+				t.Fatalf("Render(JSON) changed canonical %s/%s bytes", fixture.version, fixture.name)
 			}
 			rendered[0] ^= 1
 			if bytes.Equal(rendered, canonical) {
-				t.Fatalf("Render(JSON) returned aliased %s bytes", name)
+				t.Fatalf("Render(JSON) returned aliased %s/%s bytes", fixture.version, fixture.name)
+			}
+		})
+	}
+}
+
+func TestUseIsFirstClassInJSONLAndVisibleInHumanOutputForV1AndV2(t *testing.T) {
+	t.Parallel()
+
+	for _, fixture := range []struct {
+		version testfixture.Version
+		name    string
+	}{
+		{version: testfixture.V1, name: "complete"},
+		{version: testfixture.V2, name: "complete_no_questions"},
+	} {
+		fixture := fixture
+		t.Run(string(fixture.version), func(t *testing.T) {
+			t.Parallel()
+			canonical := releasedVersionFixture(t, fixture.version, fixture.name)
+			jsonl, err := Render(canonical, nil, Options{Mode: ModeJSONL})
+			if err != nil {
+				t.Fatalf("Render(JSONL) error = %v", err)
+			}
+			lines := bytes.Split(bytes.TrimSuffix(jsonl, []byte{'\n'}), []byte{'\n'})
+			var firstResult struct {
+				Kind string              `json:"kind"`
+				Use  *searchcontract.Use `json:"use,omitempty"`
+				Data map[string]any      `json:"data"`
+			}
+			if err := json.Unmarshal(lines[1], &firstResult); err != nil {
+				t.Fatalf("json.Unmarshal(first result) error = %v", err)
+			}
+			if firstResult.Kind != "result" || firstResult.Use == nil ||
+				firstResult.Use.Protocol != "a2a" ||
+				firstResult.Use.AgentCard != "https://agents.example.com/billing/.well-known/agent-card.json" {
+				t.Fatalf("JSONL first-class use = %#v", firstResult.Use)
+			}
+			if _, nested := firstResult.Data["use"]; nested {
+				t.Fatal("JSONL nested use under data")
+			}
+
+			human, err := Render(canonical, nil, Options{Mode: ModeHuman, Width: 72})
+			if err != nil {
+				t.Fatalf("Render(human) error = %v", err)
+			}
+			if !bytes.Contains(human, []byte("Use (a2a):")) ||
+				!bytes.Contains(human, []byte("agents.example.com/billing/")) {
+				t.Fatalf("human output omitted bounded use guidance: %s", human)
 			}
 		})
 	}
@@ -233,10 +289,10 @@ func TestOutputFailsBeforeReturningBytesForInvalidVersionWidthOrPageCount(t *tes
 	if err := json.Unmarshal(canonical, &value); err != nil {
 		t.Fatalf("json.Unmarshal(queued) error = %v", err)
 	}
-	value["schema_version"] = "kado.search-document.v2"
+	value["schema_version"] = "kado.search-document.v3"
 	unsupported, err := json.Marshal(value)
 	if err != nil {
-		t.Fatalf("json.Marshal(v2) error = %v", err)
+		t.Fatalf("json.Marshal(unsupported version) error = %v", err)
 	}
 	for _, test := range []struct {
 		name    string
@@ -297,6 +353,15 @@ func releasedFixture(t *testing.T, name string) []byte {
 	value, err := testfixture.Load(name)
 	if err != nil {
 		t.Fatalf("testfixture.Load(%s) error = %v", name, err)
+	}
+	return value
+}
+
+func releasedVersionFixture(t *testing.T, version testfixture.Version, name string) []byte {
+	t.Helper()
+	value, err := testfixture.LoadVersion(version, name)
+	if err != nil {
+		t.Fatalf("testfixture.LoadVersion(%s, %s) error = %v", version, name, err)
 	}
 	return value
 }

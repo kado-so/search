@@ -2,6 +2,7 @@ package searchcontract
 
 import (
 	"encoding/json"
+	"net/url"
 	"time"
 )
 
@@ -20,11 +21,18 @@ var semanticIssueCodes = []string{
 	"PAGE_RELATION_LINK_DUPLICATE",
 	"ITEM_POSITION_DUPLICATE",
 	"ITEM_POSITION_NOT_INCREASING",
+	"USE_AGENT_CARD_INVALID",
 	"SEARCH_STARTED_BEFORE_CREATED",
 	"SEARCH_COMPLETED_BEFORE_STARTED",
 	"SEARCH_COMPLETED_BEFORE_CREATED",
 	"TIMESTAMP_INVALID",
 }
+
+var semanticIssueCodesV2 = append(append([]string{}, semanticIssueCodes...),
+	"QUESTION_ID_DUPLICATE",
+	"SEARCH_PARENT_SELF_REFERENCE",
+	"SEARCH_ROOT_SELF_REFERENCE",
+)
 
 type semanticArtifact struct {
 	SchemaVersion        string `json:"schema_version"`
@@ -34,15 +42,19 @@ type semanticArtifact struct {
 	} `json:"rules"`
 }
 
-func validateSemanticArtifact(encoded []byte) error {
+func validateSemanticArtifact(assets releasedAssets) error {
 	var artifact semanticArtifact
-	if err := decodeJSON(encoded, &artifact); err != nil ||
-		artifact.SchemaVersion != SchemaVersion ||
-		artifact.SemanticRulesVersion != SemanticRules ||
-		len(artifact.Rules) != len(semanticIssueCodes) {
+	codes := semanticIssueCodes
+	if assets.identity.schemaVersion == SchemaVersionV2 {
+		codes = semanticIssueCodesV2
+	}
+	if err := decodeJSON(assets.semantics, &artifact); err != nil ||
+		artifact.SchemaVersion != assets.identity.schemaVersion ||
+		artifact.SemanticRulesVersion != assets.identity.semanticRules ||
+		len(artifact.Rules) != len(codes) {
 		return ErrInvalid
 	}
-	for index, code := range semanticIssueCodes {
+	for index, code := range codes {
 		if artifact.Rules[index].Code != code {
 			return ErrInvalid
 		}
@@ -50,7 +62,7 @@ func validateSemanticArtifact(encoded []byte) error {
 	return nil
 }
 
-func validateSemantics(document Document) error {
+func validateSemantics(document Document, identity contractIdentity) error {
 	createdAt, createdOK := canonicalTime(document.Search.CreatedAt)
 	_, generatedOK := canonicalTime(document.Metadata.GeneratedAt)
 	if !createdOK || !generatedOK {
@@ -147,8 +159,34 @@ func validateSemantics(document Document) error {
 		if !json.Valid(item.Data) {
 			return ErrInvalid
 		}
+		if item.Use != nil && !validUse(*item.Use) {
+			return ErrInvalid
+		}
+	}
+	if identity.schemaVersion == SchemaVersionV2 {
+		if document.Search.ParentExecutionRef != nil &&
+			*document.Search.ParentExecutionRef == document.Search.ID ||
+			document.Search.RootExecutionRef != nil &&
+				*document.Search.RootExecutionRef == document.Search.ID {
+			return ErrInvalid
+		}
+		seenQuestions := make(map[string]struct{}, len(document.Questions))
+		for _, question := range document.Questions {
+			if _, duplicate := seenQuestions[question.ID]; duplicate {
+				return ErrInvalid
+			}
+			seenQuestions[question.ID] = struct{}{}
+		}
 	}
 	return nil
+}
+
+func validUse(value Use) bool {
+	if value.Protocol != "a2a" {
+		return false
+	}
+	parsed, err := url.Parse(value.AgentCard)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil
 }
 
 func canonicalTime(value string) (time.Time, bool) {
