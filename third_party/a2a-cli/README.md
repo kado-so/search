@@ -10,6 +10,12 @@ checksums, dependency manifests, Apache-2.0 license, notice-file set, pinned Go
 toolchain, display name, and every patch identity. The release tool rejects an
 unknown lock field or any mismatch before compilation.
 
+Source/archive identities cover validated canonical paths and bytes. Git tar
+headers, host filesystem execute-bit round-tripping, system/global Git config,
+and automatic line-ending conversion are deliberately excluded. Archive
+creation is forced to LF, and the one byte-locked reviewed patch is applied by
+an exact deterministic transformation rather than host `git apply` behavior.
+
 The only local source change is
 `patches/0001-configurable-display-name.patch`. It introduces Cobra's display
 name annotation while retaining the upstream default `a2a`; Kado release builds
