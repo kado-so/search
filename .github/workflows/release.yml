@@ -337,7 +337,9 @@ jobs:
           UPDATE_COMMAND: ${{ matrix.update }}
           UNINSTALL_COMMAND: ${{ matrix.uninstall }}
         run: |
-          if ($env:CHANNEL -eq 'winget') {
+          # The manifest is shared and includes both architectures. Validate it
+          # once on AMD64 because the Windows ARM runner may not ship WinGet.
+          if ($env:CHANNEL -eq 'winget' -and $env:TARGET_ARCH -eq 'amd64') {
             winget validate --ignore-warnings --manifest "release/packages/winget/manifests"
             if ($LASTEXITCODE -ne 0) { throw 'WinGet manifest validation failed' }
           }
