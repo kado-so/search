@@ -238,7 +238,7 @@ func TestPrepareA2ASourceRejectsChangedInputsBeforeUse(t *testing.T) {
 			want: "patch checksum",
 		},
 		{
-			name: "patch applicability",
+			name: "unreviewed patch",
 			mutate: func(t *testing.T, fixture *a2aSourceFixture) {
 				patchPath := filepath.Join(filepath.Dir(fixture.lockPath), filepath.FromSlash(a2aPatchPath))
 				invalid := []byte("diff --git a/missing.go b/missing.go\n--- a/missing.go\n+++ b/missing.go\n@@ -1 +1 @@\n-old\n+new\n")
@@ -249,7 +249,7 @@ func TestPrepareA2ASourceRejectsChangedInputsBeforeUse(t *testing.T) {
 				fixture.lock.PatchSetSHA256 = digestA2APatchSet(fixture.lock.Patches)
 				writeA2ATestLock(t, fixture.lockPath, fixture.lock)
 			},
-			want: "does not apply",
+			want: "reviewed transformation",
 		},
 		{
 			name: "patched tree",
@@ -350,7 +350,7 @@ func newA2ASourceFixture(t *testing.T) a2aSourceFixture {
 		"go.mod":               []byte("module github.com/a2aproject/a2a-cli\n\ngo 1.25.0\n"),
 		"go.sum":               {},
 		"LICENSE":              []byte("Apache License fixture\n"),
-		"internal/cli/root.go": []byte("package cli\n\nvar commandName = \"a2a\"\n"),
+		"internal/cli/root.go": []byte("package cli\n\nfunc Execute() int {\n\treturn 0\n}\n\nfunc newRootCmd(cfg *globalConfig, deps deps) *cobra.Command {\n\tcmd := &cobra.Command{\n\t\tUse:           \"a2a\",\n\t}\n\treturn cmd\n}\n"),
 	}
 	for name, value := range files {
 		path := filepath.Join(source, filepath.FromSlash(name))
@@ -394,7 +394,7 @@ func newA2ASourceFixture(t *testing.T) a2aSourceFixture {
 	if err := os.MkdirAll(filepath.Dir(patchPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	patch := []byte("diff --git a/internal/cli/root.go b/internal/cli/root.go\n--- a/internal/cli/root.go\n+++ b/internal/cli/root.go\n@@ -1,3 +1,3 @@\n package cli\n \n-var commandName = \"a2a\"\n+var commandName = \"kado a2a\"\n")
+	patch := []byte(a2aDisplayPatch)
 	if err := os.WriteFile(patchPath, patch, 0o644); err != nil {
 		t.Fatal(err)
 	}

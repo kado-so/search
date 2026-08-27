@@ -25,6 +25,7 @@ const (
 	a2aDefaultLock      = "third_party/a2a-cli/upstream.lock.json"
 	a2aPatchPath        = "patches/0001-configurable-display-name.patch"
 	a2aDisplayName      = "kado a2a"
+	a2aDisplayPatch     = "diff --git a/internal/cli/root.go b/internal/cli/root.go\nindex 5f74d56..3f1acdb 100644\n--- a/internal/cli/root.go\n+++ b/internal/cli/root.go\n@@ -83,0 +84,4 @@ func Execute() int {\n+// displayName changes only Cobra's rendered command path. Official upstream\n+// builds retain \"a2a\"; Kado release builds set this to \"kado a2a\" at link time.\n+var displayName = \"a2a\"\n+\n@@ -88 +92,4 @@ func newRootCmd(cfg *globalConfig, deps deps) *cobra.Command {\n-\t\tUse:           \"a2a\",\n+\t\tUse: \"a2a\",\n+\t\tAnnotations: map[string]string{\n+\t\t\tcobra.CommandDisplayNameAnnotation: displayName,\n+\t\t},\n"
 )
 
 var (
@@ -410,14 +411,39 @@ func applyA2ASourcePatches(lockDirectory, sourceRoot string, patches []a2aLocked
 		if err != nil || bytes.Contains(value, []byte{'\r'}) || digestA2ABytes(value) != locked.SHA256 {
 			return "", errors.New("A2A patch checksum does not match the lock")
 		}
-		if _, err := commandOutput(sourceRoot, a2aGitEnvironment(), "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.attributesFile="+os.DevNull, "apply", "--check", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
-			return "", errors.New("A2A display patch does not apply cleanly")
+		if locked.Path != a2aPatchPath || !bytes.Equal(value, []byte(a2aDisplayPatch)) {
+			return "", errors.New("A2A display patch does not match the reviewed transformation")
 		}
-		if _, err := commandOutput(sourceRoot, a2aGitEnvironment(), "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.attributesFile="+os.DevNull, "apply", "--unidiff-zero", "--whitespace=nowarn", path); err != nil {
-			return "", errors.New("A2A display patch could not be applied")
+		if err := applyA2ADisplayPatch(sourceRoot); err != nil {
+			return "", errors.New("A2A display patch does not apply cleanly")
 		}
 	}
 	return digestA2APatchSet(patches), nil
+}
+
+func applyA2ADisplayPatch(sourceRoot string) error {
+	path := filepath.Join(sourceRoot, "internal", "cli", "root.go")
+	value, err := os.ReadFile(path)
+	if err != nil || bytes.Contains(value, []byte{'\r'}) {
+		return errors.New("A2A root command source is unavailable")
+	}
+	executeBoundary := []byte("\treturn 0\n}\n\nfunc newRootCmd(cfg *globalConfig, deps deps) *cobra.Command {")
+	patchedBoundary := []byte("\treturn 0\n}\n\n// displayName changes only Cobra's rendered command path. Official upstream\n// builds retain \"a2a\"; Kado release builds set this to \"kado a2a\" at link time.\nvar displayName = \"a2a\"\n\nfunc newRootCmd(cfg *globalConfig, deps deps) *cobra.Command {")
+	useField := []byte("\t\tUse:           \"a2a\",\n")
+	patchedUseField := []byte("\t\tUse: \"a2a\",\n\t\tAnnotations: map[string]string{\n\t\t\tcobra.CommandDisplayNameAnnotation: displayName,\n\t\t},\n")
+	if bytes.Count(value, executeBoundary) != 1 || bytes.Count(value, useField) != 1 {
+		return errors.New("A2A root command source does not match the reviewed patch base")
+	}
+	value = bytes.Replace(value, executeBoundary, patchedBoundary, 1)
+	value = bytes.Replace(value, useField, patchedUseField, 1)
+	info, err := os.Stat(path)
+	if err != nil {
+		return errors.New("A2A root command source is unavailable")
+	}
+	if err := os.WriteFile(path, value, info.Mode().Perm()); err != nil {
+		return errors.New("A2A display patch could not be applied")
+	}
+	return nil
 }
 
 func digestA2ASourceTree(root string) (string, error) {
