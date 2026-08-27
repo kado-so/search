@@ -100,6 +100,20 @@ jobs:
             --source-date-epoch "${{ steps.identity.outputs.epoch }}" \
             --a2a-source "${{ steps.a2a.outputs.checkout }}" \
             --out dist/qualification
+      - name: Build signed package-channel candidates
+        shell: bash
+        env:
+          KADO_RELEASE_SIGNING_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        run: |
+          for channel in homebrew winget scoop deb rpm container; do
+            go run ./tools/release \
+              --version "${{ steps.identity.outputs.version }}" \
+              --commit "${{ steps.identity.outputs.commit }}" \
+              --source-date-epoch "${{ steps.identity.outputs.epoch }}" \
+              --a2a-source "${{ steps.a2a.outputs.checkout }}" \
+              --install-channel "$channel" \
+              --out "dist/qualification/packages/$channel"
+          done
       - name: Qualify Search use against official local echo agent
         shell: bash
         env:
@@ -210,6 +224,197 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'candidate qualification failed' }
           & $env:KADO_A2A_QUALIFICATION_BINARY release verify --directory (Join-Path $PWD 'release')
           if ($LASTEXITCODE -ne 0) { throw 'candidate verification failed' }
+
+  package-pair-smoke:
+    needs: build-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            channel: homebrew
+            os: linux
+            arch: amd64
+            update: brew upgrade kado
+            uninstall: brew uninstall kado
+          - runner: ubuntu-24.04-arm
+            channel: homebrew
+            os: linux
+            arch: arm64
+            update: brew upgrade kado
+            uninstall: brew uninstall kado
+          - runner: macos-15-intel
+            channel: homebrew
+            os: darwin
+            arch: amd64
+            update: brew upgrade kado
+            uninstall: brew uninstall kado
+          - runner: macos-15
+            channel: homebrew
+            os: darwin
+            arch: arm64
+            update: brew upgrade kado
+            uninstall: brew uninstall kado
+          - runner: windows-2025
+            channel: scoop
+            os: windows
+            arch: amd64
+            update: scoop update kado
+            uninstall: scoop uninstall kado
+          - runner: windows-11-arm
+            channel: scoop
+            os: windows
+            arch: arm64
+            update: scoop update kado
+            uninstall: scoop uninstall kado
+          - runner: windows-2025
+            channel: winget
+            os: windows
+            arch: amd64
+            update: winget upgrade --id Kado.Kado --exact
+            uninstall: winget uninstall --id Kado.Kado --exact
+          - runner: windows-11-arm
+            channel: winget
+            os: windows
+            arch: arm64
+            update: winget upgrade --id Kado.Kado --exact
+            uninstall: winget uninstall --id Kado.Kado --exact
+          - runner: ubuntu-24.04
+            channel: deb
+            os: linux
+            arch: amd64
+            update: sudo apt-get install --only-upgrade kado
+            uninstall: sudo apt-get remove kado
+          - runner: ubuntu-24.04-arm
+            channel: deb
+            os: linux
+            arch: arm64
+            update: sudo apt-get install --only-upgrade kado
+            uninstall: sudo apt-get remove kado
+          - runner: ubuntu-24.04
+            channel: rpm
+            os: linux
+            arch: amd64
+            update: sudo dnf upgrade kado
+            uninstall: sudo dnf remove kado
+          - runner: ubuntu-24.04-arm
+            channel: rpm
+            os: linux
+            arch: arm64
+            update: sudo dnf upgrade kado
+            uninstall: sudo dnf remove kado
+          - runner: ubuntu-24.04
+            channel: container
+            os: linux
+            arch: amd64
+            update: container image
+            uninstall: container image
+          - runner: ubuntu-24.04-arm
+            channel: container
+            os: linux
+            arch: arm64
+            update: container image
+            uninstall: container image
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: kado-a2a-candidate-${{ github.run_id }}
+          path: release
+      - name: Exercise Unix package-owned pair
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+          CHANNEL: ${{ matrix.channel }}
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          UPDATE_COMMAND: ${{ matrix.update }}
+          UNINSTALL_COMMAND: ${{ matrix.uninstall }}
+        run: |
+          digest() {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" | awk '{print $1}'
+            else
+              shasum -a 256 "$1" | awk '{print $1}'
+            fi
+          }
+          if test "$CHANNEL" = homebrew; then
+            ruby -c "release/packages/homebrew/kado.rb"
+          fi
+          if test "$CHANNEL" = deb; then
+            (cd "release/packages/deb" && sh ./build-deb.sh "$TARGET_ARCH")
+            dpkg-deb --info "release/packages/deb/kado_${VERSION}_${TARGET_ARCH}.deb" >/dev/null
+          fi
+          if test "$CHANNEL" = container; then
+            image="kado-package-smoke:${VERSION}-${TARGET_ARCH}"
+            docker build --build-arg TARGETARCH="$TARGET_ARCH" -t "$image" "release/packages/container"
+            docker run --rm "$image" a2a --output json version >/dev/null
+          fi
+          package_root="$RUNNER_TEMP/Kado package ü/$CHANNEL/$VERSION/libexec"
+          public_root="$RUNNER_TEMP/Kado public ü"
+          mkdir -p "$package_root" "$public_root"
+          archive="release/packages/$CHANNEL/kado_${VERSION}_${TARGET_OS}_${TARGET_ARCH}.tar.gz"
+          tar -xzf "$archive" -C "$package_root"
+          if test "$CHANNEL" = container; then
+            kado="$package_root/kado"
+          else
+            ln -s "$package_root/kado" "$public_root/kado"
+            kado="$public_root/kado"
+          fi
+          before_kado="$(digest "$package_root/kado")"
+          before_a2a="$(digest "$package_root/kado-a2a")"
+          "$kado" a2a --output json version >/dev/null
+          if "$kado" update 2>update.err; then exit 1; fi
+          grep -F "$UPDATE_COMMAND" update.err
+          if "$kado" uninstall --yes --purge-credentials 2>uninstall.err; then exit 1; fi
+          grep -F "$UNINSTALL_COMMAND" uninstall.err
+          test "$(digest "$package_root/kado")" = "$before_kado"
+          test "$(digest "$package_root/kado-a2a")" = "$before_a2a"
+          cp "$package_root/kado-a2a" "$package_root/kado-a2a.good"
+          printf x >>"$package_root/kado-a2a"
+          if "$kado" a2a --output json version; then exit 1; fi
+          mv "$package_root/kado-a2a.good" "$package_root/kado-a2a"
+          "$kado" a2a --output json version >/dev/null
+      - name: Exercise Windows package-owned pair
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build-candidate.outputs.version }}
+          CHANNEL: ${{ matrix.channel }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          UPDATE_COMMAND: ${{ matrix.update }}
+          UNINSTALL_COMMAND: ${{ matrix.uninstall }}
+        run: |
+          if ($env:CHANNEL -eq 'winget') {
+            winget validate --manifest "release/packages/winget/manifests"
+            if ($LASTEXITCODE -ne 0) { throw 'WinGet manifest validation failed' }
+          }
+          $root = Join-Path $env:RUNNER_TEMP "Kado package ü\$env:CHANNEL"
+          $versionRoot = Join-Path $root $env:VERSION
+          $current = Join-Path $root 'current'
+          New-Item -ItemType Directory -Force -Path $versionRoot | Out-Null
+          Expand-Archive -LiteralPath "release/packages/$env:CHANNEL/kado_$env:VERSION`_windows_$env:TARGET_ARCH.zip" -DestinationPath $versionRoot
+          New-Item -ItemType Junction -Path $current -Target $versionRoot | Out-Null
+          $kado = Join-Path $current 'kado.exe'
+          $sidecar = Join-Path $versionRoot 'kado-a2a.exe'
+          $beforeKado = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $versionRoot 'kado.exe')).Hash
+          $beforeA2A = (Get-FileHash -Algorithm SHA256 -LiteralPath $sidecar).Hash
+          & $kado a2a --output json version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'package delegation failed' }
+          $update = (& $kado update 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0 -or !$update.Contains($env:UPDATE_COMMAND)) { throw "update refusal mismatch: $update" }
+          $uninstall = (& $kado uninstall --yes --purge-credentials 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0 -or !$uninstall.Contains($env:UNINSTALL_COMMAND)) { throw "uninstall refusal mismatch: $uninstall" }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $versionRoot 'kado.exe')).Hash -ne $beforeKado) { throw 'Kado changed' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $sidecar).Hash -ne $beforeA2A) { throw 'sidecar changed' }
+          Copy-Item -LiteralPath $sidecar -Destination "$sidecar.good"
+          Add-Content -LiteralPath $sidecar -Value x -NoNewline
+          & $kado a2a --output json version | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw 'tampered sidecar executed' }
+          Move-Item -Force -LiteralPath "$sidecar.good" -Destination $sidecar
+          & $kado a2a --output json version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'repaired sidecar did not execute' }
 
   unix-completion-engines:
     needs: build-candidate
