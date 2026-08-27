@@ -29,6 +29,9 @@ func main() {
 	case "child":
 		forever()
 		return
+	case "completion":
+		completion()
+		return
 	case "":
 	default:
 		os.Exit(119)
@@ -52,6 +55,26 @@ func main() {
 	}
 	_, _ = os.Stderr.WriteString("fixture-stderr\n")
 	if code, err := strconv.Atoi(os.Getenv("KADO_A2A_FIXTURE_EXIT")); err == nil && code > 0 && code < 126 {
+		os.Exit(code)
+	}
+}
+
+func completion() {
+	recordPath := os.Getenv("KADO_A2A_FIXTURE_RECORD")
+	if recordPath == "" {
+		os.Exit(123)
+	}
+	encoded, err := json.Marshal(invocation{Arguments: os.Args[1:]})
+	if err != nil || os.WriteFile(recordPath, append(encoded, '\n'), 0o600) != nil {
+		os.Exit(125)
+	}
+	_, _ = io.WriteString(os.Stdout, "future-upstream\tUpstream-only completion\n--agent-card\tAgent Card location\n:4\n")
+	_, _ = io.WriteString(os.Stderr, "Completion ended with directive: ShellCompDirectiveNoFileComp\n")
+	if value := os.Getenv("KADO_A2A_FIXTURE_EXIT"); value != "" {
+		code, err := strconv.Atoi(value)
+		if err != nil {
+			os.Exit(121)
+		}
 		os.Exit(code)
 	}
 }

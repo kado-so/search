@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -93,14 +94,55 @@ func TestMatchesUsesTheDispatchBoundary(t *testing.T) {
 		{arguments: []string{"kado", "--agent", "codex", "a2a", "--help"}, matches: true},
 		{arguments: []string{"kado", "help", "a2a"}, matches: true},
 		{arguments: []string{"kado", "--agent=codex", "help", "a2a", "task"}, matches: true},
+		{arguments: []string{"kado", "__complete", "a2a", "send", "--"}, matches: true},
+		{arguments: []string{"kado", "__completeNoDesc", "--agent", "codex", "a2a", ""}, matches: true},
 		{arguments: []string{"kado", "help"}},
 		{arguments: []string{"kado", "use", "send", "hello"}},
 		{arguments: []string{"kado", "search", "a2a"}},
+		{arguments: []string{"kado", "__complete", "search", "a2a"}},
 		{arguments: []string{"kado", "--agent"}},
 	} {
 		if got := Matches(test.arguments); got != test.matches {
 			t.Fatalf("Matches(%q) = %v, want %v", test.arguments, got, test.matches)
 		}
+	}
+}
+
+func TestCompletionDispatchStripsOnlyKadoOwnedTokens(t *testing.T) {
+	for _, test := range []struct {
+		arguments []string
+		want      []string
+		handled   bool
+	}{
+		{
+			arguments: []string{"kado", "__complete", "a2a", "send", "--"},
+			want:      []string{"__complete", "send", "--"},
+			handled:   true,
+		},
+		{
+			arguments: []string{"kado", "__completeNoDesc", "--agent", "codex", "a2a", ""},
+			want:      []string{"__completeNoDesc", ""},
+			handled:   true,
+		},
+		{
+			arguments: []string{"kado", "__complete", "a2a", "future-command", "--future-flag", "value"},
+			want:      []string{"__complete", "future-command", "--future-flag", "value"},
+			handled:   true,
+		},
+		{arguments: []string{"kado", "__complete", "search", "a2a"}},
+	} {
+		request, handled := dispatchRequestFor(test.arguments)
+		if handled != test.handled || !reflect.DeepEqual(request.arguments, test.want) || request.completion != test.handled {
+			t.Fatalf("dispatchRequestFor(%q) = (%q, completion=%v, handled=%v), want (%q, %v)", test.arguments, request.arguments, request.completion, handled, test.want, test.handled)
+		}
+	}
+}
+
+func TestCompletionFailureIsQuietCobraProtocol(t *testing.T) {
+	var stdout, stderr strings.Builder
+	code, handled := failure(true, &stdout, &stderr, "must not be shown")
+	if code != 0 || !handled || stdout.String() != ":1\n" || stderr.Len() != 0 {
+		t.Fatalf("code=%d handled=%v stdout=%q stderr=%q", code, handled, stdout.String(), stderr.String())
 	}
 }
 

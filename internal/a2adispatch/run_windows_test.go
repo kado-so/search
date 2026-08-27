@@ -26,6 +26,7 @@ func TestRunSidecarContainmentFailureDoesNotStartSidecar(t *testing.T) {
 		bytes.NewReader(nil),
 		&bytes.Buffer{},
 		&bytes.Buffer{},
+		false,
 	)
 	if code != 0 || !errors.Is(err, forced) {
 		t.Fatalf("runSidecar() = (%d, %v), want (0, forced error)", code, err)

@@ -80,10 +80,52 @@ func TestA2AUnixStartupFailureIsBounded(t *testing.T) {
 	}
 }
 
+func TestManagedA2ACompletionReplacesTheUnixProcess(t *testing.T) {
+	root := buildA2ATestPair(t, true)
+	command, record := startHeldUnixA2AWithArguments(
+		t,
+		root,
+		"completion.json",
+		[]string{"__complete", "a2a", ""},
+	)
+	publicPID := command.Process.Pid
+	if record.PID != publicPID {
+		t.Fatalf("Unix completion kept a wrapper: public=%d %s", publicPID, processDescription(record))
+	}
+	expectedSidecar := filepath.Join(
+		root,
+		kadoTestBinaryName()+".d",
+		"versions",
+		"9.8.7",
+		a2aTestBinaryName(),
+	)
+	assertA2AProcessImage(t, publicPID, expectedSidecar)
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	waitUnixA2ACommand(t, command)
+	assertUnixProcessExited(t, publicPID)
+}
+
 func startHeldUnixA2A(t *testing.T, root, recordName string) (*exec.Cmd, a2aProcessRecord) {
 	t.Helper()
+	return startHeldUnixA2AWithArguments(
+		t,
+		root,
+		recordName,
+		[]string{"a2a", "future-command"},
+	)
+}
+
+func startHeldUnixA2AWithArguments(
+	t *testing.T,
+	root,
+	recordName string,
+	arguments []string,
+) (*exec.Cmd, a2aProcessRecord) {
+	t.Helper()
 	recordPath := filepath.Join(root, recordName)
-	command := exec.Command(filepath.Join(root, kadoTestBinaryName()), "a2a", "future-command")
+	command := exec.Command(filepath.Join(root, kadoTestBinaryName()), arguments...)
 	command.Env = append(
 		a2aFixtureEnvironment(0),
 		"KADO_A2A_FIXTURE_MODE=hold",

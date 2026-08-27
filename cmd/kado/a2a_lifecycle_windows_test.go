@@ -81,6 +81,26 @@ func TestManagedA2ADispatchHandlesWindowsCtrlBreak(t *testing.T) {
 	assertWindowsProcessesExit(t, publicPID, record.ParentPID, record.PID, record.ChildPID)
 }
 
+func TestManagedA2ACompletionKillsTheWindowsTree(t *testing.T) {
+	root := buildA2ATestPair(t, true)
+	command, record := startHeldA2AWithArguments(
+		t,
+		root,
+		"completion.json",
+		0,
+		[]string{"__complete", "a2a", ""},
+	)
+	publicPID := command.Process.Pid
+	if record.ParentPID == publicPID || record.ChildPID == 0 {
+		t.Fatalf("unexpected managed completion tree: public=%d %s", publicPID, processDescription(record))
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	waitA2ACommand(t, command, record)
+	assertWindowsProcessesExit(t, publicPID, record.ParentPID, record.PID, record.ChildPID)
+}
+
 func startHeldA2A(
 	t *testing.T,
 	root,
@@ -88,8 +108,25 @@ func startHeldA2A(
 	creationFlags uint32,
 ) (*exec.Cmd, a2aProcessRecord) {
 	t.Helper()
+	return startHeldA2AWithArguments(
+		t,
+		root,
+		recordName,
+		creationFlags,
+		[]string{"a2a", "future-command"},
+	)
+}
+
+func startHeldA2AWithArguments(
+	t *testing.T,
+	root,
+	recordName string,
+	creationFlags uint32,
+	arguments []string,
+) (*exec.Cmd, a2aProcessRecord) {
+	t.Helper()
 	recordPath := filepath.Join(root, recordName)
-	command := exec.Command(filepath.Join(root, kadoTestBinaryName()), "a2a", "future-command")
+	command := exec.Command(filepath.Join(root, kadoTestBinaryName()), arguments...)
 	command.Env = append(
 		a2aFixtureEnvironment(0),
 		"KADO_A2A_FIXTURE_MODE=hold",

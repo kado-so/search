@@ -34,6 +34,7 @@ import (
 	"github.com/kado-so/search/internal/searchclient"
 	"github.com/kado-so/search/internal/searchcontract"
 	"github.com/kado-so/search/internal/searchoutput"
+	"github.com/kado-so/search/internal/shellcompletion"
 	"github.com/kado-so/search/internal/skillclient"
 )
 
@@ -56,6 +57,7 @@ Commands:
   update            Install signed CLI release
   uninstall         Remove the CLI
   release verify    Verify a release
+  completion        Generate shell completion
   help              Show help
   version           Show bundle information
 
@@ -209,6 +211,7 @@ func maybeScheduleMaintenance(args []string, stderr io.Writer, info buildinfo.In
 	if info.Version == "" || info.Version == "dev" ||
 		info.ReleasePublicKey == "" || info.ReleaseMetadataURL == "" ||
 		os.Getenv("KADO_MAINTENANCE_CHILD") != "" ||
+		shellcompletion.Matches(args) ||
 		len(args) >= 3 && args[0] == "skill" && args[1] == "update" &&
 			args[2] == "--background" {
 		return
@@ -245,6 +248,12 @@ func run(
 	info buildinfo.Info,
 	dependencies dependencies,
 ) error {
+	if len(args) > 0 && shellcompletion.IsHidden(args[0]) {
+		if err := shellcompletion.Execute(args, stdout, io.Discard); err != nil {
+			_, _ = io.WriteString(stdout, ":1\n")
+		}
+		return nil
+	}
 	override, args, err := parseGlobalOptions(args)
 	if err != nil {
 		return err
@@ -305,6 +314,11 @@ func run(
 		return runUninstall(args[1:], stdout, info, override, dependencies)
 	case "release":
 		return runRelease(args[1:], stdout, info, dependencies)
+	case "completion":
+		if err := shellcompletion.Execute(args, stdout, io.Discard); err != nil {
+			return usageError("usage: kado completion <bash|zsh|fish|powershell> [--no-descriptions]")
+		}
+		return nil
 	default:
 		return usageError("unknown command; run 'kado help' for usage")
 	}

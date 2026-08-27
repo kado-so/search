@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	namespace      = "a2a"
+	// Namespace is the only public Kado command delegated to the A2A sidecar.
+	Namespace      = "a2a"
 	maxSidecarSize = 96 << 20
 )
 
@@ -30,14 +31,14 @@ func Dispatch(
 	stdin io.Reader,
 	stdout, stderr io.Writer,
 ) (code int, handled bool) {
-	forwarded, ok := forwardedArguments(arguments)
+	request, ok := dispatchRequestFor(arguments)
 	if !ok {
 		return 0, false
 	}
 
 	executable, err := os.Executable()
 	if err != nil {
-		return failure(stderr, "bundled A2A CLI is unavailable")
+		return failure(request.completion, stdout, stderr, "bundled A2A CLI is unavailable")
 	}
 	sidecar, err := verifiedSidecar(
 		executable,
@@ -45,42 +46,66 @@ func Dispatch(
 		info.A2A.ArtifactSHA256,
 	)
 	if err != nil {
-		return failure(stderr, "bundled A2A CLI is unavailable")
+		return failure(request.completion, stdout, stderr, "bundled A2A CLI is unavailable")
 	}
-	code, err = runSidecar(sidecar, forwarded, stdin, stdout, stderr)
+	code, err = runSidecar(sidecar, request.arguments, stdin, stdout, stderr, request.completion)
 	if err != nil {
-		return failure(stderr, "bundled A2A CLI could not start")
+		return failure(request.completion, stdout, stderr, "bundled A2A CLI could not start")
 	}
 	return code, true
 }
 
-func forwardedArguments(arguments []string) ([]string, bool) {
+type dispatchRequest struct {
+	arguments  []string
+	completion bool
+}
+
+func dispatchRequestFor(arguments []string) (dispatchRequest, bool) {
 	index, ok := commandIndex(arguments)
-	if !ok {
-		return nil, false
+	if ok && arguments[index] == Namespace {
+		return dispatchRequest{arguments: arguments[index+1:]}, true
 	}
-	if arguments[index] == namespace {
-		return arguments[index+1:], true
+	if ok && arguments[index] == "help" && len(arguments) > index+1 &&
+		arguments[index+1] == Namespace {
+		if len(arguments) == index+2 {
+			return dispatchRequest{arguments: []string{"--help"}}, true
+		}
+		forwarded := make([]string, 1, len(arguments)-index-1)
+		forwarded[0] = "help"
+		forwarded = append(forwarded, arguments[index+2:]...)
+		return dispatchRequest{arguments: forwarded}, true
 	}
-	if arguments[index] != "help" || len(arguments) <= index+1 ||
-		arguments[index+1] != namespace {
-		return nil, false
+	if len(arguments) < 3 || !isCompletionCommand(arguments[1]) {
+		return dispatchRequest{}, false
 	}
-	if len(arguments) == index+2 {
-		return []string{"--help"}, true
+	candidate := make([]string, 1, len(arguments)-1)
+	candidate[0] = arguments[0]
+	candidate = append(candidate, arguments[2:]...)
+	index, ok = commandIndex(candidate)
+	if !ok || candidate[index] != Namespace {
+		return dispatchRequest{}, false
 	}
-	forwarded := make([]string, 1, len(arguments)-index-1)
-	forwarded[0] = "help"
-	forwarded = append(forwarded, arguments[index+2:]...)
-	return forwarded, true
+	forwarded := make([]string, 1, len(candidate)-index)
+	forwarded[0] = arguments[1]
+	forwarded = append(forwarded, candidate[index+1:]...)
+	return dispatchRequest{arguments: forwarded, completion: true}, true
+}
+
+func forwardedArguments(arguments []string) ([]string, bool) {
+	request, ok := dispatchRequestFor(arguments)
+	return request.arguments, ok
 }
 
 // Matches reports whether arguments select the A2A namespace. The stable
 // Windows launcher uses this before activation so its Job Object contains the
 // complete launched process tree.
 func Matches(arguments []string) bool {
-	_, ok := forwardedArguments(arguments)
+	_, ok := dispatchRequestFor(arguments)
 	return ok
+}
+
+func isCompletionCommand(value string) bool {
+	return value == "__complete" || value == "__completeNoDesc"
 }
 
 func commandIndex(arguments []string) (int, bool) {
@@ -139,7 +164,11 @@ func validDigest(value string) bool {
 	return err == nil
 }
 
-func failure(stderr io.Writer, message string) (int, bool) {
+func failure(completion bool, stdout, stderr io.Writer, message string) (int, bool) {
+	if completion {
+		_, _ = io.WriteString(stdout, ":1\n")
+		return 0, true
+	}
 	_, _ = fmt.Fprintf(stderr, "kado: %s [a2a_unavailable]\n", message)
 	return 1, true
 }

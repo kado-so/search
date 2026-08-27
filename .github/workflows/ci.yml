@@ -92,11 +92,79 @@ jobs:
         run: |
           test "$(go env GOOS)" = "$EXPECTED_GOOS"
           test "$(go env GOARCH)" = "$EXPECTED_GOARCH"
-      - name: Test A2A lifecycle
-        run: go test ./internal/a2adispatch ./internal/launcher ./cmd/kado -count=1 -timeout=15m
+      - name: Test A2A lifecycle, completion, and version presentation
+        run: go test ./internal/a2adispatch ./internal/buildinfo ./internal/cli ./internal/launcher ./internal/shellcompletion ./cmd/kado -count=1 -timeout=15m
       - name: Test Windows Job Object
         if: runner.os == 'Windows'
         run: go test ./internal/processtree -count=1
-      - name: Race-test A2A lifecycle
+      - name: Race-test A2A lifecycle, completion, and version presentation
         if: matrix.race
-        run: go test -race ./internal/a2adispatch ./internal/launcher ./cmd/kado -count=1 -timeout=20m
+        run: go test -race ./internal/a2adispatch ./internal/buildinfo ./internal/cli ./internal/launcher ./internal/shellcompletion ./cmd/kado -count=1 -timeout=20m
+
+  unix-completion-engines:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - name: Install completion engines
+        run: sudo apt-get update && sudo apt-get install --yes bash-completion zsh fish
+      - name: Exercise Bash, Zsh, and Fish completion engines
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/kado-bin" "$RUNNER_TEMP/kado-completion"
+          go build -o "$RUNNER_TEMP/kado-bin/kado" ./cmd/kado
+          export PATH="$RUNNER_TEMP/kado-bin:$PATH"
+          export TERM=xterm
+
+          kado completion bash >"$RUNNER_TEMP/kado-completion/kado.bash"
+          bash_input=$'source /usr/share/bash-completion/bash_completion\nsource '"$RUNNER_TEMP"$'/kado-completion/kado.bash\nkado a\t\t\nexit\n'
+          bash_output="$(printf '%s' "$bash_input" | script -qefc 'bash --noprofile --norc -i' /dev/null)"
+          grep -q 'a2a.*A2A CLI' <<<"$bash_output"
+
+          kado completion zsh >"$RUNNER_TEMP/kado-completion/_kado"
+          zsh_input=$'autoload -Uz compinit; compinit\nsource '"$RUNNER_TEMP"$'/kado-completion/_kado\nkado a\t\t\nexit\n'
+          zsh_output="$(printf '%s' "$zsh_input" | script -qefc 'zsh -f' /dev/null)"
+          grep -q 'a2a.*A2A CLI' <<<"$zsh_output"
+
+          kado completion fish >"$RUNNER_TEMP/kado-completion/kado.fish"
+          fish_output="$(fish -C "source $RUNNER_TEMP/kado-completion/kado.fish" -c "complete -C 'kado a'")"
+          grep -q '^a2a' <<<"$fish_output"
+
+  powershell-completion-engine:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - id: toolchain
+        shell: bash
+        run: |
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+      - name: Exercise PowerShell completion engine
+        shell: pwsh
+        run: |
+          $binDirectory = Join-Path $env:RUNNER_TEMP 'kado-bin'
+          $completionDirectory = Join-Path $env:RUNNER_TEMP 'kado-completion'
+          New-Item -ItemType Directory -Force -Path $binDirectory, $completionDirectory | Out-Null
+          $kado = Join-Path $binDirectory 'kado.exe'
+          $completion = Join-Path $completionDirectory 'completion.ps1'
+          go build -o $kado ./cmd/kado
+          & $kado completion powershell | Set-Content -LiteralPath $completion -Encoding utf8
+          . $completion
+          Set-Alias -Name kado -Value $kado
+          $line = 'kado a'
+          $matches = (TabExpansion2 -inputScript $line -cursorColumn $line.Length).CompletionMatches
+          if ($matches.CompletionText -notcontains 'a2a') {
+            throw "PowerShell completion did not return a2a: $($matches.CompletionText -join ', ')"
+          }

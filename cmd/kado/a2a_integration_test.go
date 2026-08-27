@@ -278,6 +278,11 @@ func TestActualA2ADoesNotSearchPathCurrentDirectoryOrEnvironment(t *testing.T) {
 
 func buildA2ATestPair(t *testing.T, managed bool) string {
 	t.Helper()
+	return buildA2ATestPairWithLDFlags(t, managed, "")
+}
+
+func buildA2ATestPairWithLDFlags(t *testing.T, managed bool, extraLDFlags string) string {
+	t.Helper()
 	moduleRoot := cliModuleRoot(t)
 	root := t.TempDir()
 	if managed {
@@ -304,6 +309,9 @@ func buildA2ATestPair(t *testing.T, managed bool) string {
 	if managed {
 		ldflags += " -X github.com/kado-so/search/internal/buildinfo.Version=9.8.7" +
 			" -X github.com/kado-so/search/internal/buildinfo.InstallChannel=direct"
+	}
+	if extraLDFlags != "" {
+		ldflags += " " + extraLDFlags
 	}
 	kado := filepath.Join(root, kadoTestBinaryName())
 	buildA2ATestBinary(t, moduleRoot, "build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", kado, "./cmd/kado")

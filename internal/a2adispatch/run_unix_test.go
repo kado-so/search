@@ -15,6 +15,7 @@ func TestRunSidecarReturnsStartupFailure(t *testing.T) {
 		bytes.NewReader(nil),
 		&bytes.Buffer{},
 		&bytes.Buffer{},
+		false,
 	)
 	if code != 0 || err == nil {
 		t.Fatalf("runSidecar() = (%d, %v), want startup error", code, err)
