@@ -189,7 +189,10 @@ must copy those exact release assets to `kado.so` using this mapping:
 | `install.ps1` | `/install.ps1` |
 | `release-metadata.json` | `/install/releases/stable/release-metadata.json` |
 | `release-metadata.json.sig` | `/install/releases/stable/release-metadata.json.sig` |
+| skill archives | `/install/skills/<name>/<variant>/<version>/<name>.tar.gz` |
+| skill metadata and signature | `/install/skills/<name>/<variant>/<version>/metadata.json[.sig]` |
+| catalog and signature | `/install/skills/latest/catalog.json[.sig]` |
 
-The publisher uploads and verifies immutable CLI objects first and promotes
-stable CLI metadata last. Skill publication is an independent workflow and is
-not an input or output of this CLI release build.
+The publisher uploads and verifies immutable CLI and skill objects first. It
+then promotes stable CLI metadata and the latest signed skill catalog. Existing
+immutable skill versions are accepted only when their bytes match exactly.

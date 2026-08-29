@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,13 +97,41 @@ func TestEveryEmbeddedSkillHasSignedRemoteRelease(t *testing.T) {
 func TestReleaseBuildWritesNestedSkillArtifacts(t *testing.T) {
 	t.Parallel()
 
-	output := t.TempDir()
-	name := filepath.Join("skills", "kado-search", "default", "0.3.5", "metadata.json")
-	if err := writeReleaseArtifact(output, name, []byte("{}"), 0o644); err != nil {
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(output, name)); err != nil {
-		t.Fatalf("nested release artifact was not written: %v", err)
+	output := t.TempDir()
+	files := map[string]releaseclient.File{}
+	add := func(name string, value []byte, mode fs.FileMode) (releaseclient.File, error) {
+		if err := writeReleaseArtifact(output, name, value, mode); err != nil {
+			return releaseclient.File{}, err
+		}
+		file := releaseclient.File{Name: name, Size: int64(len(value)), SHA256: releaseclient.Digest(value)}
+		files[name] = file
+		return file, nil
+	}
+	if err := addSkillReleaseArtifacts("https://kado.so/install", private, add); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"skills/catalog.json",
+		"skills/catalog.json.sig",
+		"skills/kado-a2a/default/0.1.0/kado-a2a.tar.gz",
+		"skills/kado-a2a/default/0.1.0/metadata.json",
+		"skills/kado-a2a/default/0.1.0/metadata.json.sig",
+		"skills/kado-cli-non-search/default/0.1.0/kado-cli-non-search.tar.gz",
+		"skills/kado-search/default/0.3.8/kado-search.tar.gz",
+	} {
+		if _, ok := files[name]; !ok {
+			t.Fatalf("skill artifact %q was not registered", name)
+		}
+		if _, err := os.Stat(filepath.Join(output, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("skill artifact %q was not written: %v", name, err)
+		}
+	}
+	if len(files) != 11 {
+		t.Fatalf("skill artifact count = %d, want 11", len(files))
 	}
 }
 
