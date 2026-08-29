@@ -6,7 +6,7 @@ import (
 	search "github.com/kado-so/search/skills/kado-search"
 )
 
-const EmbeddedCatalogRevision uint64 = 3
+const EmbeddedCatalogRevision uint64 = 4
 
 type EmbeddedRelease struct {
 	Metadata Metadata
