@@ -403,5 +403,5 @@ jobs:
             --target "$COMMIT" \
             --title "Kado CLI $VERSION" \
             --generate-notes
-      - name: Promote stable CLI channel
+      - name: Promote stable CLI and latest skill channels
         run: ./scripts/publish-azure-assets.sh promote release

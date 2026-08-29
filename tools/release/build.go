@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -124,6 +125,9 @@ func buildRelease(input buildInput) error {
 	if err != nil {
 		return err
 	}
+	if err := addSkillReleaseArtifacts(input.source.InstallURL, input.privateKey, add); err != nil {
+		return err
+	}
 	buildTargets := input.targets
 	if len(buildTargets) == 0 {
 		buildTargets = releaseTargets
@@ -225,6 +229,36 @@ func buildRelease(input buildInput) error {
 				target.OS,
 				target.Arch,
 			)
+		}
+	}
+	return nil
+}
+
+func addSkillReleaseArtifacts(
+	baseURL string,
+	privateKey ed25519.PrivateKey,
+	add func(string, []byte, fs.FileMode) (releaseclient.File, error),
+) error {
+	skillSet, err := makeSkillReleases(baseURL, privateKey)
+	if err != nil {
+		return err
+	}
+	if _, err := add("skills/catalog.json", skillSet.Catalog, 0o644); err != nil {
+		return err
+	}
+	if _, err := add("skills/catalog.json.sig", skillSet.Signature, 0o644); err != nil {
+		return err
+	}
+	for _, skill := range skillSet.Releases {
+		prefix := path.Join("skills", skill.Name, skill.Variant, skill.Version)
+		if _, err := add(path.Join(prefix, skill.Name+".tar.gz"), skill.Archive, 0o644); err != nil {
+			return err
+		}
+		if _, err := add(path.Join(prefix, "metadata.json"), skill.Metadata, 0o644); err != nil {
+			return err
+		}
+		if _, err := add(path.Join(prefix, "metadata.json.sig"), skill.Signature, 0o644); err != nil {
+			return err
 		}
 	}
 	return nil
