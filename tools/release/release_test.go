@@ -121,7 +121,7 @@ func TestReleaseBuildWritesNestedSkillArtifacts(t *testing.T) {
 		"skills/kado-a2a/default/0.1.0/metadata.json",
 		"skills/kado-a2a/default/0.1.0/metadata.json.sig",
 		"skills/kado-cli-non-search/default/0.1.0/kado-cli-non-search.tar.gz",
-		"skills/kado-search/default/0.3.8/kado-search.tar.gz",
+		"skills/kado-search/default/0.3.9/kado-search.tar.gz",
 	} {
 		if _, ok := files[name]; !ok {
 			t.Fatalf("skill artifact %q was not registered", name)
