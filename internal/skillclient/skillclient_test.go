@@ -75,7 +75,7 @@ func TestCatalogSelectsExactAgentBeforeDefault(t *testing.T) {
 	}
 }
 
-func TestUpdateReinstallsEveryMissingCatalogSkill(t *testing.T) {
+func TestUpdateInstallsNewlyAddedCatalogSkill(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	manager := Manager{ConfigDir: filepath.Join(root, "config"), HomeDir: filepath.Join(root, "home"), CurrentVersion: "dev"}
@@ -84,7 +84,7 @@ func TestUpdateReinstallsEveryMissingCatalogSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range installed.Installed {
-		if item.Name == "kado-cli-non-search" {
+		if item.Name == "kado-a2a" {
 			if err := os.RemoveAll(item.Path); err != nil {
 				t.Fatal(err)
 			}
@@ -99,6 +99,7 @@ func TestUpdateReinstallsEveryMissingCatalogSkill(t *testing.T) {
 				}
 			}
 			state.Installations = retained
+			state.CatalogRevision = EmbeddedCatalogRevision - 1
 			if err := writeRegistry(manager.ConfigDir, state); err != nil {
 				t.Fatal(err)
 			}
@@ -111,12 +112,12 @@ func TestUpdateReinstallsEveryMissingCatalogSkill(t *testing.T) {
 	}
 	found := false
 	for _, item := range updated.Updated {
-		if item.Name == "kado-cli-non-search" && item.Agent == "codex" {
+		if item.Name == "kado-a2a" && item.Agent == "codex" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("Update() did not restore the newly desired skill: %#v", updated)
+		t.Fatalf("Update() did not install the newly added A2A skill: %#v", updated)
 	}
 }
 
@@ -219,7 +220,7 @@ func TestEmbeddedInstallTracksOwnershipAndProtectsModifications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Installed) != 4 || !result.UsedFallback {
+	if len(result.Installed) != 6 || !result.UsedFallback {
 		t.Fatalf("Install() = %#v", result)
 	}
 	item := installationForAgent(t, result.Installed, "codex")

@@ -54,7 +54,7 @@ Commands:
   auth identities  List identities
   agent detect     Show the detected agent
   agent list       List supported agents
-  skill <command>   Manage Search skill
+  skill <command>   Manage Kado skills
   update            Install signed CLI release
   uninstall         Remove the CLI
   release verify    Verify a release
@@ -384,7 +384,7 @@ func runSkill(
 			_, _ = fmt.Fprintf(stdout, "could not install %s (%s)\n", path, code)
 		}
 		if result.UsedFallback {
-			_, _ = fmt.Fprintln(stdout, "installed the bundled offline skill fallback")
+			_, _ = fmt.Fprintln(stdout, "installed the bundled offline skill fallbacks")
 		}
 		return nil
 	case "status":
@@ -529,7 +529,7 @@ func skillInstallationName(item skillclient.Installation) string {
 }
 
 func skillDiagnostic(cause error) error {
-	message := "could not install or update the Kado Search skill"
+	message := "could not install or update the Kado skills"
 	switch {
 	case errors.Is(cause, skillclient.ErrUnsupportedAgent):
 		message = "the detected agent does not have a supported skill location"

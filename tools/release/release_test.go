@@ -77,7 +77,7 @@ func TestEveryEmbeddedSkillHasSignedRemoteRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Releases) != 2 {
+	if len(set.Releases) != 3 {
 		t.Fatalf("makeSkillReleases() emitted %d releases", len(set.Releases))
 	}
 	seen := map[string]bool{}
@@ -88,7 +88,7 @@ func TestEveryEmbeddedSkillHasSignedRemoteRelease(t *testing.T) {
 		}
 		seen[release.Name+":"+release.Variant] = true
 	}
-	if !seen["kado-cli-non-search:default"] || !seen["kado-search:default"] {
+	if !seen["kado-a2a:default"] || !seen["kado-cli-non-search:default"] || !seen["kado-search:default"] {
 		t.Fatalf("missing releases: %#v", seen)
 	}
 }

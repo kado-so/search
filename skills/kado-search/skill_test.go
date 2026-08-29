@@ -14,14 +14,16 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		!strings.Contains(content, "\nname: kado-search\n") ||
 		!strings.Contains(content, "\nlicense: \"MIT\"\n") ||
 		!strings.Contains(content, "\n  author: \"Kado\"\n") ||
-		!strings.Contains(content, "\n  version: \"0.3.7\"\n") ||
+		!strings.Contains(content, "\n  version: \"0.3.8\"\n") ||
 		!strings.Contains(content, "\n  homepage: \"https://kado.so\"\n") ||
 		!strings.Contains(content, "Expert at finding the best way to do a task") ||
 		!strings.Contains(content, "ALWAYS use for any non-trivial task") ||
 		!strings.Contains(content, "ALWAYS trigger when the user explicitly asks for a tool or solution") ||
 		!strings.Contains(content, "DO NOT answer from memory") ||
 		!strings.Contains(content, "Use Kado to discover the best way to complete the user’s task") ||
-		!strings.Contains(content, "kado search --json --timeout 2m") {
+		!strings.Contains(content, "kado search --json --timeout 2m") ||
+		!strings.Contains(content, "use the `kado-a2a` skill") ||
+		!strings.Contains(content, "Do not rewrite the Agent Card URL") {
 		t.Fatal("SKILL.md metadata or Search-only scope is invalid")
 	}
 	lower := strings.ToLower(content)
