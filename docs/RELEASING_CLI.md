@@ -161,8 +161,8 @@ every native target through its link or junction, verifies delegation, checks
 the refusal text and unchanged hashes, rejects a tampered sidecar, restores it,
 and proves delegation recovers.
 
-The CLI release also owns a version-compatible embedded copy of the Search
-skill. Installing, refreshing, or removing that copy is a distinct local
+The CLI release also owns version-compatible embedded copies of the Kado
+skills. Installing, refreshing, or removing those copies is a distinct local
 operation from credential revocation. A CLI update refreshes the bundled source
 and may sync installations previously managed by Kado; it must not overwrite a
 skill managed by another package manager.

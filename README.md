@@ -160,9 +160,10 @@ verification, rollback, and publication details.
 
 ## Skill
 
-`skills/kado-cli-non-search/SKILL.md` contains general CLI and account guidance, while
-`skills/kado-search/SKILL.md` contains focused Search guidance. Both are bundled
-into release builds. `kado skill install` installs both skills and prefers the
+`skills/kado-cli-non-search/SKILL.md` contains general CLI and account guidance,
+`skills/kado-search/SKILL.md` contains focused Search guidance, and
+`skills/kado-a2a/SKILL.md` contains A2A invocation guidance. All three are
+bundled into release builds. `kado skill install` installs all three skills and prefers the
 latest compatible signed skill catalog
 from `kado.so` and falls back to that embedded copy without requiring npm, a
 plugin marketplace, or another package manager. Installation defaults to all
@@ -197,6 +198,7 @@ internal/searchcontract/  JSON Schema, JSON-LD, and semantic validation
 internal/searchoutput/    human, JSON, and JSONL rendering
 skills/kado-search/         Search-only agent skill
 skills/kado-cli-non-search/ Non-search CLI agent skill
+skills/kado-a2a/            A2A agent invocation skill
 tools/release/            deterministic release builder
 docs/                     installation, architecture, and release operations
 ```

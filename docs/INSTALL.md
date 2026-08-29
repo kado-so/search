@@ -65,8 +65,9 @@ explicit destination and confirmation options.
 
 ## Bundled skills
 
-Each Kado CLI release embeds an offline `kado-search` fallback and prefers the
-latest compatible signed skill published by `kado.so`. The commands are:
+Each Kado CLI release embeds offline fallbacks for `kado-search`,
+`kado-cli-non-search`, and `kado-a2a`, and prefers the latest compatible signed
+skills published by `kado.so`. The commands are:
 
 ```text
 kado skill install
@@ -75,7 +76,8 @@ kado skill update
 kado skill uninstall
 ```
 
-`install` defaults to `--all`: it installs both `kado-cli-non-search` and `kado-search` for the calling agent, every locally
+`install` defaults to `--all`: it installs `kado-cli-non-search`, `kado-search`,
+and `kado-a2a` for the calling agent, every locally
 detected supported harness, and the portable `~/.agents/skills/` location. An
 explicit `--agent` adds a requested identity. Product-specific user locations
 are used for Codex, Claude Code, Cursor, Gemini CLI, Antigravity, GitHub

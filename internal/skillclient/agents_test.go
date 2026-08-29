@@ -54,14 +54,14 @@ func TestDefaultInstallUsesAllDetectedLocationsAndGeminiPair(t *testing.T) {
 	}
 	want := map[string]bool{}
 	for _, agent := range []string{"agents", "antigravity", "claude-code", "codex", "gemini-cli"} {
-		for _, name := range []string{"kado-cli-non-search", SkillName} {
+		for _, name := range []string{"kado-a2a", "kado-cli-non-search", SkillName} {
 			want[agent+":"+name] = true
 		}
 	}
 	for _, item := range result.Installed {
 		delete(want, item.Agent+":"+item.Name)
 	}
-	if len(want) != 0 || len(result.Installed) != 10 {
+	if len(want) != 0 || len(result.Installed) != 15 {
 		t.Fatalf("Install() = %#v; missing %#v", result.Installed, want)
 	}
 }
@@ -78,7 +78,7 @@ func TestStatusDiscoversVerifiedUnregisteredInstallation(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, err := manager.Status()
-	if err != nil || len(status.Installations) != 2 {
+	if err != nil || len(status.Installations) != 3 {
 		t.Fatalf("Status() = %#v, %v", status, err)
 	}
 }
@@ -149,8 +149,8 @@ func TestUninstallPreflightLeavesAllSkillsWhenOneCopyIsModified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Installed) != 2 {
-		t.Fatalf("Install() installed %d skills, want 2", len(result.Installed))
+	if len(result.Installed) != 3 {
+		t.Fatalf("Install() installed %d skills, want 3", len(result.Installed))
 	}
 	modified := result.Installed[len(result.Installed)-1]
 	if err := os.WriteFile(filepath.Join(modified.Path, "SKILL.md"), []byte("changed"), 0o644); err != nil {

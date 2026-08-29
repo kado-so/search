@@ -1,0 +1,8 @@
+interface:
+  display_name: "Kado A2A"
+  short_description: "Invoke and manage A2A-compatible agents"
+  brand_color: "#5B3DF5"
+  default_prompt: "Use $kado-a2a to send my task to this A2A-compatible agent."
+
+policy:
+  allow_implicit_invocation: true
