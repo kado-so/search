@@ -20,6 +20,11 @@ command. Full lifecycle hardening and production manifest authentication remain
 later goals.
 
 Runtime construction, fixture and complete status are owned by
-`mcp/scripts/packaging` and `mcp/docs/G2_PACKAGING.md`. Windows amd64 has native
-evidence; the other five target builds are not native qualification. No platform
-may be dropped to bypass a packaging dependency failure.
+`mcp/scripts/packaging` and `mcp/docs/G2_PACKAGING.md`. G2 passed all six native
+targets and received final approval. G3 adds an opt-in command forwarding check:
+set `KADO_MCP_QUALIFICATION_BUNDLE` to a freshly built native payload, then run
+`go test ./tools/mcp-package-probe -run TestMCPCommandBoundaryCandidate -v`.
+It compares direct private-Node execution with Go dispatch for help, unknown
+future commands, query/Unicode/metacharacter argv and piped JSON validation,
+including exact stdout, stderr and exit status. This does not install the G9
+public namespace. No MCP parsing logic belongs in the Go harness.
