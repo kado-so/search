@@ -84,7 +84,7 @@ func TestUpdateInstallsNewlyAddedCatalogSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range installed.Installed {
-		if item.Name == "kado-a2a" {
+		if item.Name == "kado-mcp" {
 			if err := os.RemoveAll(item.Path); err != nil {
 				t.Fatal(err)
 			}
@@ -112,12 +112,12 @@ func TestUpdateInstallsNewlyAddedCatalogSkill(t *testing.T) {
 	}
 	found := false
 	for _, item := range updated.Updated {
-		if item.Name == "kado-a2a" && item.Agent == "codex" {
+		if item.Name == "kado-mcp" && item.Agent == "codex" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("Update() did not install the newly added A2A skill: %#v", updated)
+		t.Fatalf("Update() did not install the newly added MCP skill: %#v", updated)
 	}
 }
 
@@ -125,7 +125,7 @@ func TestInstallContinuesWhenOneSkillDestinationConflicts(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
-	conflict := filepath.Join(home, ".codex", "skills", "kado-cli-non-search")
+	conflict := filepath.Join(home, ".codex", "skills", "kado-mcp")
 	if err := os.MkdirAll(conflict, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestEmbeddedInstallTracksOwnershipAndProtectsModifications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Installed) != 6 || !result.UsedFallback {
+	if len(result.Installed) != 8 || !result.UsedFallback {
 		t.Fatalf("Install() = %#v", result)
 	}
 	item := installationForAgent(t, result.Installed, "codex")

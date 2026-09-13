@@ -1,5 +1,5 @@
-// Package kado_cli_non_search exposes the non-Search Kado CLI skill.
-package kado_cli_non_search
+// Package kado_mcp exposes the MCP Kado CLI skill.
+package kado_mcp
 
 import (
 	"bufio"

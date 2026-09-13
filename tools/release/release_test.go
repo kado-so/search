@@ -78,7 +78,7 @@ func TestEveryEmbeddedSkillHasSignedRemoteRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Releases) != 3 {
+	if len(set.Releases) != 4 {
 		t.Fatalf("makeSkillReleases() emitted %d releases", len(set.Releases))
 	}
 	seen := map[string]bool{}
@@ -89,7 +89,7 @@ func TestEveryEmbeddedSkillHasSignedRemoteRelease(t *testing.T) {
 		}
 		seen[release.Name+":"+release.Variant] = true
 	}
-	if !seen["kado-a2a:default"] || !seen["kado-cli-non-search:default"] || !seen["kado-search:default"] {
+	if !seen["kado-mcp:default"] || !seen["kado-a2a:default"] || !seen["kado-cli-non-search:default"] || !seen["kado-search:default"] {
 		t.Fatalf("missing releases: %#v", seen)
 	}
 }
@@ -115,13 +115,14 @@ func TestReleaseBuildWritesNestedSkillArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{
+		"skills/kado-mcp/default/0.1.0/kado-mcp.tar.gz",
 		"skills/catalog.json",
 		"skills/catalog.json.sig",
 		"skills/kado-a2a/default/0.1.0/kado-a2a.tar.gz",
 		"skills/kado-a2a/default/0.1.0/metadata.json",
 		"skills/kado-a2a/default/0.1.0/metadata.json.sig",
-		"skills/kado-cli-non-search/default/0.1.0/kado-cli-non-search.tar.gz",
-		"skills/kado-search/default/0.3.9/kado-search.tar.gz",
+		"skills/kado-cli-non-search/default/0.2.0/kado-cli-non-search.tar.gz",
+		"skills/kado-search/default/0.4.0/kado-search.tar.gz",
 	} {
 		if _, ok := files[name]; !ok {
 			t.Fatalf("skill artifact %q was not registered", name)
@@ -130,8 +131,8 @@ func TestReleaseBuildWritesNestedSkillArtifacts(t *testing.T) {
 			t.Fatalf("skill artifact %q was not written: %v", name, err)
 		}
 	}
-	if len(files) != 11 {
-		t.Fatalf("skill artifact count = %d, want 11", len(files))
+	if len(files) != 14 {
+		t.Fatalf("skill artifact count = %d, want 14", len(files))
 	}
 }
 

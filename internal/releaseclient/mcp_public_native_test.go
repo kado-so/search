@@ -156,6 +156,13 @@ func TestPublicMCPCompleteBundle(t *testing.T) {
 	if r := run(kado, "", "__complete", "mcp", "tools-"); r.code != 0 || !strings.Contains(r.stdout, "tools-call") || r.stderr != "" {
 		t.Fatalf("completion: %+v", r)
 	}
+	if tutorial := os.Getenv("KADO_MCP_TUTORIAL_SCRIPT"); tutorial != "" {
+		if r := run(active.Entry("node"), "", tutorial, kado); r.code != 0 {
+			t.Fatalf("installed MCP tutorial: %+v", r)
+		} else {
+			t.Log(r.stdout)
+		}
+	}
 	// Even completion must fail closed if any required component changes.
 	cliPath := active.Entry("mcp")
 	cliBytes, err := os.ReadFile(cliPath)

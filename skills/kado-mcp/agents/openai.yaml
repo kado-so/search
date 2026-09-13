@@ -1,0 +1,6 @@
+interface:
+  display_name: "Kado MCP"
+  short_description: "Inspect and invoke MCP tools through Kado"
+  default_prompt: "Use $kado-mcp to inspect and use this MCP server for my task."
+policy:
+  allow_implicit_invocation: true

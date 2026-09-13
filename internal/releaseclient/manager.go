@@ -755,6 +755,13 @@ func sameReleaseOrigin(metadataURL *url.URL, metadata Metadata) error {
 	return nil
 }
 
+// VersionAtLeast applies the release version policy, including prerelease
+// ordering. Invalid or unstamped versions cannot satisfy a published floor.
+func VersionAtLeast(current, minimum string) bool {
+	order, err := compareVersions(current, minimum)
+	return err == nil && order >= 0
+}
+
 func compareVersions(left, right string) (int, error) {
 	leftParts, leftPre, err := numericVersion(left)
 	if err != nil {

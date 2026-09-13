@@ -161,9 +161,10 @@ verification, rollback, and publication details.
 ## Skill
 
 `skills/kado-cli-non-search/SKILL.md` contains general CLI and account guidance,
-`skills/kado-search/SKILL.md` contains focused Search guidance, and
-`skills/kado-a2a/SKILL.md` contains A2A invocation guidance. All three are
-bundled into release builds. `kado skill install` installs all three skills and prefers the
+`skills/kado-search/SKILL.md` contains focused Search guidance,
+`skills/kado-a2a/SKILL.md` contains A2A invocation guidance, and
+`skills/kado-mcp/SKILL.md` covers MCP tools, profiles and sessions. All four are
+bundled into release builds. `kado skill install` installs all four skills and prefers the
 latest compatible signed skill catalog
 from `kado.so` and falls back to that embedded copy without requiring npm, a
 plugin marketplace, or another package manager. Installation defaults to all
@@ -172,6 +173,9 @@ known destinations, verifies receipts against actual content hashes, and
 asynchronously updates every verified copy it owns.
 
 ## Installation
+
+See [MCP from Search](docs/MCP_FROM_SEARCH.md) for discovery, schema inspection,
+provider login, direct URL calls and named sessions on Windows, macOS and Linux.
 
 The primary installation flow is agent-first: an agent downloads the one
 platform-specific Kado release, verifies and installs it, then asks Kado to
@@ -199,6 +203,7 @@ internal/searchoutput/    human, JSON, and JSONL rendering
 skills/kado-search/         Search-only agent skill
 skills/kado-cli-non-search/ Non-search CLI agent skill
 skills/kado-a2a/            A2A agent invocation skill
+skills/kado-mcp/            MCP tool invocation skill
 tools/release/            deterministic release builder
 docs/                     installation, architecture, and release operations
 ```
