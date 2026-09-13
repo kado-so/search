@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/kado-so/search/internal/payload"
 	"io"
 	"io/fs"
 	"net/http"
@@ -142,6 +143,7 @@ type Manager struct {
 
 // Options controls one install/update transaction.
 type Options struct {
+	fresh          bool
 	TargetPath     string
 	LauncherPath   string
 	CurrentVersion string
@@ -233,7 +235,17 @@ func (manager Manager) Update(ctx context.Context, options Options) (Result, err
 	var result Result
 	var updateErr error
 	lockErr := launcher.WithUpdateLock(options.LauncherPath, func() error {
-		if _, activeVersion, err := launcher.ActiveBundle(options.LauncherPath); err == nil {
+		if launcher.HasCompleteInstallation(options.LauncherPath) {
+			key, err := ParsePublicKey(manager.PublicKey)
+			if err != nil {
+				return err
+			}
+			active, err := launcher.ActiveComplete(options.LauncherPath, key)
+			if err == nil {
+				options.CurrentVersion = active.Manifest.Version
+			}
+			// A signed same-version candidate may repair a corrupt installation.
+		} else if _, activeVersion, err := launcher.ActiveBundle(options.LauncherPath); err == nil {
 			options.CurrentVersion = activeVersion
 		} else {
 			return ErrInstall
@@ -292,6 +304,9 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 	}
 	result.ToVersion = metadata.Version
 	target, err := metadata.TargetFor(goos, goarch)
+	if options.fresh && metadata.SchemaVersion != CompleteSchemaVersion {
+		return result, ErrInvalidMetadata
+	}
 	if err != nil {
 		return result, ErrPlatform
 	}
@@ -306,7 +321,7 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 		if comparison < 0 && !options.AllowDowngrade {
 			return result, ErrDowngrade
 		}
-		if comparison == 0 && !options.DryRun {
+		if comparison == 0 && !options.DryRun && metadata.SchemaVersion != CompleteSchemaVersion {
 			if options.LauncherPath == "" {
 				return result, ErrInstall
 			}
@@ -314,9 +329,22 @@ func (manager Manager) update(ctx context.Context, options Options) (Result, err
 		}
 	}
 
-	archive, err := fetchAndVerify(ctx, fetcher, target.Archive, MaxArchiveSize)
+	limit := int64(MaxArchiveSize)
+	if metadata.SchemaVersion == CompleteSchemaVersion {
+		limit = payload.MaxArchive
+	}
+	archive, err := fetchAndVerify(ctx, fetcher, target.Archive, limit)
 	if err != nil {
 		return result, err
+	}
+	if metadata.SchemaVersion == CompleteSchemaVersion {
+		if !launcher.HasCompleteInstallation(options.LauncherPath) && options.CurrentVersion != "" {
+			return result, ErrInstall
+		}
+		return manager.updateComplete(ctx, options, result, metadata, target, archive)
+	}
+	if launcher.HasCompleteInstallation(options.LauncherPath) {
+		return result, ErrInstall
 	}
 	bundle, err := VerifyTargetBundle(target, archive)
 	if err != nil {
@@ -391,6 +419,13 @@ func VerifyTargetBundle(target Target, archive []byte) (ExecutableBundle, error)
 // Uninstall removes the direct executable pair and managed activation state.
 // Credentials and config are deliberately outside this boundary.
 func Uninstall(targetPath string) error {
+	if launcher.HasCompleteInstallation(targetPath) {
+		key, err := ParsePublicKey(buildinfo.Current().ReleasePublicKey)
+		if err != nil {
+			return ErrUninstall
+		}
+		return launcher.UninstallComplete(targetPath, key)
+	}
 	if err := validateTargetPath(targetPath, true); err != nil {
 		return ErrUninstall
 	}
@@ -457,7 +492,24 @@ func VerifyExecutable(
 		return ErrCandidate
 	}
 	a2a := metadata.Components.A2ACLI
-	if value.SchemaVersion != buildinfo.VersionSchema ||
+	expectedSchema := buildinfo.VersionSchema
+	if metadata.SchemaVersion == CompleteSchemaVersion {
+		expectedSchema = buildinfo.CompleteVersionSchema
+		if value.Components.MCP == nil || metadata.Components.MCP == nil {
+			return ErrCandidate
+		}
+		component := *value.Components.MCP
+		if component.NodeArchiveSHA256 != target.NodeArchiveSHA256 {
+			return ErrCandidate
+		}
+		component.NodeArchiveSHA256 = ""
+		if component != *metadata.Components.MCP {
+			return ErrCandidate
+		}
+	} else if value.Components.MCP != nil {
+		return ErrCandidate
+	}
+	if value.SchemaVersion != expectedSchema ||
 		value.Kado.Version != metadata.Version ||
 		value.Kado.Commit != metadata.Commit ||
 		value.Kado.BuiltAt != metadata.BuiltAt ||

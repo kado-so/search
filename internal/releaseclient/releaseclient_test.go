@@ -976,6 +976,13 @@ func buildStampedExecutable(t *testing.T, metadata Metadata, publicKey string) s
 		" -X github.com/kado-so/search/internal/buildinfo.A2APatchSet=sha256:" + a2a.PatchSetSHA256 +
 		" -X github.com/kado-so/search/internal/buildinfo.A2AArtifactSHA256=" + target.Sidecar.SHA256 +
 		" -X github.com/kado-so/search/internal/buildinfo.A2AArtifactSize=" + strconv.FormatInt(target.Sidecar.Size, 10)
+	if mcp := metadata.Components.MCP; mcp != nil {
+		ldflags += " -X github.com/kado-so/search/internal/buildinfo.MCPVersion=" + mcp.Version +
+			" -X github.com/kado-so/search/internal/buildinfo.MCPCommit=" + mcp.Commit +
+			" -X github.com/kado-so/search/internal/buildinfo.MCPLockSHA256=" + mcp.LockSHA256 +
+			" -X github.com/kado-so/search/internal/buildinfo.NodeVersion=" + mcp.NodeVersion +
+			" -X github.com/kado-so/search/internal/buildinfo.NodeArchiveSHA256=" + target.NodeArchiveSHA256
+	}
 	command := exec.Command(
 		"go",
 		"build",

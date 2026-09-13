@@ -167,6 +167,13 @@ func buildKadoExecutable(
 		" -X " + buildinfoPackage + "A2APatchSet=sha256:" + a2a.PatchSetSHA256 +
 		" -X " + buildinfoPackage + "A2AArtifactSHA256=" + releaseclient.Digest(a2aBinary) +
 		" -X " + buildinfoPackage + "A2AArtifactSize=" + strconv.Itoa(len(a2aBinary))
+	if mcp, ok := source.mcp[target.goos+"/"+target.goarch]; ok {
+		ldflags += " -X " + buildinfoPackage + "MCPVersion=" + mcp.Version +
+			" -X " + buildinfoPackage + "MCPCommit=" + mcp.Commit +
+			" -X " + buildinfoPackage + "MCPLockSHA256=" + mcp.LockSHA256 +
+			" -X " + buildinfoPackage + "NodeVersion=" + mcp.NodeVersion +
+			" -X " + buildinfoPackage + "NodeArchiveSHA256=" + mcp.NodeArchiveSHA256
+	}
 	if _, err := commandOutput(
 		root,
 		environment,

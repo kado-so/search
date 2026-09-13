@@ -192,6 +192,9 @@ func makeProvenance(
 		})
 	}
 	for _, target := range targets {
+		if target.Payload != nil {
+			subjects = append(subjects, subject{Name: target.Archive.Name + "#bundle.gen.json", Digest: map[string]string{"sha256": target.Payload.SHA256}})
+		}
 		sidecarName := "kado-a2a"
 		if target.OS == "windows" {
 			sidecarName += ".exe"
@@ -263,6 +266,13 @@ func makeProvenance(
 		{URI: "git+" + input.a2a.Lock.Repository + "@" + input.a2a.Lock.Commit, Digest: map[string]string{
 			"gitCommit": input.a2a.Lock.Commit, "sha256": input.a2a.Lock.SourceArchiveSHA256,
 		}},
+	}
+	if input.mcpPrebuilt != "" {
+		definition.BuildType = "https://kado.so/build-types/complete-cli-release/v3"
+		definition.ResolvedDependencies = append(definition.ResolvedDependencies, dependency{URI: "git+https://github.com/kado-so/mcp@" + input.mcpCommit, Digest: map[string]string{"gitCommit": input.mcpCommit}})
+		for _, t := range targets {
+			definition.ResolvedDependencies = append(definition.ResolvedDependencies, dependency{URI: "kado-mcp-component:" + t.OS + "/" + t.Arch, Digest: map[string]string{"sha256": input.mcpDigests[t.OS+"/"+t.Arch]}})
+		}
 	}
 	run := &statement.Predicate.RunDetails
 	run.Builder.ID = "https://github.com/kado-so/search/tree/main/tools/release"

@@ -2,7 +2,9 @@
 package launcher
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/kado-so/search/internal/buildinfo"
+	"github.com/kado-so/search/internal/payload"
 )
 
 const (
@@ -83,6 +86,12 @@ func Dispatch(
 	if err != nil {
 		return 0, false
 	}
+	if code, handled := dispatchComplete(info, executable, arguments, stdin, stdout, stderr, containProcessTree); handled {
+		if code == -1 {
+			return 0, false
+		}
+		return code, true
+	}
 	if pinned, launcherPath, ok := pinnedPayload(executable); ok {
 		if samePath(executable, pinned) {
 			return 0, false
@@ -99,6 +108,61 @@ func Dispatch(
 		return 0, false
 	}
 	return runPayload(payload, executable, arguments, stdin, stdout, stderr, containProcessTree)
+}
+
+func dispatchComplete(info buildinfo.Info, executable string, args []string, stdin io.Reader, stdout, stderr io.Writer, contain bool) (int, bool) {
+	keyBytes, err := base64.RawStdEncoding.DecodeString(info.ReleasePublicKey)
+	key := ed25519.PublicKey(keyBytes)
+	launcherPath := executable
+	// A payload invocation stays pinned to its own signed version. Updating the
+	// installation in parallel must not silently switch a running command's unit.
+	versionRoot := filepath.Dir(executable)
+	if filepath.Base(filepath.Dir(versionRoot)) == "versions" {
+		root := filepath.Dir(filepath.Dir(versionRoot))
+		candidateLauncher := strings.TrimSuffix(root, ".d")
+		if root == candidateLauncher+".d" && HasCompleteInstallation(candidateLauncher) {
+			encoded, readErr := payload.ReadFile(versionRoot, payload.ManifestName, payload.MaxManifest)
+			m, verifyErr := payload.VerifyTree(versionRoot, payload.Digest(encoded), key)
+			if err != nil || readErr != nil || verifyErr != nil || m.Version != filepath.Base(versionRoot) || m.Target != runtime.GOOS+"/"+runtime.GOARCH || executable != filepath.Join(versionRoot, m.Entries["kado"]) {
+				fmt.Fprintln(stderr, "Kado bundle verification failed.")
+				return 1, true
+			}
+			_ = os.Setenv(launcherEnvironment, candidateLauncher)
+			_ = os.Setenv(payloadEnvironment, executable)
+			// Allow dispatch to continue into the verified executable's CLI.
+			return -1, true
+		}
+	}
+	if !HasCompleteInstallation(launcherPath) {
+		if info.MCP == nil {
+			return 0, false
+		}
+		// Candidate identity and signed-release verification load no components.
+		// Every ordinary invocation of a successor executable requires its whole
+		// unit, and must never bootstrap a legacy two-executable installation.
+		identity := len(args) == 3 && args[1] == "version" && args[2] == "--json"
+		verify := len(args) == 5 && args[1] == "release" && args[2] == "verify" && args[3] == "--directory"
+		if identity || verify {
+			return -1, true
+		}
+		encoded, readErr := payload.ReadFile(versionRoot, payload.ManifestName, payload.MaxManifest)
+		m, verifyErr := payload.VerifyTree(versionRoot, payload.Digest(encoded), key)
+		if err != nil || readErr != nil || verifyErr != nil || m.Version != info.Version || m.Target != info.Target || m.MCP != *info.MCP {
+			fmt.Fprintln(stderr, "A complete verified Kado bundle is required; install or repair the bundle.")
+			return 1, true
+		}
+		return -1, true
+	}
+	if err != nil || !directInstallation(launcherPath) {
+		fmt.Fprintln(stderr, "Kado installation cannot be activated.")
+		return 1, true
+	}
+	active, err := ActiveComplete(launcherPath, key)
+	if err != nil {
+		fmt.Fprintln(stderr, "No complete verified Kado bundle is available; repair the installation.")
+		return 1, true
+	}
+	return runPayload(active.Entry("kado"), launcherPath, args, stdin, stdout, stderr, contain)
 }
 
 // CurrentInstallation returns the validated stable launcher selected by the
@@ -260,7 +324,7 @@ func writeDirectReceipt(launcherPath string) error {
 			_ = os.Remove(name)
 		}
 	}()
-	if err := temporary.Chmod(0o600); err == nil {
+	if err = temporary.Chmod(0o600); err == nil {
 		_, err = temporary.Write(encoded)
 	}
 	if err == nil {
@@ -635,7 +699,24 @@ func pathWithinVersion(installation Installation, payload string) bool {
 		return false
 	}
 	parts := strings.Split(filepath.ToSlash(relative), "/")
+	if HasCompleteInstallation(installation.LauncherPath) {
+		return len(parts) == 2 && validVersion(parts[0]) && parts[1] == executableName() && validCompletePayload(installation.Root, payload, parts[0])
+	}
 	return len(parts) == 2 && validVersion(parts[0]) && parts[1] == executableName() && validPayload(installation.Root, payload, parts[0])
+}
+
+func validCompletePayload(root, p, version string) bool {
+	key, err := base64.RawStdEncoding.DecodeString(buildinfo.Current().ReleasePublicKey)
+	if err != nil {
+		return false
+	}
+	dir := filepath.Join(root, "versions", version)
+	encoded, err := payload.ReadFile(dir, payload.ManifestName, payload.MaxManifest)
+	if err != nil {
+		return false
+	}
+	m, err := payload.VerifyTree(dir, payload.Digest(encoded), ed25519.PublicKey(key))
+	return err == nil && m.Version == version && m.Target == runtime.GOOS+"/"+runtime.GOARCH && p == filepath.Join(dir, m.Entries["kado"])
 }
 
 func installedExecutablePath(path string) bool {

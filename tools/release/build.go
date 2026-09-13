@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kado-so/search/internal/payload"
 	"github.com/kado-so/search/internal/releaseclient"
 )
 
@@ -38,6 +39,9 @@ type buildInput struct {
 	output       string
 	kadoPrebuilt string
 	a2aPrebuilt  string
+	mcpPrebuilt  string
+	mcpCommit    string
+	mcpDigests   map[string]string
 	goBinary     string
 	a2a          a2aPreparedSource
 	a2aLicense   []byte
@@ -190,6 +194,22 @@ func buildRelease(input buildInput) error {
 		Provenance: provenanceFile,
 		Targets:    targets,
 	}
+	if input.mcpPrebuilt != "" {
+		metadata.SchemaVersion = releaseclient.CompleteSchemaVersion
+		var common *payload.Component
+		for _, target := range buildTargets {
+			c, _, err := readMCPComponent(filepath.Join(input.mcpPrebuilt, target.goos+"-"+target.goarch), input.mcpCommit, input.mcpDigests[target.goos+"/"+target.goarch], target)
+			if err != nil {
+				return err
+			}
+			c.NodeArchiveSHA256 = ""
+			if common != nil && *common != c {
+				return errors.New("MCP component inputs differ across targets")
+			}
+			common = &c
+		}
+		metadata.Components.MCP = common
+	}
 	metadataBytes, err := releaseclient.CanonicalMetadata(metadata)
 	if err != nil {
 		return errors.New("release metadata could not be encoded")
@@ -220,6 +240,12 @@ func buildRelease(input buildInput) error {
 		return errors.New("release metadata signature self-check failed")
 	}
 	for _, target := range targets {
+		if target.Payload != nil {
+			if _, err := releaseclient.VerifyCompleteTarget(target, files[target.Archive.Name].data, input.publicKey); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := releaseclient.VerifyTargetBundle(
 			target,
 			files[target.Archive.Name].data,
@@ -335,11 +361,34 @@ func buildTargetArtifacts(
 			target.goarch,
 		)
 	}
+	var complete *payload.Bundle
+	if input.mcpPrebuilt != "" {
+		component, files, err := readMCPComponent(filepath.Join(input.mcpPrebuilt, target.goos+"-"+target.goarch), input.mcpCommit, input.mcpDigests[target.goos+"/"+target.goarch], target)
+		if err != nil {
+			return releaseclient.Target{}, err
+		}
+		files[binaryName] = binary
+		files[a2aExecutableForArchive(binaryName)] = a2aBinary
+		files["LICENSE"] = license
+		files["LICENSE-A2A-CLI"] = input.a2aLicense
+		files["INSTALL-CLI.md"] = guide
+		sealed, err := payload.Seal(payload.Manifest{Version: input.source.Version, Target: target.goos + "/" + target.goarch, MCP: component}, files, input.privateKey)
+		if err != nil {
+			return releaseclient.Target{}, err
+		}
+		complete = &sealed
+	}
 
 	sbomName := base + ".spdx.json"
 	sbom, err := makeSBOM(input, target, sbomName, binary, a2aBinary)
 	if err != nil {
 		return releaseclient.Target{}, err
+	}
+	if complete != nil {
+		sbom, err = addMCPInventory(sbom, *complete)
+		if err != nil {
+			return releaseclient.Target{}, err
+		}
 	}
 	sbomFile, err := add(sbomName, sbom, 0o644)
 	if err != nil {
@@ -347,7 +396,12 @@ func buildTargetArtifacts(
 	}
 	archiveName := base + ".tar.gz"
 	var archive []byte
-	if archiveFormat == "zip" {
+	if complete != nil {
+		if archiveFormat == "zip" {
+			archiveName = base + ".zip"
+		}
+		archive, err = payload.Archive(*complete, archiveFormat, input.builtAt)
+	} else if archiveFormat == "zip" {
 		archiveName = base + ".zip"
 		archive, err = makeZip(input.builtAt, binaryName, binary, a2aBinary, license, input.a2aLicense, guide)
 	} else {
@@ -367,7 +421,7 @@ func buildTargetArtifacts(
 	if err := register(versionedBinaryName, binary, binaryFile); err != nil {
 		return releaseclient.Target{}, err
 	}
-	return releaseclient.Target{
+	result := releaseclient.Target{
 		OS:      target.goos,
 		Arch:    target.goarch,
 		Archive: archiveFile,
@@ -376,7 +430,12 @@ func buildTargetArtifacts(
 			Size:   int64(len(a2aBinary)),
 		},
 		SBOM: sbomFile,
-	}, nil
+	}
+	if complete != nil {
+		result.Payload = &releaseclient.EmbeddedArtifact{SHA256: payload.Digest(complete.Encoded), Size: int64(len(complete.Encoded))}
+		result.NodeArchiveSHA256 = complete.Manifest.MCP.NodeArchiveSHA256
+	}
+	return result, nil
 }
 
 func makeTarGzip(

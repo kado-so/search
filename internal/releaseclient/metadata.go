@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kado-so/search/internal/payload"
 	"io"
 	"net/url"
 	"path"
@@ -85,16 +86,19 @@ type A2AComponent struct {
 
 // Components contains independently versioned software shipped by Kado.
 type Components struct {
-	A2ACLI A2AComponent `json:"a2a_cli"`
+	A2ACLI A2AComponent       `json:"a2a_cli"`
+	MCP    *payload.Component `json:"mcp,omitempty"`
 }
 
 // Target identifies one supported executable package.
 type Target struct {
-	OS      string           `json:"os"`
-	Arch    string           `json:"arch"`
-	Archive File             `json:"archive"`
-	Sidecar EmbeddedArtifact `json:"sidecar"`
-	SBOM    File             `json:"sbom"`
+	OS                string            `json:"os"`
+	Arch              string            `json:"arch"`
+	Archive           File              `json:"archive"`
+	Sidecar           EmbeddedArtifact  `json:"sidecar"`
+	SBOM              File              `json:"sbom"`
+	Payload           *EmbeddedArtifact `json:"payload,omitempty"`
+	NodeArchiveSHA256 string            `json:"node_archive_sha256,omitempty"`
 }
 
 // Metadata is the canonical signed release index.
@@ -185,8 +189,10 @@ func VerifyMetadata(
 }
 
 // Validate rejects ambiguous or unsupported release metadata.
+const CompleteSchemaVersion = "kado.release.v3"
+
 func (metadata Metadata) Validate() error {
-	if metadata.SchemaVersion != SchemaVersion ||
+	if (metadata.SchemaVersion != SchemaVersion && metadata.SchemaVersion != CompleteSchemaVersion) ||
 		metadata.Product != Product ||
 		len(metadata.Version) > 48 ||
 		!versionPattern.MatchString(metadata.Version) ||
@@ -204,6 +210,20 @@ func (metadata Metadata) Validate() error {
 	if err := metadata.Components.A2ACLI.validate(metadata.BuiltAt); err != nil {
 		return err
 	}
+	complete := metadata.SchemaVersion == CompleteSchemaVersion
+	if complete != (metadata.Components.MCP != nil) {
+		return errInvalidMetadata
+	}
+	if complete {
+		c := metadata.Components.MCP
+		if !payload.ValidVersion(c.Version) || !commitPattern.MatchString(c.Commit) || !payload.ValidDigest(c.LockSHA256) || !payload.ValidVersion(c.NodeVersion) {
+			return errInvalidMetadata
+		}
+		// Node archives vary by target and are bound by each signed payload.
+		if c.NodeArchiveSHA256 != "" {
+			return errInvalidMetadata
+		}
+	}
 	if metadata.Provenance.Name != "provenance.intoto.json" {
 		return errInvalidMetadata
 	}
@@ -220,6 +240,12 @@ func (metadata Metadata) Validate() error {
 		return errInvalidMetadata
 	}
 	for _, target := range metadata.Targets {
+		if complete && !payload.ValidDigest(target.NodeArchiveSHA256) || !complete && target.NodeArchiveSHA256 != "" {
+			return errInvalidMetadata
+		}
+		if complete != (target.Payload != nil) || (complete && (!validEmbeddedArtifact(*target.Payload) || target.Payload.Size > payload.MaxManifest)) {
+			return errInvalidMetadata
+		}
 		key := target.OS + "/" + target.Arch
 		if _, ok := supported[key]; !ok {
 			return errInvalidMetadata

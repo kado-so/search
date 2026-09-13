@@ -4,14 +4,16 @@ package buildinfo
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/kado-so/search/internal/payload"
 	"runtime"
 	"strconv"
 	"strings"
 )
 
 const (
-	maxMetadataRunes = 48
-	VersionSchema    = "kado.version.v1"
+	maxMetadataRunes      = 48
+	VersionSchema         = "kado.version.v1"
+	CompleteVersionSchema = "kado.version.v2"
 )
 
 // These values are overridden at build time with -ldflags -X.
@@ -32,6 +34,11 @@ var (
 	A2APatchSet        = "unknown"
 	A2AArtifactSHA256  = "unknown"
 	A2AArtifactSize    = "unknown"
+	MCPVersion         = ""
+	MCPCommit          = ""
+	MCPLockSHA256      = ""
+	NodeVersion        = ""
+	NodeArchiveSHA256  = ""
 )
 
 // A2AInfo is the non-secret identity of the bundled official A2A CLI.
@@ -66,6 +73,7 @@ type KadoVersion struct {
 // VersionComponents contains independently versioned bundled executables.
 type VersionComponents struct {
 	A2ACLI A2AComponentVersion `json:"a2a_cli"`
+	MCP    *payload.Component  `json:"mcp,omitempty"`
 }
 
 // A2AComponentVersion identifies the exact bundled A2A source, patch, and executable.
@@ -82,15 +90,16 @@ type A2AComponentVersion struct {
 
 // Info is the safe, bounded build metadata exposed by the CLI.
 type Info struct {
-	Version            string  `json:"version"`
-	Commit             string  `json:"commit"`
-	Date               string  `json:"built_at"`
-	Target             string  `json:"target"`
-	ReleaseKeyID       string  `json:"release_key_id"`
-	ReleasePublicKey   string  `json:"-"`
-	ReleaseMetadataURL string  `json:"-"`
-	InstallChannel     string  `json:"-"`
-	A2A                A2AInfo `json:"-"`
+	Version            string             `json:"version"`
+	Commit             string             `json:"commit"`
+	Date               string             `json:"built_at"`
+	Target             string             `json:"target"`
+	ReleaseKeyID       string             `json:"release_key_id"`
+	ReleasePublicKey   string             `json:"-"`
+	ReleaseMetadataURL string             `json:"-"`
+	InstallChannel     string             `json:"-"`
+	A2A                A2AInfo            `json:"-"`
+	MCP                *payload.Component `json:"-"`
 }
 
 // Current returns the metadata attached to this binary.
@@ -104,6 +113,7 @@ func Current() Info {
 		ReleasePublicKey:   strings.TrimSpace(ReleasePublicKey),
 		ReleaseMetadataURL: strings.TrimSpace(ReleaseMetadataURL),
 		InstallChannel:     boundedToken(InstallChannel),
+		MCP:                currentMCP(),
 		A2A: A2AInfo{
 			Version:        boundedToken(A2AVersion),
 			Tag:            boundedToken(A2ATag),
@@ -115,6 +125,13 @@ func Current() Info {
 			ArtifactSize:   positiveInt64(A2AArtifactSize),
 		},
 	}
+}
+
+func currentMCP() *payload.Component {
+	if MCPCommit == "" {
+		return nil
+	}
+	return &payload.Component{Version: boundedToken(MCPVersion), Commit: boundedToken(MCPCommit), LockSHA256: boundedTokenLength(MCPLockSHA256, 64), NodeVersion: boundedToken(NodeVersion), NodeArchiveSHA256: boundedTokenLength(NodeArchiveSHA256, 64)}
 }
 
 func positiveInt64(value string) int64 {
@@ -171,7 +188,7 @@ func (info Info) BundleText() string {
 
 // Report returns the bounded, non-secret distribution identity.
 func (info Info) Report() VersionReport {
-	return VersionReport{
+	report := VersionReport{
 		SchemaVersion: VersionSchema,
 		Kado: KadoVersion{
 			Version:      boundedToken(info.Version),
@@ -192,6 +209,11 @@ func (info Info) Report() VersionReport {
 			ArtifactSize:   max(info.A2A.ArtifactSize, 0),
 		}},
 	}
+	if info.MCP != nil {
+		report.SchemaVersion = CompleteVersionSchema
+		report.Components.MCP = info.MCP
+	}
+	return report
 }
 
 // JSON returns deterministic, non-secret distribution provenance.
