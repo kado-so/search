@@ -95,4 +95,69 @@ func TestMCPCommandBoundaryCandidate(t *testing.T) {
 			}
 		})
 	}
+	t.Run("persistent-session-survives-launcher", func(t *testing.T) {
+		config := filepath.Join(directory, "session ü.json")
+		content, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"fixture": map[string]any{"command": node, "args": []string{filepath.Join(root, filepath.FromSlash(m.Entries["fixture"]))}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(config, content, 0600); err != nil {
+			t.Fatal(err)
+		}
+		invoke := func(args ...string) result {
+			return run(harness, append([]string{"-bundle", root, "-digest", digest, "-lifetime", "persistent", "--"}, args...), "")
+		}
+		check := func(value result) {
+			t.Helper()
+			if value.code != 0 {
+				t.Fatalf("session command: %+v", value)
+			}
+		}
+		check(invoke("connect", config+":fixture", "@g7-launcher", "--no-profile", "--json"))
+		t.Cleanup(func() { invoke("@g7-launcher", "close", "--json") })
+		readIdentity := func() string {
+			t.Helper()
+			content, err := os.ReadFile(filepath.Join(directory, "state", "sessions.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var storage struct {
+				SchemaVersion int
+				Sessions      map[string]struct {
+					Ownership struct {
+						InstanceID    string
+						ComponentRoot string
+						Runtime       string
+						Secret        string
+					}
+				}
+			}
+			if err := json.Unmarshal(content, &storage); err != nil {
+				t.Fatal(err)
+			}
+			owner := storage.Sessions["@g7-launcher"].Ownership
+			if storage.SchemaVersion != 1 || owner.InstanceID == "" || owner.Secret != "" || !strings.EqualFold(filepath.Clean(owner.ComponentRoot), filepath.Join(root, "app")) || !strings.EqualFold(filepath.Clean(owner.Runtime), node) {
+				t.Fatal("invalid session ownership")
+			}
+			return owner.InstanceID
+		}
+		identity := readIdentity()
+		value := invoke("@g7-launcher", "tools-call", "echo", "{\"text\":\"after launcher exit\"}", "--json")
+		check(value)
+		if !strings.Contains(value.stdout, "after launcher exit") {
+			t.Fatal("persistent tool result missing")
+		}
+		check(invoke("@g7-launcher", "restart", "--json"))
+		if readIdentity() == identity {
+			t.Fatal("restart reused the old instance identity")
+		}
+		check(invoke("@g7-launcher", "close", "--json"))
+		content, err = os.ReadFile(filepath.Join(directory, "state", "sessions.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(content), "@g7-launcher") {
+			t.Fatal("closed session retained")
+		}
+	})
 }

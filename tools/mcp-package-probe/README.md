@@ -16,8 +16,9 @@ The trusted digest must come from the separately reviewed builder output, not an
 untrusted replacement manifest. `verify`, `probe`, `fixture` and `bridge` roles
 exist only for qualification. Foreground mode contains representative child
 lifetimes; persistent mode allows the named MCP bridge to outlive its creating
-command. Full lifecycle hardening and production manifest authentication remain
-later goals.
+command. G7 adds MCP-owned native lifecycle supervision and requires the private
+session host in the verified inventory; missing or altered host bytes are rejected.
+Production manifest authentication and public installation remain G8/G9 work.
 
 Runtime construction, fixture and complete status are owned by
 `mcp/scripts/packaging` and `mcp/docs/G2_PACKAGING.md`. G2 passed all six native
@@ -28,3 +29,11 @@ It compares direct private-Node execution with Go dispatch for help, unknown
 future commands, query/Unicode/metacharacter argv and piped JSON validation,
 including exact stdout, stderr and exit status. This does not install the G9
 public namespace. No MCP parsing logic belongs in the Go harness.
+
+G7 extends that test with a real packaged stdio session: managed connect exits,
+later commands reuse the bridge, restart changes the instance identity, and close
+removes the session. It checks the recorded component/runtime paths against the
+verified payload. Native ACL, process-death, IPC, idle and proxy tests are owned
+by MCP and run in its six-target qualification workflow. See
+`mcp/docs/SESSIONS.md` and `mcp/docs/G7_VALIDATION.md` for the lifecycle contract
+and the required installer retention integration.

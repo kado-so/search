@@ -29,7 +29,11 @@ func testPayload(t *testing.T) (string, manifest) {
 		node += ".exe"
 	}
 	m := manifest{Schema: 1, Purpose: "g2-qualification-only", Target: platform + "-" + arch, Runtime: node, Entries: map[string]string{"cli": "app/dist/cli/index.js", "bridge": "app/dist/bridge/index.js", "probe": "app/qualification/probe.mjs", "fixture": "app/qualification/fixture.mjs"}}
-	paths := []string{node}
+	host := "app/dist/native/kado-mcp-host"
+	if runtime.GOOS == "windows" {
+		host += ".exe"
+	}
+	paths := []string{node, host}
 	for _, path := range m.Entries {
 		paths = append(paths, path)
 	}
@@ -74,10 +78,16 @@ func TestVerifiedPayloadRejectsMutation(t *testing.T) {
 	}
 }
 func TestRejectManifestAndInventoryAttacks(t *testing.T) {
-	for _, name := range []string{"traversal", "case-collision", "extra-role", "missing", "extra-file", "wrong-target", "untrusted-manifest"} {
+	for _, name := range []string{"traversal", "case-collision", "extra-role", "missing", "extra-file", "wrong-target", "untrusted-manifest", "missing-session-host", "tampered-session-host"} {
 		t.Run(name, func(t *testing.T) {
 			root, m := testPayload(t)
 			switch name {
+			case "missing-session-host":
+				m.Files = append(m.Files[:1], m.Files[2:]...)
+			case "tampered-session-host":
+				if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(m.Files[1].Path)), []byte("changed host"), 0600); err != nil {
+					t.Fatal(err)
+				}
 			case "traversal":
 				m.Files[0].Path = "../escape"
 			case "case-collision":

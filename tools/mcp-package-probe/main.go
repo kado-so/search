@@ -125,7 +125,11 @@ func verify(root, digest string) (manifest, error) {
 			directories[filepath.ToSlash(d)] = true
 		}
 	}
-	for _, path := range append([]string{m.Runtime}, m.Entries["cli"], m.Entries["bridge"], m.Entries["probe"], m.Entries["fixture"]) {
+	host := "app/dist/native/kado-mcp-host"
+	if runtime.GOOS == "windows" {
+		host += ".exe"
+	}
+	for _, path := range append([]string{m.Runtime, host}, m.Entries["cli"], m.Entries["bridge"], m.Entries["probe"], m.Entries["fixture"]) {
 		if _, ok := wanted[path]; !ok {
 			return m, errors.New("missing entrypoint")
 		}
