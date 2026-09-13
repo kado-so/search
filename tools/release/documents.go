@@ -40,17 +40,14 @@ After installation:
     kado skill status
 
 Use kado update for a signed update after the current installer has established
-the kado and kado-a2a pair. Later verified releases activate only for a new
+the complete Kado, A2A and MCP bundle. Later verified releases activate only for a new
 CLI start; a running command keeps its selected version.
 Downgrades are rejected unless --allow-downgrade is explicit. Use the supplied
 uninstall script with --yes; credentials are preserved unless
 --purge-credentials is also explicit.
 
-Installations from before Kado included the A2A sidecar require one manual
-reinstall. Close every Kado process, run the current signed uninstall script
-with --yes and without --purge-credentials, then run the current signed
-installer. This preserves configuration, identities, and credentials while
-installing the authenticated executable pair.
+The complete bundle includes its private Node runtime; no separate Node or MCP
+installation is needed. All user-facing commands use kado mcp.
 `, source.Version, source.Repository, source.InstallURL, keyID)
 }
 
@@ -61,7 +58,6 @@ set -eu
 base_url=%q
 install_dir="${KADO_INSTALL_DIR:-${HOME}/.local/bin}"
 destination="$install_dir/kado"
-sidecar_destination="$install_dir/kado-a2a"
 
 case "$(uname -s)" in
   Darwin) target_os=darwin ;;
@@ -105,54 +101,32 @@ if test -e "$destination" || test -L "$destination"; then
     exit 1
   }
   if ! "$destination" update; then
-    printf 'this Kado installation may require a one-time reinstall; run the current uninstall script with --yes (without --purge-credentials), then rerun this installer\n' >&2
+    printf 'Kado update failed; repair the signed installation before retrying\n' >&2
     exit 1
   fi
 else
   metadata_url="$base_url/releases/stable/release-metadata.json"
   download "$metadata_url" "$temporary/release-metadata.json"
   download "$metadata_url.sig" "$temporary/release-metadata.json.sig"
-  version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$temporary/release-metadata.json")"
+  # Match the canonical root fields, never a nested component version.
+  version="$(sed -n 's/^{"schema_version":"kado.release.v3","product":"kado","version":"\([^"]*\)".*/\1/p' "$temporary/release-metadata.json")"
   case "$version" in
     ''|*[!0-9A-Za-z.+-]*) printf 'release metadata version is invalid\n' >&2; exit 1 ;;
   esac
   archive="kado_${version}_${target_os}_${target_arch}.tar.gz"
   download "$base_url/releases/$version/$archive" "$temporary/$archive"
-  listing="$(tar -tzf "$temporary/$archive")"
-  test "$listing" = "kado
-kado-a2a
-LICENSE
-LICENSE-A2A-CLI
-INSTALL-CLI.md" || {
-    printf 'archive contains unexpected paths\n' >&2
-    exit 1
-  }
-  tar -xzf "$temporary/$archive" -C "$temporary"
-  test -f "$temporary/kado" && test ! -L "$temporary/kado"
-  test -f "$temporary/kado-a2a" && test ! -L "$temporary/kado-a2a"
-  test "$(executable_mode "$temporary/kado")" = "755"
-	test "$(executable_mode "$temporary/kado-a2a")" = "755"
-	identity="$("$temporary/kado" version --json)"
-	printf '%%s\n' "$identity" | grep -F '"schema_version":"kado.version.v1"' >/dev/null
-	printf '%%s\n' "$identity" | grep -F "\"kado\":{\"version\":\"${version}\"" >/dev/null
-	printf '%%s\n' "$identity" | grep -F "\"target\":\"${target_os}/${target_arch}\"" >/dev/null
-  "$temporary/kado" release verify --directory "$temporary" >/dev/null
-
+  # Bootstrap executable comes from the same canonical HTTPS release. It
+  # verifies itself and authenticates/extracts the archive in Go before install.
+  download "$base_url/releases/$version/kado_${version}_${target_os}_${target_arch}" "$temporary/kado"
+  chmod 755 "$temporary/kado"
+  identity="$("$temporary/kado" version --json)"
+  printf '%%s\n' "$identity" | grep -F '"schema_version":"kado.version.v2"' >/dev/null
   mkdir -p "$install_dir"
-  sidecar_candidate="$(mktemp "$install_dir/.kado-a2a-candidate.XXXXXX")"
-  cp "$temporary/kado-a2a" "$sidecar_candidate"
-  chmod 755 "$sidecar_candidate"
-  candidate="$(mktemp "$install_dir/.kado-candidate.XXXXXX")"
-  cp "$temporary/kado" "$candidate"
-  chmod 755 "$candidate"
-  mv "$sidecar_candidate" "$sidecar_destination"
-  mv "$candidate" "$destination"
-fi
+  install_dir="$(CDPATH= cd -- "$install_dir" && pwd -P)"
+  destination="$install_dir/kado"
+  "$temporary/kado" __install-bundle --directory "$temporary" --target "$destination"
 
-receipt_candidate="$(mktemp "$install_dir/.kado-install.XXXXXX")"
-printf '{"schema_version":1,"channel":"direct"}\n' >"$receipt_candidate"
-chmod 600 "$receipt_candidate"
-mv "$receipt_candidate" "$install_dir/kado.install.json"
+fi
 
 case ":$PATH:" in
   *":$install_dir:"*) ;;
@@ -204,6 +178,7 @@ func uninstallUnixScript() string {
 	return `#!/bin/sh
 set -eu
 
+# Credentials and profiles are preserved by the authenticated CLI uninstaller.
 destination="${KADO_INSTALL_PATH:-${HOME}/.local/bin/kado}"
 confirm=no
 purge=no
@@ -223,16 +198,9 @@ test -f "$destination" && test ! -L "$destination" || {
   exit 1
 }
 if test "$purge" = yes; then
-  "$destination" auth revoke
-fi
-rm -f "$destination"
-rm -f "$(dirname "$destination")/kado-a2a"
-rm -f "$(dirname "$destination")/kado.install.json"
-rm -rf "$destination.d"
-if test "$purge" = yes; then
-  printf 'removed kado executable after explicit credential revocation\n'
+  exec "$destination" uninstall --yes --purge-credentials
 else
-  printf 'removed kado executable; credentials were preserved\n'
+  exec "$destination" uninstall --yes
 fi
 `
 }
@@ -244,8 +212,8 @@ func installPowerShellScript(source releaseIdentity, keyID string) string {
 )
 $ErrorActionPreference = "Stop"
 $BaseUrl = %q
+$InstallDirectory = [IO.Path]::GetFullPath($InstallDirectory)
 $Destination = Join-Path $InstallDirectory "kado.exe"
-$SidecarDestination = Join-Path $InstallDirectory "kado-a2a.exe"
 $Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
   "X64" { "amd64" }
   "Arm64" { "arm64" }
@@ -260,71 +228,27 @@ try {
     if ($Existing.PSIsContainer -or $Existing.LinkType) {
       throw "existing Kado destination is not a regular executable"
     }
-    $KnownHelpers = @{}
-    Get-ChildItem -LiteralPath $InstallDirectory -Filter ".kado-update-helper-*.exe" -ErrorAction SilentlyContinue |
-      ForEach-Object { $KnownHelpers[$_.FullName] = $true }
-    $UpdateOutput = @(& $Destination update)
-    $UpdateExitCode = $LASTEXITCODE
-    $UpdateOutput | Write-Output
-    if ($UpdateExitCode -ne 0) {
-      throw "This Kado installation may require a one-time reinstall. Run the current uninstall script with -Yes (without -PurgeCredentials), then rerun this installer."
-    }
-    $UpdateFinished = $false
-    for ($Attempt = 0; $Attempt -lt 300; $Attempt++) {
-      $PendingHelpers = @(Get-ChildItem -LiteralPath $InstallDirectory -Filter ".kado-update-helper-*.exe" -ErrorAction SilentlyContinue |
-        Where-Object { -not $KnownHelpers.ContainsKey($_.FullName) })
-      $PendingHelpers | Remove-Item -Force -ErrorAction SilentlyContinue
-      $PendingHelpers = @($PendingHelpers | Where-Object { Test-Path -LiteralPath $_.FullName })
-      if ($PendingHelpers.Count -eq 0) {
-        $UpdateFinished = $true
-        break
-      }
-      Start-Sleep -Milliseconds 200
-    }
-    if (-not $UpdateFinished) {
-      throw "Kado update did not finish; run 'kado update' to retry"
-    }
+    & $Destination update
+    if ($LASTEXITCODE -ne 0) { throw "Kado update failed. Repair the signed installation before retrying." }
   } else {
     $MetadataUrl = "$BaseUrl/releases/stable/release-metadata.json"
     Invoke-WebRequest -UseBasicParsing -Uri $MetadataUrl -OutFile (Join-Path $Temporary "release-metadata.json")
     Invoke-WebRequest -UseBasicParsing -Uri "$MetadataUrl.sig" -OutFile (Join-Path $Temporary "release-metadata.json.sig")
     $Metadata = Get-Content -Raw -LiteralPath (Join-Path $Temporary "release-metadata.json") | ConvertFrom-Json
     $Version = [string]$Metadata.version
-    if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') { throw "release metadata version is invalid" }
+    if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') { throw "release metadata version is invalid" }
     $Archive = "kado_${Version}_windows_${Arch}.zip"
     Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/releases/$Version/$Archive" -OutFile (Join-Path $Temporary $Archive)
-    Expand-Archive -LiteralPath (Join-Path $Temporary $Archive) -DestinationPath $Temporary
     $CandidateBinary = Join-Path $Temporary "kado.exe"
-	$CandidateSidecar = Join-Path $Temporary "kado-a2a.exe"
-	$SidecarInfo = Get-Item -LiteralPath $CandidateSidecar -Force
-	if ($SidecarInfo.PSIsContainer -or $SidecarInfo.LinkType) {
-	  throw "candidate A2A sidecar is invalid"
-	}
-	$Identity = & $CandidateBinary version --json | ConvertFrom-Json
-	if ($Identity.schema_version -ne "kado.version.v1" -or
-	    $Identity.kado.version -ne $Version -or
-	    $Identity.kado.target -ne "windows/$Arch" -or
-	    $Identity.components.a2a_cli.target -ne "windows/$Arch") {
+    Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/releases/$Version/kado_${Version}_windows_${Arch}.exe" -OutFile $CandidateBinary
+    $Identity = & $CandidateBinary version --json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $Identity.schema_version -ne "kado.version.v2" -or
+        $Identity.kado.version -ne $Version -or $Identity.kado.target -ne "windows/$Arch") {
       throw "candidate executable identity is invalid"
     }
-    & $CandidateBinary release verify --directory $Temporary | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "release bundle verification failed" }
-
-	$SidecarInstallCandidate = Join-Path $InstallDirectory (".kado-a2a-candidate-" + [guid]::NewGuid().ToString("N") + ".exe")
-	Copy-Item -LiteralPath $CandidateSidecar -Destination $SidecarInstallCandidate
-    $InstallCandidate = Join-Path $InstallDirectory (".kado-candidate-" + [guid]::NewGuid().ToString("N") + ".exe")
-    Copy-Item -LiteralPath $CandidateBinary -Destination $InstallCandidate
-	Move-Item -LiteralPath $SidecarInstallCandidate -Destination $SidecarDestination -Force
-    Move-Item -LiteralPath $InstallCandidate -Destination $Destination
+    & $CandidateBinary __install-bundle --directory $Temporary --target $Destination
+    if ($LASTEXITCODE -ne 0) { throw "signed complete bundle installation failed" }
   }
-
-  $ReceiptCandidate = Join-Path $InstallDirectory (".kado-install-" + [guid]::NewGuid().ToString("N") + ".json")
-  [System.IO.File]::WriteAllText(
-    $ReceiptCandidate,
-    '{"schema_version":1,"channel":"direct"}' + [Environment]::NewLine,
-    [System.Text.UTF8Encoding]::new($false)
-  )
-  Move-Item -LiteralPath $ReceiptCandidate -Destination (Join-Path $InstallDirectory "kado.install.json") -Force
 
   $SkipPath = $NoModifyPath -or $env:KADO_NO_MODIFY_PATH -eq "1"
   if (-not $SkipPath) {
@@ -360,27 +284,38 @@ try {
 }
 
 func uninstallPowerShellScript() string {
-	return `param(
+	return `# Credentials are preserved unless -PurgeCredentials explicitly revokes Kado credentials.
+param(
   [switch]$Yes,
   [switch]$PurgeCredentials,
   [string]$Destination = "$env:LOCALAPPDATA\Kado\kado.exe"
 )
 $ErrorActionPreference = "Stop"
 if (-not $Yes) { throw "refusing to uninstall without -Yes" }
+$Destination = [IO.Path]::GetFullPath($Destination)
 if (-not (Test-Path -LiteralPath $Destination -PathType Leaf)) { throw "kado executable is not installed" }
 if ($PurgeCredentials) {
-  & $Destination auth revoke
-  if ($LASTEXITCODE -ne 0) { throw "credential revocation failed; executable was retained" }
-}
-Remove-Item -LiteralPath $Destination -Force
-$InstallDirectory = Split-Path -Parent $Destination
-Remove-Item -LiteralPath (Join-Path $InstallDirectory "kado-a2a.exe") -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path $InstallDirectory "kado.install.json") -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath ($Destination + ".d") -Recurse -Force -ErrorAction SilentlyContinue
-if ($PurgeCredentials) {
-  Write-Output "removed kado executable after explicit credential revocation"
+  $Output = @(& $Destination uninstall --yes --purge-credentials)
 } else {
-  Write-Output "removed kado executable; credentials were preserved"
+  $Output = @(& $Destination uninstall --yes)
+}
+if ($LASTEXITCODE -ne 0) { throw "Kado uninstall failed; inspect the reported error" }
+$Pending = @($Output | Where-Object { $_ -like 'uninstall pending; result: *' })
+if ($Pending.Count -gt 0) {
+  $ResultPath = $Pending[-1].Substring('uninstall pending; result: '.Length)
+  $ExpectedParent = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Destination))
+  if ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ResultPath)) -ne $ExpectedParent -or
+      [IO.Path]::GetFileName($ResultPath) -notmatch '^\.kado-uninstall-helper-[0-9]+\.gen\.json$') { throw "invalid uninstall result location" }
+  $Deadline = [DateTime]::UtcNow.AddMinutes(3)
+  while (-not (Test-Path -LiteralPath $ResultPath)) {
+    if ([DateTime]::UtcNow -ge $Deadline) { throw "Kado uninstall is still pending; inspect $ResultPath" }
+    Start-Sleep -Milliseconds 200
+  }
+  $Result = Get-Content -Raw -LiteralPath $ResultPath | ConvertFrom-Json
+  if ($Result.schema -ne 'kado.uninstall.v1' -or $Result.status -ne 'success') { throw "Kado removal failed or is busy" }
+  Write-Output $Result.message
+} else {
+  $Output | Write-Output
 }
 `
 }

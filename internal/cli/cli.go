@@ -47,6 +47,7 @@ Usage:
 Commands:
   search <query>   Run an authenticated Search
   a2a              A2A CLI
+  mcp              MCP tools, resources, prompts and sessions
   auth create      Create/authenticate an identity
   auth link        Link agents
   auth status      Show identity state
@@ -209,9 +210,11 @@ func runWithDependencies(
 }
 
 func maybeScheduleMaintenance(args []string, stderr io.Writer, info buildinfo.Info) {
+	_, commandArgs, _ := parseGlobalOptions(args)
 	if info.Version == "" || info.Version == "dev" ||
 		info.ReleasePublicKey == "" || info.ReleaseMetadataURL == "" ||
 		os.Getenv("KADO_MAINTENANCE_CHILD") != "" ||
+		len(commandArgs) > 0 && commandArgs[0] == "uninstall" ||
 		shellcompletion.Matches(args) ||
 		len(args) >= 3 && args[0] == "skill" && args[1] == "update" &&
 			args[2] == "--background" {
@@ -781,6 +784,11 @@ func runUninstall(
 		return releaseDiagnostic(err)
 	}
 	if err := releases.Uninstall(); err != nil {
+		var pending *releaseclient.PendingUninstall
+		if errors.As(err, &pending) {
+			_, _ = fmt.Fprintln(stdout, pending.Error())
+			return nil
+		}
 		return releaseDiagnostic(err)
 	}
 	if purgeCredentials {
@@ -850,6 +858,9 @@ func releaseDiagnostic(cause error) error {
 	code := "release_failed"
 	message := "could not verify or install the Kado release"
 	switch {
+	case errors.Is(cause, launcher.ErrBusy):
+		code = "release_busy"
+		message = "MCP sessions or installation files are busy; credentials were preserved"
 	case errors.Is(cause, releaseclient.ErrDowngrade):
 		code = "release_downgrade_blocked"
 		message = "a downgrade requires --allow-downgrade"
@@ -1615,6 +1626,9 @@ func (commands *defaultReleaseCommands) Check(
 }
 
 func (commands *defaultReleaseCommands) Uninstall() error {
+	if commands.info.MCP != nil {
+		return releaseclient.StartCompleteUninstall(commands.executable, commands.info)
+	}
 	return releaseclient.Uninstall(commands.executable)
 }
 

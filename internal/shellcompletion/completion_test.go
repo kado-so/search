@@ -17,7 +17,7 @@ func TestRootCompletionMatchesTheKadoCommandSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"a2a", "agent", "auth", "completion", "help", "release", "search",
+		"a2a", "agent", "auth", "completion", "help", "mcp", "release", "search",
 		"skill", "uninstall", "update", "version",
 	}
 	if got := completionValues(stdout.String()); !reflect.DeepEqual(got, want) {

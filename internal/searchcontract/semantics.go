@@ -2,7 +2,10 @@ package searchcontract
 
 import (
 	"encoding/json"
+	"net/netip"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,6 +25,7 @@ var semanticIssueCodes = []string{
 	"ITEM_POSITION_DUPLICATE",
 	"ITEM_POSITION_NOT_INCREASING",
 	"USE_AGENT_CARD_INVALID",
+	"USE_MCP_ENDPOINT_INVALID",
 	"SEARCH_STARTED_BEFORE_CREATED",
 	"SEARCH_COMPLETED_BEFORE_STARTED",
 	"SEARCH_COMPLETED_BEFORE_CREATED",
@@ -182,7 +186,29 @@ func validateSemantics(document Document, identity contractIdentity) error {
 }
 
 func validUse(value Use) bool {
-	if value.Protocol != "a2a" {
+	if value.Protocol == "mcp" {
+		if value.AgentCard != "" || (value.Transport != "streamable-http" && value.Transport != "sse") || len(value.Endpoint) > 2048 || !strings.HasPrefix(value.Endpoint, "https://") || strings.ContainsAny(value.Endpoint, "\\ \t\r\n?#") {
+			return false
+		}
+		parsed, err := url.Parse(value.Endpoint)
+		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
+			return false
+		}
+		// Match the app URL parser's admission of ports and bracketed IPv6.
+		if port := parsed.Port(); port != "" {
+			if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+				return false
+			}
+		}
+		if strings.HasPrefix(parsed.Host, "[") {
+			address, err := netip.ParseAddr(parsed.Hostname())
+			if err != nil || !address.Is6() || address.Zone() != "" {
+				return false
+			}
+		}
+		return true
+	}
+	if value.Protocol != "a2a" || value.Endpoint != "" || value.Transport != "" {
 		return false
 	}
 	parsed, err := url.Parse(value.AgentCard)

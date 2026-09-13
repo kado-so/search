@@ -72,20 +72,41 @@ func VerifyLocalBundle(
 		info.A2A.ArtifactSize != target.Sidecar.Size {
 		return Metadata{}, Target{}, ErrCandidate
 	}
-	archive, err := readAndVerifyLocal(absolute, target.Archive, MaxArchiveSize)
+	limit := int64(MaxArchiveSize)
+	if metadata.SchemaVersion == CompleteSchemaVersion {
+		limit = 384 << 20
+	}
+	archive, err := readAndVerifyLocal(absolute, target.Archive, limit)
 	if err != nil {
 		return Metadata{}, Target{}, err
 	}
-	bundle, err := VerifyTargetBundle(target, archive)
-	if err != nil {
-		return Metadata{}, Target{}, err
+	var expected []byte
+	if metadata.SchemaVersion == CompleteSchemaVersion {
+		key, err := ParsePublicKey(info.ReleasePublicKey)
+		if err != nil {
+			return Metadata{}, Target{}, err
+		}
+		bundle, err := VerifyCompleteTarget(target, archive, key)
+		if err != nil {
+			return Metadata{}, Target{}, err
+		}
+		if info.MCP == nil || *info.MCP != bundle.Manifest.MCP || bundle.Manifest.Version != metadata.Version {
+			return Metadata{}, Target{}, ErrCandidate
+		}
+		expected = bundle.Files[bundle.Manifest.Entries["kado"]]
+	} else {
+		bundle, err := VerifyTargetBundle(target, archive)
+		if err != nil {
+			return Metadata{}, Target{}, err
+		}
+		expected = bundle.Kado
 	}
 	executable, err := os.Executable()
 	if err != nil {
 		return Metadata{}, Target{}, ErrCandidate
 	}
 	running, err := os.ReadFile(executable)
-	if err != nil || !bytes.Equal(running, bundle.Kado) {
+	if err != nil || !bytes.Equal(running, expected) {
 		return Metadata{}, Target{}, ErrCandidate
 	}
 	return metadata, target, nil

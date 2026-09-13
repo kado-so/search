@@ -19,8 +19,8 @@ import (
 )
 
 var pinnedManifestSHA256 = map[string]string{
-	"v1": "cb4344c5058880e95b41d6c6412b209fa8d16417e04d6eb5119d3771a3d9def9",
-	"v2": "81a52f900de7cc3ffd6b42fa8b1742163fa0e63b6b40d0c7a94eada408a125f0",
+	"v1": "c1ce9b271cbd8719c7a297b664c1c990a137a203953de8210eee7d24a0e4eeb2",
+	"v2": "5c21171cf31a3a94294784c163e588177c4838a745f0bcb5917f2e7a9735bac0",
 }
 
 type manifest struct {

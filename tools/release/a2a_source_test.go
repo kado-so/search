@@ -111,6 +111,25 @@ func TestPrepareA2ASourceAcceptsSnapshotAndTaggedLocks(t *testing.T) {
 	})
 }
 
+func TestA2AGitEnvironmentCanReadFixture(t *testing.T) {
+	fixture := newA2ASourceFixture(t)
+	command := exec.Command("git", "remote", "get-url", "origin")
+	command.Dir = fixture.source
+	command.Env = a2aGitEnvironment()
+	output, err := command.Output()
+	if err != nil {
+		// This repository and its public origin are created by the test. Surface
+		// Git's fixture diagnostic without exposing real release-command output.
+		if exit, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("isolated fixture Git failed: %v\n%s", err, exit.Stderr)
+		}
+		t.Fatal(err)
+	}
+	if normalizeA2ARepository(string(output)) != fixture.lock.Repository {
+		t.Fatalf("isolated fixture origin = %q", output)
+	}
+}
+
 func TestPrepareA2ASourceRejectsSnapshotAfterReleaseTagAppears(t *testing.T) {
 	fixture := newA2ASourceFixture(t)
 	runTestCommand(t, fixture.source, "git", "tag", "v1.2.3")

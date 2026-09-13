@@ -211,12 +211,17 @@ func renderHuman(pages []validatedPage, width int) ([]byte, error) {
 			)
 			writeWrapped(&output, "   ", item.Summary, width)
 			if item.Use != nil {
-				writeWrapped(
-					&output,
-					"   Use ("+item.Use.Protocol+"): ",
-					item.Use.AgentCard,
-					width,
-				)
+				if item.Use.Protocol == "mcp" {
+					writeWrapped(&output, "   Use (mcp): ", item.Use.Endpoint, width)
+					writeWrapped(&output, "   Transport: ", item.Use.Transport, width)
+				} else {
+					writeWrapped(
+						&output,
+						"   Use ("+item.Use.Protocol+"): ",
+						item.Use.AgentCard,
+						width,
+					)
+				}
 			}
 			preview := compactPreview(item.Data, maximumDataPreview)
 			writeWrapped(&output, "   Data: ", preview, width)

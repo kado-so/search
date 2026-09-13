@@ -19,7 +19,7 @@ func TestGeneralSkillOwnsNonSearchCLIWorkflow(t *testing.T) {
 	if strings.Contains(content, "kado search") {
 		t.Fatal("general skill contains search instructions")
 	}
-	if Version() != "0.1.0" {
+	if Version() != "0.2.0" {
 		t.Fatalf("Version() = %q", Version())
 	}
 }

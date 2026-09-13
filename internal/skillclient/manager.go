@@ -47,11 +47,12 @@ type InstallResult struct {
 }
 
 type UpdateResult struct {
-	Version  string
-	Updated  []Installation
-	Current  []Installation
-	Removed  []Installation
-	Failures map[string]string
+	UsedFallback bool
+	Version      string
+	Updated      []Installation
+	Current      []Installation
+	Removed      []Installation
+	Failures     map[string]string
 }
 
 type Status struct {
@@ -86,7 +87,7 @@ func (manager Manager) Install(
 		registry.Targets = upsertTarget(registry.Targets, Target{Agent: agent, Scope: "user"})
 	}
 	sync, err := manager.sync(ctx, registry, true)
-	return InstallResult{Version: embeddedVersion(SkillName), Installed: sync.Updated, Removed: sync.Removed, Failures: sync.Failures, OtherAgents: others, UsedFallback: manager.PublicKey == ""}, err
+	return InstallResult{Version: embeddedVersion(SkillName), Installed: sync.Updated, Removed: sync.Removed, Failures: sync.Failures, OtherAgents: others, UsedFallback: sync.UsedFallback}, err
 }
 
 func (manager Manager) Update(ctx context.Context) (UpdateResult, error) {
@@ -135,6 +136,7 @@ func (manager Manager) sync(ctx context.Context, registry registry, allowFallbac
 				result.Failures[destination] = publicFailure(resolutionErr)
 				continue
 			}
+			result.UsedFallback = result.UsedFallback || release.Metadata.Archive.URL == ""
 			existing, exists := installationAt(registry.Installations, destination)
 			if staleCatalog && exists && verifyManagedInstallation(existing) == nil {
 				delete(result.Failures, destination)
@@ -339,9 +341,17 @@ func (manager Manager) resolveRelease(ctx context.Context, name string, variant 
 	if !hasFallback {
 		fallback, hasFallback = embedded[name+":default"]
 	}
+	// Development builds may use their own embedded guidance. Published builds
+	// must satisfy the floor even when offline or recovering from fetch failure.
+	useFallback := func() (EmbeddedRelease, error) {
+		if manager.CurrentVersion != "dev" && !releaseclient.VersionAtLeast(manager.CurrentVersion, fallback.Metadata.MinimumCLIVersion) {
+			return EmbeddedRelease{}, ErrUnsupportedCLI
+		}
+		return fallback, nil
+	}
 	if manager.PublicKey == "" || variant.MetadataURL == "" {
 		if hasFallback {
-			return fallback, nil
+			return useFallback()
 		}
 		return EmbeddedRelease{}, ErrInvalidRelease
 	}
@@ -352,32 +362,32 @@ func (manager Manager) resolveRelease(ctx context.Context, name string, variant 
 	encoded, err := fetcher.Fetch(ctx, variant.MetadataURL, MaxMetadataSize)
 	if err != nil {
 		if allowFallback && hasFallback {
-			return fallback, nil
+			return useFallback()
 		}
 		return EmbeddedRelease{}, err
 	}
 	signature, err := fetcher.Fetch(ctx, variant.MetadataURL+".sig", ed25519SignatureSize)
 	if err != nil {
 		if allowFallback && hasFallback {
-			return fallback, nil
+			return useFallback()
 		}
 		return EmbeddedRelease{}, err
 	}
 	metadata, err := VerifyMetadata(encoded, signature, manager.PublicKey, variant.MetadataURL, name, variant.ID)
 	if err != nil {
 		if allowFallback && hasFallback {
-			return fallback, nil
+			return useFallback()
 		}
 		return EmbeddedRelease{}, err
 	}
-	if lessVersion(manager.CurrentVersion, metadata.MinimumCLIVersion) {
+	if !releaseclient.VersionAtLeast(manager.CurrentVersion, metadata.MinimumCLIVersion) {
 		return EmbeddedRelease{}, ErrUnsupportedCLI
 	}
 	archive, err := fetcher.Fetch(ctx, metadata.Archive.URL, MaxArchiveSize)
 	if err != nil || int64(len(archive)) != metadata.Archive.Size ||
 		releaseclient.Digest(archive) != metadata.Archive.SHA256 {
 		if allowFallback && hasFallback {
-			return fallback, nil
+			return useFallback()
 		}
 		return EmbeddedRelease{}, ErrInvalidRelease
 	}
@@ -719,6 +729,8 @@ func publicFailure(err error) string {
 		return "locally_modified"
 	case errors.Is(err, ErrExternallyManaged):
 		return "externally_managed"
+	case errors.Is(err, ErrUnsupportedCLI):
+		return "unsupported_cli"
 	default:
 		return "update_failed"
 	}

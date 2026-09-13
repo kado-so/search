@@ -4,7 +4,7 @@ description: Use this for extra info on how to use the Kado CLI - account linkin
 license: "MIT"
 metadata:
   author: "Kado"
-  version: "0.1.0"
+  version: "0.2.0"
   homepage: "https://kado.so"
 ---
 
@@ -40,3 +40,23 @@ operations. Do not reconstruct Kado credentials, authentication requests,
 release URLs, or lifecycle operations manually.
 
 Keep search work in the separate `kado-search` skill.
+
+## MCP and local skills
+
+Use `kado-mcp` for a known MCP endpoint or named session, and `kado-a2a` for an
+A2A Agent Card. The public MCP namespace is `kado mcp`; its runtime is bundled
+with Kado. MCP provider login (`kado mcp login`) and profiles are separate from
+Kado account linking (`kado auth link`). Never reuse Kado account credentials
+as provider credentials.
+
+`kado skill install` installs all four bundled skills for detected agents and
+the portable location. Inspect ownership with `kado skill status`, refresh with
+`kado skill update`, and remove owned guidance with `kado skill uninstall`.
+These commands manage local guidance, not remote MCP server skills or consent.
+Locally modified or externally managed copies are preserved and reported.
+
+MCP-aware guidance requires Kado 0.2.0 or newer. Update a direct installation
+with `kado update`, or use the owning package manager when Kado identifies one.
+Then retry `kado skill update`. Incompatible skill releases are refused without
+overwriting existing copies. Offline installation can use compatible bundled
+copies; a failed signed refresh leaves installed guidance in place.

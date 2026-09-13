@@ -399,18 +399,22 @@ func solveAdmission(
 	challenge admissionChallenge,
 	limits Limits,
 ) (solvedAdmission, error) {
+	return solveAdmissionWithClock(ctx, binding, challenge, limits, time.Now)
+}
+
+func solveAdmissionWithClock(ctx context.Context, binding []byte, challenge admissionChallenge, limits Limits, now func() time.Time) (solvedAdmission, error) {
 	if err := validateAdmissionParameters(challenge, limits); err != nil {
 		return solvedAdmission{}, err
 	}
 	salt, _ := rawBase64URL.DecodeString(challenge.Salt)
 	prefix, _ := rawBase64URL.DecodeString(challenge.KeyPrefix)
 	bindingDigest := sha256.Sum256(binding)
-	started := time.Now()
+	started := now()
 	for counter := uint32(0); counter < limits.MaxArgonAttempts; counter++ {
 		if err := ctx.Err(); err != nil {
 			return solvedAdmission{}, newProtocolError(ErrChallengeLimits, err)
 		}
-		if time.Since(started) >= limits.MaxArgonElapsed {
+		if now().Sub(started) >= limits.MaxArgonElapsed {
 			return solvedAdmission{}, newProtocolError(ErrChallengeLimits, nil)
 		}
 		derivedKey := deriveAdmissionKey(
@@ -419,7 +423,7 @@ func solveAdmission(
 			challenge,
 			counter,
 		)
-		if time.Since(started) > limits.MaxArgonElapsed {
+		if now().Sub(started) > limits.MaxArgonElapsed {
 			clear(derivedKey)
 			return solvedAdmission{}, newProtocolError(ErrChallengeLimits, nil)
 		}

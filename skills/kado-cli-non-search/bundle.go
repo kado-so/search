@@ -14,7 +14,7 @@ import (
 //go:embed SKILL.md agents/*
 var files embed.FS
 
-const MinimumCLIVersion = "0.1.12"
+const MinimumCLIVersion = "0.2.0"
 
 func Bundle() (map[string][]byte, error) {
 	output := make(map[string][]byte)

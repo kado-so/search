@@ -3,10 +3,11 @@ package skillclient
 import (
 	a2a "github.com/kado-so/search/skills/kado-a2a"
 	general "github.com/kado-so/search/skills/kado-cli-non-search"
+	mcp "github.com/kado-so/search/skills/kado-mcp"
 	search "github.com/kado-so/search/skills/kado-search"
 )
 
-const EmbeddedCatalogRevision uint64 = 4
+const EmbeddedCatalogRevision uint64 = 5
 
 type EmbeddedRelease struct {
 	Metadata Metadata
@@ -14,6 +15,10 @@ type EmbeddedRelease struct {
 }
 
 func EmbeddedCatalog() (Catalog, map[string]EmbeddedRelease, error) {
+	mcpFiles, err := mcp.Bundle()
+	if err != nil {
+		return Catalog{}, nil, err
+	}
 	a2aFiles, err := a2a.Bundle()
 	if err != nil {
 		return Catalog{}, nil, err
@@ -27,11 +32,13 @@ func EmbeddedCatalog() (Catalog, map[string]EmbeddedRelease, error) {
 		return Catalog{}, nil, err
 	}
 	releases := map[string]EmbeddedRelease{
+		"kado-mcp:default":            {Metadata: embeddedMetadata("kado-mcp", mcp.Version(), mcp.MinimumCLIVersion), Files: mcpFiles},
 		"kado-a2a:default":            {Metadata: embeddedMetadata("kado-a2a", a2a.Version(), a2a.MinimumCLIVersion), Files: a2aFiles},
 		"kado-cli-non-search:default": {Metadata: embeddedMetadata("kado-cli-non-search", general.Version(), general.MinimumCLIVersion), Files: generalFiles},
 		"kado-search:default":         {Metadata: embeddedMetadata("kado-search", search.Version(), search.MinimumCLIVersion), Files: searchFiles},
 	}
 	catalog := Catalog{SchemaVersion: CatalogSchemaVersion, Revision: EmbeddedCatalogRevision, Skills: []CatalogSkill{
+		{Name: "kado-mcp", State: "active", Variants: []CatalogVariant{{ID: "default", Agents: []string{"*"}}}},
 		{Name: "kado-a2a", State: "active", Variants: []CatalogVariant{{ID: "default", Agents: []string{"*"}}}},
 		{Name: "kado-cli-non-search", State: "active", Variants: []CatalogVariant{{ID: "default", Agents: []string{"*"}}}},
 		{Name: "kado-search", State: "active", Variants: []CatalogVariant{{ID: "default", Agents: []string{"*"}}}},

@@ -1,4 +1,4 @@
-# Install Kado Search
+# Install Kado
 
 Kado's primary installation path is designed for an agent to complete without
 Homebrew, npm, WinGet, or another package manager.
@@ -24,11 +24,10 @@ release descriptor an agent can use to:
 2. download the matching versioned Kado release from `kado.so`;
 3. verify the signed release metadata, archive checksum, and executable
    identity;
-4. install the Kado and `kado-a2a` executable pair in a user-writable
-   directory, or run their signed paired updater when a current direct
-   installation already exists;
-5. run `kado skill install` to install the general Kado CLI skill and the latest
-   compatible signed Search skill, with bundled copies as an offline fallback;
+4. install the complete signed bundle (Kado, A2A, MCP and its private runtime)
+   in a user-writable directory, or update an existing complete installation;
+5. run `kado skill install` to install all four compatible signed skills,
+   with bundled copies as an offline fallback;
 6. run idempotent `kado auth create` to create an identity or reuse an active
    existing credential; and
 7. run `kado auth status` to verify the configured identity.
@@ -42,22 +41,19 @@ Initial bootstrap uses operating-system facilities or the agent's own HTTPS
 download capability. After bootstrap, the Kado executable owns verification,
 skill installation, and direct-install updates.
 
-Direct installations use a stable Kado launcher and an adjacent `kado-a2a`
-sidecar beside a private `kado[.exe].d` directory of immutable executable-pair
-versions. An activation record authenticates both members, and a later CLI
-start observes either the previous complete pair or the new complete pair.
+Direct installations use a stable Kado launcher and a private `kado[.exe].d`
+directory of immutable complete versions. Signed manifests authenticate Kado,
+A2A, MCP, Node and the helper payload. Updates activate the whole bundle; a
+later CLI start sees one complete version. No system Node or npm is needed.
+Only the public `kado` launcher belongs on PATH.
 
-Pre-A2A direct installations cannot cross this bundle boundary with their old
-`kado update`. Close all Kado processes, run the current signed uninstall
-script with confirmation but without credential purge, and then run the current
-signed installer. This one-time reinstall preserves configuration, identities,
-and credentials.
+This MCP baseline assumes fresh installations at version 0.2.0 or newer; it
+does not introduce a migration from pre-MCP installations.
 
 The target user locations are:
 
-- macOS and Linux: `$HOME/.local/bin/kado` and `$HOME/.local/bin/kado-a2a`
-- Windows: `%LOCALAPPDATA%\Kado\kado.exe` and
-  `%LOCALAPPDATA%\Kado\kado-a2a.exe`
+- macOS and Linux: `$HOME/.local/bin/kado`
+- Windows: `%LOCALAPPDATA%\Kado\kado.exe`
 
 The installation flow must explain how to add that directory to `PATH` when it
 is not already present. It must remain non-interactive when the agent supplies
@@ -66,7 +62,7 @@ explicit destination and confirmation options.
 ## Bundled skills
 
 Each Kado CLI release embeds offline fallbacks for `kado-search`,
-`kado-cli-non-search`, and `kado-a2a`, and prefers the latest compatible signed
+`kado-cli-non-search`, `kado-a2a`, and `kado-mcp`, and prefers the latest compatible signed
 skills published by `kado.so`. The commands are:
 
 ```text
@@ -77,7 +73,7 @@ kado skill uninstall
 ```
 
 `install` defaults to `--all`: it installs `kado-cli-non-search`, `kado-search`,
-and `kado-a2a` for the calling agent, every locally
+`kado-a2a`, and `kado-mcp` for the calling agent, every locally
 detected supported harness, and the portable `~/.agents/skills/` location. An
 explicit `--agent` adds a requested identity. Product-specific user locations
 are used for Codex, Claude Code, Cursor, Gemini CLI, Antigravity, GitHub
@@ -99,22 +95,28 @@ A successful direct CLI update automatically syncs Kado-managed skill copies.
 If a skill update fails, the new CLI remains installed and reports the repair
 command. Skill removal does not remove the CLI or revoke credentials.
 
+MCP-aware Search 0.4.0, general CLI 0.2.0 and MCP 0.1.0 skills require CLI
+0.2.0 or newer. Incompatible signed or bundled updates report `unsupported_cli`
+and preserve installed copies. Upgrade Kado, then retry `kado skill update`.
+See [MCP from Search](MCP_FROM_SEARCH.md) for the Windows/macOS/Linux tutorial,
+provider login, direct URL reuse, named sessions and cleanup.
+
 ## Package-manager distribution
 
-Release builds also produce channel-stamped pairs and current package
+Release builds also produce channel-stamped complete bundles and package
 definitions for Homebrew, WinGet, Scoop, Debian, RPM, and containers. Each
-manager keeps the real `kado` and `kado-a2a` files together in one owned
+manager keeps the complete signed payload together in one owned
 directory. Homebrew and Linux packages expose only a public Kado symlink;
 Scoop exposes only its Kado shim; WinGet declares only the Kado portable alias;
-and the container image starts the real Kado member of its private pair.
+and the container image starts Kado from its owned bundle.
 
 Package-owned binaries do not run Kado's direct updater or uninstaller. They
 stop before release or credential state is opened and print the owning
 manager's exact command. Use `brew`, `winget`, `scoop`, `apt`, or `dnf` for the
 corresponding lifecycle. Replace or remove a container through its deployment
 tool. The manager may relocate, relink, or repair the package because Kado
-canonicalizes the running executable and verifies only the fixed sibling in
-that real directory.
+canonicalizes the running executable and verifies the complete signed payload
+in that real directory.
 
 GitHub Releases are published now as a mirror of the exact `kado.so` release
 artifacts, but are not the CLI's runtime update origin.

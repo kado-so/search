@@ -288,9 +288,11 @@ func normalizeA2ARepository(value string) string {
 }
 
 func a2aGitEnvironment() []string {
+	// Git for Windows understands /dev/null; its ARM64 build rejects the Win32
+	// NUL device as a configuration path. This path is consumed by Git, not Go.
 	return withReleaseEnvironment(sanitizedEnvironment(), map[string]string{
 		"GIT_ATTR_NOSYSTEM":   "1",
-		"GIT_CONFIG_GLOBAL":   os.DevNull,
+		"GIT_CONFIG_GLOBAL":   "/dev/null",
 		"GIT_CONFIG_NOSYSTEM": "1",
 	})
 }

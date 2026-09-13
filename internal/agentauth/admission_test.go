@@ -166,11 +166,22 @@ func TestAdmissionBindingMutationsAndResourceLimitsFailClosed(t *testing.T) {
 	}
 	limits = DefaultLimits()
 	limits.MaxArgonElapsed = time.Nanosecond
-	if _, err := solveAdmission(
+	// A nanosecond wall-clock assertion can finish inside one Windows clock
+	// tick. Advance the clock only after derivation to test the elapsed guard.
+	clockReads := 0
+	now := func() time.Time {
+		clockReads++
+		if clockReads > 2 {
+			return time.Unix(0, 2)
+		}
+		return time.Unix(0, 0)
+	}
+	if _, err := solveAdmissionWithClock(
 		context.Background(),
 		binding,
 		challenge,
 		limits,
+		now,
 	); !errors.Is(err, ErrChallengeLimits) {
 		t.Fatalf("elapsed-limited solve error = %v", err)
 	}

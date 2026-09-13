@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kado-so/search/internal/installchannel"
+	"github.com/kado-so/search/internal/payload"
 	"github.com/kado-so/search/internal/releaseclient"
 )
 
@@ -35,14 +36,17 @@ var (
 )
 
 type options struct {
-	root      string
-	output    string
-	commit    string
-	epoch     int64
-	version   string
-	a2aSource string
-	a2aLock   string
-	channel   string
+	root          string
+	output        string
+	commit        string
+	epoch         int64
+	version       string
+	a2aSource     string
+	a2aLock       string
+	channel       string
+	mcpComponents string
+	mcpCommit     string
+	mcpDigests    string
 }
 
 type releaseIdentity struct {
@@ -50,6 +54,7 @@ type releaseIdentity struct {
 	Repository string
 	InstallURL string
 	Executable string
+	mcp        map[string]payload.Component
 }
 
 func main() {
@@ -61,6 +66,9 @@ func main() {
 	flag.StringVar(&configured.version, "version", "", "semantic release version")
 	flag.StringVar(&configured.a2aSource, "a2a-source", "", "official A2A CLI Git checkout")
 	flag.StringVar(&configured.a2aLock, "a2a-lock", a2aDefaultLock, "repository-relative A2A source lock")
+	flag.StringVar(&configured.mcpComponents, "mcp-components", "", "qualified MCP component directories named OS-ARCH")
+	flag.StringVar(&configured.mcpCommit, "mcp-commit", "", "exact committed MCP source revision")
+	flag.StringVar(&configured.mcpDigests, "mcp-digests", "", "independently supplied six-target component manifest digest index")
 	flag.StringVar(
 		&configured.channel,
 		"install-channel",
@@ -153,6 +161,29 @@ func run(configured options) error {
 		return err
 	}
 	targets := targetsForInstallChannel(configured.channel)
+	var mcpDirectory string
+	var mcpDigests map[string]string
+	{
+		if configured.mcpComponents == "" || configured.mcpDigests == "" || !commitPattern.MatchString(configured.mcpCommit) {
+			return errors.New("all releases require --mcp-components, --mcp-commit and --mcp-digests")
+		}
+		mcpDirectory, err = filepath.Abs(configured.mcpComponents)
+		if err != nil {
+			return err
+		}
+		mcpDigests, err = readComponentDigests(configured.mcpDigests)
+		if err != nil {
+			return err
+		}
+		source.mcp = map[string]payload.Component{}
+		for _, t := range targets {
+			component, _, err := readMCPComponent(filepath.Join(mcpDirectory, t.goos+"-"+t.goarch), configured.mcpCommit, mcpDigests[t.goos+"/"+t.goarch], t)
+			if err != nil {
+				return err
+			}
+			source.mcp[t.goos+"/"+t.goarch] = component
+		}
+	}
 	executables, err := buildExecutables(
 		root,
 		workspace,
@@ -176,6 +207,9 @@ func run(configured options) error {
 	}
 	input := buildInput{
 		root:         root,
+		mcpPrebuilt:  mcpDirectory,
+		mcpCommit:    configured.mcpCommit,
+		mcpDigests:   mcpDigests,
 		output:       staging,
 		kadoPrebuilt: executables.KadoDirectory,
 		a2aPrebuilt:  executables.A2ADirectory,

@@ -379,6 +379,9 @@ func TestEveryReleasedSemanticRuleHasARejectingMutation(t *testing.T) {
 			resultItems(value)[0].(map[string]any)["use"].(map[string]any)["agent_card"] =
 				"https://user:secret@example.com/card.json"
 		}},
+		{"USE_MCP_ENDPOINT_INVALID", "complete_mcp", func(value map[string]any) {
+			resultItems(value)[0].(map[string]any)["use"].(map[string]any)["endpoint"] = "https://user:secret@example.com/mcp"
+		}},
 		{"SEARCH_STARTED_BEFORE_CREATED", "running", func(value map[string]any) {
 			search := value["search"].(map[string]any)
 			search["created_at"] = "2026-07-23T00:00:00.000000002Z"

@@ -1,15 +1,20 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kado-so/search/internal/installchannel"
+	"github.com/kado-so/search/internal/payload"
 	"github.com/kado-so/search/internal/releaseclient"
 )
 
@@ -37,7 +42,7 @@ func TestPackageDefinitionsPreservePrivateSiblingLayout(t *testing.T) {
 			case installchannel.Homebrew:
 				text := readPackageFixture(t, output, "kado.rb")
 				for _, want := range []string{
-					`libexec.install "kado", "kado-a2a"`,
+					`libexec.install Dir["*"]`,
 					`bin.install_symlink libexec/"kado"`,
 					"packages/homebrew/kado_1.2.3_darwin_arm64.tar.gz",
 					"packages/homebrew/kado_1.2.3_linux_amd64.tar.gz",
@@ -57,7 +62,7 @@ func TestPackageDefinitionsPreservePrivateSiblingLayout(t *testing.T) {
 				if err := json.Unmarshal([]byte(readPackageFixture(t, output, "kado.json")), &manifest); err != nil {
 					t.Fatal(err)
 				}
-				if manifest.Bin != "kado.exe" || len(manifest.Architecture) != 2 {
+				if manifest.Bin != "payload/kado.exe" || len(manifest.Architecture) != 2 {
 					t.Fatalf("Scoop public surface = %#v", manifest)
 				}
 				if strings.Contains(readPackageFixture(t, output, "kado.json"), `"bin": "kado-a2a.exe"`) {
@@ -65,14 +70,14 @@ func TestPackageDefinitionsPreservePrivateSiblingLayout(t *testing.T) {
 				}
 			case installchannel.WinGet:
 				installer := readPackageFixture(t, output, "manifests/Kado.Kado.installer.yaml")
-				if strings.Count(installer, "RelativeFilePath: kado.exe") != 2 ||
+				if strings.Count(installer, "RelativeFilePath: payload/kado.exe") != 2 ||
 					strings.Count(installer, "PortableCommandAlias: kado") != 2 ||
 					strings.Contains(installer, "RelativeFilePath: kado-a2a.exe") {
 					t.Fatalf("WinGet public surface is invalid: %s", installer)
 				}
 			case installchannel.Deb:
 				text := readPackageFixture(t, output, "build-deb.sh")
-				for _, want := range []string{"usr/libexec/kado/kado-a2a", "usr/bin/kado", "../libexec/kado/kado", "dpkg-deb --build"} {
+				for _, want := range []string{"tar -xzf \"$archive\" -C \"$work/root/usr/libexec/kado\"", "usr/bin/kado", "../libexec/kado/kado", "dpkg-deb --build"} {
 					if !strings.Contains(text, want) {
 						t.Fatalf("Debian definition does not contain %q: %s", want, text)
 					}
@@ -80,7 +85,7 @@ func TestPackageDefinitionsPreservePrivateSiblingLayout(t *testing.T) {
 			case installchannel.RPM:
 				for _, name := range []string{"kado-amd64.spec", "kado-arm64.spec"} {
 					text := readPackageFixture(t, output, name)
-					for _, want := range []string{"%{_libexecdir}/kado/kado-a2a", "%{_bindir}/kado", "../libexec/kado/kado"} {
+					for _, want := range []string{"mcp bundle.gen.json bundle.gen.json.sig", "%{_bindir}/kado", "../libexec/kado/kado"} {
 						if !strings.Contains(text, want) {
 							t.Fatalf("RPM definition %s does not contain %q: %s", name, want, text)
 						}
@@ -89,7 +94,7 @@ func TestPackageDefinitionsPreservePrivateSiblingLayout(t *testing.T) {
 			case installchannel.Container:
 				text := readPackageFixture(t, output, "Dockerfile")
 				if !strings.Contains(text, "ADD kado_1.2.3_linux_${TARGETARCH}.tar.gz /usr/local/libexec/kado/") ||
-					!strings.Contains(text, `ENTRYPOINT ["/usr/local/libexec/kado/kado"]`) ||
+					!strings.Contains(text, `ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/libexec/kado/kado"]`) ||
 					strings.Contains(text, `ENTRYPOINT ["/usr/local/libexec/kado/kado-a2a"]`) {
 					t.Fatalf("container definition is invalid: %s", text)
 				}
@@ -158,21 +163,32 @@ func TestPackageReleaseHasASeparateSignedArtifactBoundary(t *testing.T) {
 	}
 	kadoRoot := t.TempDir()
 	a2aRoot := t.TempDir()
+	mcpRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	digests := map[string]string{}
 	targets := targetsForInstallChannel(installchannel.Scoop)
 	for _, target := range targets {
-		if err := os.WriteFile(
-			filepath.Join(kadoRoot, executableArtifactName("kado", "1.2.3", target)),
-			[]byte("kado:"+target.goarch),
-			0o755,
-		); err != nil {
+		dir, digest, _ := releaseComponentFixture(t, target)
+		if err := os.Rename(dir, filepath.Join(mcpRoot, target.goos+"-"+target.goarch)); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(
-			filepath.Join(a2aRoot, executableArtifactName("kado-a2a", "1.2.3", target)),
-			[]byte("a2a:"+target.goarch),
-			0o755,
-		); err != nil {
-			t.Fatal(err)
+		digests[target.goos+"/"+target.goarch] = digest
+		for _, binary := range []struct{ name, module, output string }{{"kado", "github.com/kado-so/search", kadoRoot}, {"kado-a2a", a2aModule, a2aRoot}} {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module "+binary.module+"\n\ngo 1.26.0\n\ntoolchain go1.26.4\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			c := exec.Command("go", "build", "-trimpath", "-o", filepath.Join(binary.output, executableArtifactName(binary.name, "1.2.3", target)), ".")
+			c.Dir = dir
+			c.Env = append(os.Environ(), "GOOS="+target.goos, "GOARCH="+target.goarch, "CGO_ENABLED=0")
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("fixture: %v %s", err, out)
+			}
 		}
 	}
 	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
@@ -184,6 +200,8 @@ func TestPackageReleaseHasASeparateSignedArtifactBoundary(t *testing.T) {
 		kadoPrebuilt: kadoRoot,
 		a2aPrebuilt:  a2aRoot,
 		a2aLicense:   []byte("A2A license\n"),
+		mcpPrebuilt:  mcpRoot, mcpCommit: strings.Repeat("a", 40), mcpDigests: digests,
+		a2a: a2aPreparedSource{Lock: a2aSourceLock{Version: "0.1.0", Repository: a2aRepository, License: a2aLicenseLock{SPDX: "Apache-2.0"}}},
 		source: releaseIdentity{
 			Version: "1.2.3", InstallURL: "https://kado.so/install", Repository: "https://github.com/kado-so/search",
 		},
@@ -200,7 +218,6 @@ func TestPackageReleaseHasASeparateSignedArtifactBoundary(t *testing.T) {
 
 	for _, absent := range []string{
 		"release-metadata.json", "release-metadata.json.sig", "install.ps1", "install.sh",
-		"kado_1.2.3_windows_amd64.exe", "kado_1.2.3_windows_amd64.spdx.json", "provenance.intoto.json",
 	} {
 		if _, err := os.Stat(filepath.Join(output, absent)); !os.IsNotExist(err) {
 			t.Fatalf("package release contains direct artifact %q: %v", absent, err)
@@ -219,7 +236,7 @@ func TestPackageReleaseHasASeparateSignedArtifactBoundary(t *testing.T) {
 	}
 	text := string(checksums)
 	for _, present := range []string{
-		"kado.json", "kado_1.2.3_windows_amd64.zip", "kado_1.2.3_windows_arm64.zip", "release-public-key.pem",
+		"kado_1.2.3_windows_amd64.spdx.json", "provenance.intoto.json", "kado.json", "kado_1.2.3_windows_amd64.zip", "kado_1.2.3_windows_arm64.zip", "release-public-key.pem",
 	} {
 		if !strings.Contains(text, "  "+present+"\n") {
 			t.Fatalf("checksums do not include %q: %s", present, text)
@@ -227,6 +244,65 @@ func TestPackageReleaseHasASeparateSignedArtifactBoundary(t *testing.T) {
 	}
 	if strings.Contains(text, "checksums.txt") {
 		t.Fatalf("checksums include themselves: %s", text)
+	}
+	for _, target := range targets {
+		archive, err := os.ReadFile(filepath.Join(output, "kado_1.2.3_windows_"+target.goarch+".zip"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range reader.File {
+			if !strings.HasPrefix(file.Name, "payload/") || !payload.ValidPath(file.Name) || !file.Mode().IsRegular() {
+				t.Fatalf("unexpected package entry: %s", file.Name)
+			}
+			r, err := file.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, err := io.ReadAll(r)
+			if closeErr := r.Close(); err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, filepath.FromSlash(file.Name))
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, value, file.Mode().Perm()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Scoop/WinGet own the outer directory; their files are not signed code.
+		if err := os.WriteFile(filepath.Join(root, "install.json"), []byte("manager metadata"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		bundleRoot := filepath.Join(root, "payload")
+		encoded, err := os.ReadFile(filepath.Join(bundleRoot, payload.ManifestName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := payload.VerifyTree(bundleRoot, payload.Digest(encoded), public)
+		if err != nil || m.Target != "windows/"+target.goarch {
+			t.Fatalf("package verification: %+v %v", m, err)
+		}
+		if got := readPackageFixture(t, bundleRoot, "kado.install.json"); !strings.Contains(got, `"channel":"scoop"`) {
+			t.Fatalf("owner receipt: %s", got)
+		}
+		if err := os.WriteFile(filepath.Join(bundleRoot, "unlisted.js"), []byte("changed"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := payload.VerifyTree(bundleRoot, payload.Digest(encoded), public); err == nil {
+			t.Fatal("package accepted code outside its signed inventory")
+		}
 	}
 }
 
