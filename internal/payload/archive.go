@@ -139,6 +139,16 @@ func Extract(data []byte, format string, key ed25519.PublicKey) (Bundle, error) 
 
 // Archive writes reproducible archives from a sealed, internally consistent unit.
 func Archive(b Bundle, format string, builtAt time.Time) ([]byte, error) {
+	return archive(b, format, builtAt, "")
+}
+
+// PackageArchive keeps package-manager metadata outside the signed payload.
+// Package definitions expose only the payload/kado executable through a shim.
+func PackageArchive(b Bundle, format string, builtAt time.Time) ([]byte, error) {
+	return archive(b, format, builtAt, "payload/")
+}
+
+func archive(b Bundle, format string, builtAt time.Time, prefix string) ([]byte, error) {
 	m, err := Decode(b.Encoded)
 	if err != nil || len(b.Signature) != ed25519.SignatureSize || len(b.Files) != len(m.Files) {
 		return nil, ErrInvalid
@@ -166,7 +176,7 @@ func Archive(b Bundle, format string, builtAt time.Time) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			h := &zip.FileHeader{Name: f.Path, Method: zip.Deflate}
+			h := &zip.FileHeader{Name: prefix + f.Path, Method: zip.Deflate}
 			h.SetMode(fs.FileMode(f.Mode))
 			h.SetModTime(builtAt)
 			dst, err := w.CreateHeader(h)
@@ -190,7 +200,7 @@ func Archive(b Bundle, format string, builtAt time.Time) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			h := &tar.Header{Name: f.Path, Mode: int64(f.Mode), Size: int64(len(v)), Typeflag: tar.TypeReg, ModTime: builtAt}
+			h := &tar.Header{Name: prefix + f.Path, Mode: int64(f.Mode), Size: int64(len(v)), Typeflag: tar.TypeReg, ModTime: builtAt}
 			if err = w.WriteHeader(h); err != nil {
 				return nil, err
 			}

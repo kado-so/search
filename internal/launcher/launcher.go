@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/kado-so/search/internal/buildinfo"
+	"github.com/kado-so/search/internal/executablepath"
 	"github.com/kado-so/search/internal/payload"
 )
 
@@ -763,7 +764,9 @@ func currentExecutable() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Abs(value)
+	// Package shims and user aliases can traverse symlinks or Windows junctions.
+	// Select and verify relative to the physical executable, never the alias.
+	return executablepath.Resolve(value)
 }
 
 func samePath(left, right string) bool { return filepath.Clean(left) == filepath.Clean(right) }

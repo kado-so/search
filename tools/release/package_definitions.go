@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -54,40 +53,38 @@ func buildPackageRelease(input buildInput) error {
 	if err != nil {
 		return errors.New("release license is unavailable")
 	}
+	if input.mcpPrebuilt == "" {
+		return errors.New("package release requires a complete MCP component")
+	}
 	guide := []byte(installGuide(input.source, input.keyID))
+	assetBase := strings.TrimSuffix(input.source.InstallURL, "/") + "/releases/" + input.source.Version + "/packages/" + input.channel
+	files := map[string]builtFile{}
+	add := func(name string, value []byte, mode fs.FileMode) (releaseclient.File, error) {
+		f := releaseclient.File{Name: name, URL: assetBase + "/" + name, Size: int64(len(value)), SHA256: releaseclient.Digest(value)}
+		if _, exists := files[name]; exists {
+			return releaseclient.File{}, errors.New("duplicate package artifact")
+		}
+		files[name] = builtFile{file: f, data: value}
+		return f, writeReleaseArtifact(input.output, name, value, mode)
+	}
+	register := func(name string, value []byte, f releaseclient.File) error {
+		files[name] = builtFile{file: f, data: value}
+		return nil
+	}
+	var targets []releaseclient.Target
 	for _, target := range input.targets {
-		kadoName := executableArtifactName("kado", input.source.Version, target)
-		kadoBinary, err := os.ReadFile(filepath.Join(input.kadoPrebuilt, kadoName))
-		if err != nil || len(kadoBinary) == 0 {
-			return fmt.Errorf("Kado binary is unavailable for %s/%s", target.goos, target.goarch)
-		}
-		a2aName := executableArtifactName("kado-a2a", input.source.Version, target)
-		a2aBinary, err := os.ReadFile(filepath.Join(input.a2aPrebuilt, a2aName))
-		if err != nil || len(a2aBinary) == 0 {
-			return fmt.Errorf("A2A binary is unavailable for %s/%s", target.goos, target.goarch)
-		}
-		binaryName := "kado"
-		archiveName := fmt.Sprintf("kado_%s_%s_%s.tar.gz", input.source.Version, target.goos, target.goarch)
-		archiveFormat := "tar.gz"
-		var archive []byte
-		if target.goos == "windows" {
-			binaryName = "kado.exe"
-			archiveName = fmt.Sprintf("kado_%s_%s_%s.zip", input.source.Version, target.goos, target.goarch)
-			archiveFormat = "zip"
-			archive, err = makeZip(input.builtAt, binaryName, kadoBinary, a2aBinary, license, input.a2aLicense, guide)
-		} else {
-			archive, err = makeTarGzip(input.builtAt, binaryName, kadoBinary, a2aBinary, license, input.a2aLicense, guide)
-		}
+		built, err := buildTargetArtifacts(input, target, assetBase, license, guide, add, register)
 		if err != nil {
 			return err
 		}
-		extracted, err := releaseclient.ExtractBundle(archive, archiveFormat, binaryName)
-		if err != nil || !bytes.Equal(extracted.Kado, kadoBinary) || !bytes.Equal(extracted.A2A, a2aBinary) {
-			return fmt.Errorf("package archive self-check failed for %s/%s", target.goos, target.goarch)
-		}
-		if err := writeReleaseArtifact(input.output, archiveName, archive, 0o644); err != nil {
-			return err
-		}
+		targets = append(targets, built)
+	}
+	provenance, err := makeProvenance(input, files, targets)
+	if err != nil {
+		return err
+	}
+	if _, err := add("provenance.intoto.json", provenance, 0644); err != nil {
+		return err
 	}
 	if err := writePackageDefinitions(input.output, input.source, input.channel); err != nil {
 		return err
@@ -281,13 +278,14 @@ func homebrewFormula(version string, archives map[string]packageArchive) string 
   end
 
   on_linux do
+    depends_on "libsecret"
     if Hardware::CPU.arm?
 %s    else
 %s    end
   end
 
   def install
-    libexec.install "kado", "kado-a2a"
+    libexec.install Dir["*"]
     bin.install_symlink libexec/"kado"
   end
 end
@@ -307,7 +305,7 @@ func scoopManifest(version string, amd64, arm64 packageArchive) (string, error) 
 		Bin string `json:"bin"`
 	}{
 		Version: version, Description: "Find and invoke agent solutions", Homepage: "https://kado.so",
-		License: "Proprietary, Apache-2.0", Bin: "kado.exe",
+		License: "Proprietary, Apache-2.0", Bin: "payload/kado.exe",
 		Architecture: map[string]struct {
 			URL  string `json:"url"`
 			Hash string `json:"hash"`
@@ -354,13 +352,13 @@ Installers:
     InstallerUrl: %s
     InstallerSha256: %s
     NestedInstallerFiles:
-      - RelativeFilePath: kado.exe
+      - RelativeFilePath: payload/kado.exe
         PortableCommandAlias: kado
   - Architecture: arm64
     InstallerUrl: %s
     InstallerSha256: %s
     NestedInstallerFiles:
-      - RelativeFilePath: kado.exe
+      - RelativeFilePath: payload/kado.exe
         PortableCommandAlias: kado
 ManifestType: installer
 ManifestVersion: 1.12.0
@@ -381,11 +379,9 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/kado-deb.XXXXXX")"
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT HUP INT TERM
 mkdir -p "$work/root/DEBIAN" "$work/root/usr/libexec/kado" "$work/root/usr/bin"
-tar -xzf "$archive" -C "$work" kado kado-a2a
-install -m 755 "$work/kado" "$work/root/usr/libexec/kado/kado"
-install -m 755 "$work/kado-a2a" "$work/root/usr/libexec/kado/kado-a2a"
+tar -xzf "$archive" -C "$work/root/usr/libexec/kado"
 ln -s ../libexec/kado/kado "$work/root/usr/bin/kado"
-printf 'Package: kado\nVersion: %s\nArchitecture: %%s\nMaintainer: Kado <support@kado.so>\nDescription: Find and invoke agent solutions\n' "$arch" >"$work/root/DEBIAN/control"
+printf 'Package: kado\nVersion: %s\nArchitecture: %%s\nDepends: libc6 (>= 2.28), libstdc++6, libsecret-1-0, ca-certificates\nMaintainer: Kado <support@kado.so>\nDescription: Find and invoke agent solutions\n' "$arch" >"$work/root/DEBIAN/control"
 dpkg-deb --build --root-owner-group "$work/root" "$here/kado_%s_${arch}.deb"
 `, version, version, version)
 }
@@ -393,6 +389,9 @@ dpkg-deb --build --root-owner-group "$work/root" "$here/kado_%s_${arch}.deb"
 func rpmSpec(version, rpmArch, archiveName string) string {
 	rpmVersion, rpmRelease := rpmIdentity(version)
 	return fmt.Sprintf(`Name: kado
+%%global debug_package %%{nil}
+%%global __os_install_post %%{nil}
+%%global _build_id_links none
 Version: %s
 Release: %s
 Summary: Find and invoke agent solutions
@@ -400,6 +399,7 @@ License: LicenseRef-Kado-Proprietary AND Apache-2.0
 URL: https://kado.so
 Source0: %s
 BuildArch: %s
+Requires: glibc >= 2.28, libstdc++, libsecret, ca-certificates
 
 %%description
 Kado finds and invokes agent solutions.
@@ -410,14 +410,12 @@ tar -xzf %%{SOURCE0}
 
 %%install
 install -d %%{buildroot}%%{_libexecdir}/kado %%{buildroot}%%{_bindir}
-install -m 0755 kado %%{buildroot}%%{_libexecdir}/kado/kado
-install -m 0755 kado-a2a %%{buildroot}%%{_libexecdir}/kado/kado-a2a
+cp -a kado kado-a2a mcp bundle.gen.json bundle.gen.json.sig kado.install.json LICENSE LICENSE-A2A-CLI INSTALL-CLI.md %%{buildroot}%%{_libexecdir}/kado/
 ln -s ../libexec/kado/kado %%{buildroot}%%{_bindir}/kado
 
 %%files
 %%{_bindir}/kado
-%%{_libexecdir}/kado/kado
-%%{_libexecdir}/kado/kado-a2a
+%%{_libexecdir}/kado/
 `, rpmVersion, rpmRelease, archiveName, rpmArch)
 }
 
@@ -432,7 +430,8 @@ func rpmIdentity(version string) (string, string) {
 }
 
 func containerDockerfile(version string) string {
-	return fmt.Sprintf(`FROM scratch
+	return fmt.Sprintf(`FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libstdc++6 libsecret-1-0 && rm -rf /var/lib/apt/lists/*
 ARG TARGETARCH
 ADD kado_%s_linux_${TARGETARCH}.tar.gz /usr/local/libexec/kado/
 ENTRYPOINT ["/usr/local/libexec/kado/kado"]

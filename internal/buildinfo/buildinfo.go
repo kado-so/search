@@ -154,7 +154,7 @@ func (info Info) Line() string {
 
 // BundleText returns the bounded human-readable distribution report.
 func (info Info) BundleText() string {
-	return fmt.Sprintf(
+	text := fmt.Sprintf(
 		"Kado:\n"+
 			"  version: %s\n"+
 			"  commit: %s\n"+
@@ -184,6 +184,10 @@ func (info Info) BundleText() string {
 		boundedTokenLength(info.A2A.ArtifactSHA256, 80),
 		max(info.A2A.ArtifactSize, 0),
 	)
+	if info.MCP != nil {
+		text += fmt.Sprintf("MCP:\n  version: %s\n  commit: %s\n  lock sha256: %s\nNode:\n  version: %s\n  archive sha256: %s\n", boundedToken(info.MCP.Version), boundedToken(info.MCP.Commit), boundedTokenLength(info.MCP.LockSHA256, 64), boundedToken(info.MCP.NodeVersion), boundedTokenLength(info.MCP.NodeArchiveSHA256, 64))
+	}
+	return text
 }
 
 // Report returns the bounded, non-secret distribution identity.

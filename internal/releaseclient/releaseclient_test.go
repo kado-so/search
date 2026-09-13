@@ -950,7 +950,7 @@ func newReleaseFixtureWithBinary(
 	}
 }
 
-func buildStampedExecutable(t *testing.T, metadata Metadata, publicKey string) string {
+func buildStampedExecutable(t *testing.T, metadata Metadata, publicKey string, channels ...string) string {
 	t.Helper()
 	output := filepath.Join(t.TempDir(), executableName(runtime.GOOS))
 	target, err := metadata.TargetFor(runtime.GOOS, runtime.GOARCH)
@@ -977,7 +977,13 @@ func buildStampedExecutable(t *testing.T, metadata Metadata, publicKey string) s
 		" -X github.com/kado-so/search/internal/buildinfo.A2AArtifactSHA256=" + target.Sidecar.SHA256 +
 		" -X github.com/kado-so/search/internal/buildinfo.A2AArtifactSize=" + strconv.FormatInt(target.Sidecar.Size, 10)
 	if mcp := metadata.Components.MCP; mcp != nil {
-		ldflags += " -X github.com/kado-so/search/internal/buildinfo.MCPVersion=" + mcp.Version +
+		channel := "direct"
+		if len(channels) == 1 {
+			channel = channels[0]
+		}
+		ldflags += " -X github.com/kado-so/search/internal/buildinfo.InstallChannel=" + channel +
+			" -X github.com/kado-so/search/internal/buildinfo.ReleaseMetadataURL=https://kado.so/install/releases/stable/release-metadata.json" +
+			" -X github.com/kado-so/search/internal/buildinfo.MCPVersion=" + mcp.Version +
 			" -X github.com/kado-so/search/internal/buildinfo.MCPCommit=" + mcp.Commit +
 			" -X github.com/kado-so/search/internal/buildinfo.MCPLockSHA256=" + mcp.LockSHA256 +
 			" -X github.com/kado-so/search/internal/buildinfo.NodeVersion=" + mcp.NodeVersion +

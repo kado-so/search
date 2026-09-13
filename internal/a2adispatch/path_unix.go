@@ -2,12 +2,6 @@
 
 package a2adispatch
 
-import "path/filepath"
+import "github.com/kado-so/search/internal/executablepath"
 
-func canonicalExecutablePath(path string) (string, error) {
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	return filepath.EvalSymlinks(absolute)
-}
+func canonicalExecutablePath(path string) (string, error) { return executablepath.Resolve(path) }

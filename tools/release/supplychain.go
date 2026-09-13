@@ -192,15 +192,19 @@ func makeProvenance(
 		})
 	}
 	for _, target := range targets {
+		prefix := ""
+		if input.channel == "scoop" || input.channel == "winget" {
+			prefix = "payload/"
+		}
 		if target.Payload != nil {
-			subjects = append(subjects, subject{Name: target.Archive.Name + "#bundle.gen.json", Digest: map[string]string{"sha256": target.Payload.SHA256}})
+			subjects = append(subjects, subject{Name: target.Archive.Name + "#" + prefix + "bundle.gen.json", Digest: map[string]string{"sha256": target.Payload.SHA256}})
 		}
 		sidecarName := "kado-a2a"
 		if target.OS == "windows" {
 			sidecarName += ".exe"
 		}
 		subjects = append(subjects, subject{
-			Name:   target.Archive.Name + "#" + sidecarName,
+			Name:   target.Archive.Name + "#" + prefix + sidecarName,
 			Digest: map[string]string{"sha256": target.Sidecar.SHA256},
 		})
 	}

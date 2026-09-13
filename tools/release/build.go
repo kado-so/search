@@ -372,6 +372,9 @@ func buildTargetArtifacts(
 		files["LICENSE"] = license
 		files["LICENSE-A2A-CLI"] = input.a2aLicense
 		files["INSTALL-CLI.md"] = guide
+		if input.channel != "" && input.channel != "direct" {
+			files["kado.install.json"] = []byte(fmt.Sprintf("{\"schema_version\":1,\"channel\":%q}\n", input.channel))
+		}
 		sealed, err := payload.Seal(payload.Manifest{Version: input.source.Version, Target: target.goos + "/" + target.goarch, MCP: component}, files, input.privateKey)
 		if err != nil {
 			return releaseclient.Target{}, err
@@ -400,7 +403,11 @@ func buildTargetArtifacts(
 		if archiveFormat == "zip" {
 			archiveName = base + ".zip"
 		}
-		archive, err = payload.Archive(*complete, archiveFormat, input.builtAt)
+		if input.channel == "scoop" || input.channel == "winget" {
+			archive, err = payload.PackageArchive(*complete, archiveFormat, input.builtAt)
+		} else {
+			archive, err = payload.Archive(*complete, archiveFormat, input.builtAt)
+		}
 	} else if archiveFormat == "zip" {
 		archiveName = base + ".zip"
 		archive, err = makeZip(input.builtAt, binaryName, binary, a2aBinary, license, input.a2aLicense, guide)

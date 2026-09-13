@@ -73,6 +73,7 @@ func newRoot() *cobra.Command {
 		releaseCommand(),
 		versionCommand(),
 		a2aCommand(),
+		&cobra.Command{Use: "mcp", Short: "MCP tools, resources, prompts and sessions", DisableFlagParsing: true, Run: noOp},
 	)
 	return root
 }

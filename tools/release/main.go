@@ -163,9 +163,9 @@ func run(configured options) error {
 	targets := targetsForInstallChannel(configured.channel)
 	var mcpDirectory string
 	var mcpDigests map[string]string
-	if configured.channel == installchannel.Direct {
+	{
 		if configured.mcpComponents == "" || configured.mcpDigests == "" || !commitPattern.MatchString(configured.mcpCommit) {
-			return errors.New("direct releases require --mcp-components, --mcp-commit and --mcp-digests")
+			return errors.New("all releases require --mcp-components, --mcp-commit and --mcp-digests")
 		}
 		mcpDirectory, err = filepath.Abs(configured.mcpComponents)
 		if err != nil {
