@@ -95,7 +95,9 @@ type Item struct {
 
 type Use struct {
 	Protocol  string `json:"protocol"`
-	AgentCard string `json:"agent_card"`
+	AgentCard string `json:"agent_card,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	Transport string `json:"transport,omitempty"`
 }
 
 type Pagination struct {
