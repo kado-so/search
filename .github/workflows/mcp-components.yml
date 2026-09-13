@@ -1,0 +1,126 @@
+name: Build reviewed MCP components
+
+on:
+  workflow_call:
+    secrets:
+      KADO_MCP_READ_TOKEN:
+        description: Read-only access to the maintained private kado-so/mcp repository
+        required: true
+    outputs:
+      commit:
+        description: Reviewed MCP source commit
+        value: ${{ jobs.source.outputs.commit }}
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.lock.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - id: lock
+        shell: bash
+        run: |
+          lock=third_party/mcp/source.lock.json
+          test "$(jq -r .schema_version "$lock")" = kado.mcp-source-lock.v1
+          test "$(jq -r .repository "$lock")" = kado-so/mcp
+          commit="$(jq -r .commit "$lock")"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+  native:
+    needs: source
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: windows-2025, target: win32-x64, output: windows-amd64}
+          - {runner: windows-11-arm, target: win32-arm64, output: windows-arm64}
+          - {runner: macos-15-intel, target: darwin-x64, output: darwin-amd64}
+          - {runner: macos-15, target: darwin-arm64, output: darwin-arm64}
+          - {runner: ubuntu-24.04, target: linux-x64, output: linux-amd64}
+          - {runner: ubuntu-24.04-arm, target: linux-arm64, output: linux-arm64}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          path: search
+      - uses: actions/checkout@v5
+        with:
+          repository: kado-so/mcp
+          ref: ${{ needs.source.outputs.commit }}
+          token: ${{ secrets.KADO_MCP_READ_TOKEN }}
+          persist-credentials: false
+          path: mcp
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: mcp/.node-version
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: search/go.mod
+          cache: false
+      - name: Verify source lock and native host
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          node search/scripts/verify-mcp-source.mjs mcp search/third_party/mcp/source.lock.json
+      - name: Install frozen build dependencies
+        working-directory: mcp
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm run build
+          corepack pnpm run verify:source
+      - name: Prepare Linux Secret Service
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dbus-x11 gnome-keyring libsecret-1-0
+      - name: Qualify Linux runtime
+        if: runner.os == 'Linux'
+        working-directory: mcp
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          dbus-run-session -- bash -e -c '
+            export XDG_DATA_HOME="$RUNNER_TEMP/kado-mcp-keyring"
+            mkdir -p "$XDG_DATA_HOME"
+            printf "\n" | gnome-keyring-daemon --unlock --components=secrets
+            node scripts/packaging/ci.mjs ../search
+          '
+      - name: Qualify Windows or macOS runtime
+        if: runner.os != 'Linux'
+        working-directory: mcp
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: node scripts/packaging/ci.mjs ../search
+      - name: Build exact release component
+        working-directory: mcp
+        env:
+          TARGET: ${{ matrix.target }}
+          COMPONENT: ${{ matrix.output }}
+        run: node scripts/packaging/build.mjs "$TARGET" ".kado-dev/release-components/$COMPONENT" --release-component
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mcp-component-${{ matrix.output }}
+          path: |
+            mcp/.kado-dev/release-components/${{ matrix.output }}.gen.tar.gz
+            mcp/.kado-dev/release-components/${{ matrix.output }}.manifest-sha256
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mcp-evidence-${{ matrix.output }}
+          path: mcp/.kado-dev/native-evidence/
+          if-no-files-found: warn
+          retention-days: 14

@@ -14,7 +14,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  mcp-components:
+    uses: ./.github/workflows/mcp-components.yml
+    secrets:
+      KADO_MCP_READ_TOKEN: ${{ secrets.KADO_MCP_READ_TOKEN }}
   build:
+    needs: mcp-components
     runs-on: depot-ubuntu-24.04
     environment: cli-release
     outputs:
@@ -66,7 +71,14 @@ jobs:
           git -C "$checkout" fetch --force --tags origin
           git -C "$checkout" checkout --detach "$commit"
           echo "checkout=$checkout" >>"$GITHUB_OUTPUT"
-      - name: Build and sign the two-executable release
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mcp-component-*
+          merge-multiple: true
+          path: mcp-inputs
+      - name: Assemble verified native MCP inputs
+        run: go run ./tools/mcp-components --input mcp-inputs --out mcp-components
+      - name: Build and sign the complete release
         env:
           KADO_RELEASE_SIGNING_KEY: ${{ secrets.KADO_RELEASE_SIGNING_KEY }}
           VERSION: ${{ steps.inputs.outputs.version }}
@@ -78,8 +90,11 @@ jobs:
             --commit "$COMMIT" \
             --source-date-epoch "$EPOCH" \
             --a2a-source "${{ steps.a2a.outputs.checkout }}" \
+            --mcp-components mcp-components \
+            --mcp-commit "${{ needs.mcp-components.outputs.commit }}" \
+            --mcp-digests mcp-components/digests.gen.json \
             --out dist/release
-      - name: Build package-owned release pairs and definitions
+      - name: Build package-owned release bundles and definitions
         env:
           KADO_RELEASE_SIGNING_KEY: ${{ secrets.KADO_RELEASE_SIGNING_KEY }}
           VERSION: ${{ steps.inputs.outputs.version }}
@@ -93,6 +108,9 @@ jobs:
               --commit "$COMMIT" \
               --source-date-epoch "$EPOCH" \
               --a2a-source "$A2A_SOURCE" \
+              --mcp-components mcp-components \
+              --mcp-commit "${{ needs.mcp-components.outputs.commit }}" \
+              --mcp-digests mcp-components/digests.gen.json \
               --install-channel "$channel" \
               --out "dist/release/packages/$channel"
           done
@@ -144,9 +162,10 @@ jobs:
           mkdir extracted
           tar -xzf "release/$ARCHIVE" -C extracted
           test "$(./extracted/$BINARY version --json | jq -r '.kado.version')" = "$VERSION"
-          test "$(./extracted/$BINARY version --json | jq -r '.schema_version')" = "kado.version.v1"
+          test "$(./extracted/$BINARY version --json | jq -r '.schema_version')" = "kado.version.v2"
           ./extracted/kado-a2a --output json version >/dev/null
           ./extracted/$BINARY a2a --output json version >/dev/null
+          ./extracted/$BINARY mcp --version --json >/dev/null
           ./extracted/$BINARY release verify --directory "$PWD/release"
       - name: Smoke test Windows archive
         if: runner.os == 'Windows'
@@ -166,17 +185,19 @@ jobs:
           if ($ParseErrors.Count -ne 0) { throw "install.ps1 does not parse" }
           Expand-Archive -LiteralPath "release/$env:ARCHIVE" -DestinationPath extracted
           $identity = & "extracted/$env:BINARY" version --json | ConvertFrom-Json
-          if ($identity.schema_version -ne "kado.version.v1" -or $identity.kado.version -ne $env:VERSION) {
+          if ($identity.schema_version -ne "kado.version.v2" -or $identity.kado.version -ne $env:VERSION) {
             throw "version mismatch"
           }
           & "extracted/kado-a2a.exe" --output json version | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "A2A version check failed" }
           & "extracted/$env:BINARY" a2a --output json version | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "namespaced A2A version check failed" }
+          & "extracted/$env:BINARY" mcp --version --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "MCP version check failed" }
           & "extracted/$env:BINARY" release verify --directory "$PWD/release"
           if ($LASTEXITCODE -ne 0) { throw "release verification failed" }
 
-  package-pair-smoke:
+  package-bundle-smoke:
     needs: build
     strategy:
       fail-fast: false
@@ -272,7 +293,7 @@ jobs:
         with:
           name: kado-${{ needs.build.outputs.version }}
           path: release
-      - name: Exercise Unix package-owned pair
+      - name: Exercise Unix package-owned bundle
         if: runner.os != 'Windows'
         shell: bash
         env:
@@ -301,6 +322,7 @@ jobs:
             image="kado-package-smoke:${VERSION}-${TARGET_ARCH}"
             docker build --build-arg TARGETARCH="$TARGET_ARCH" -t "$image" "release/packages/container"
             docker run --rm "$image" a2a --output json version >/dev/null
+            docker run --rm "$image" mcp --version --json >/dev/null
           fi
           package_root="$RUNNER_TEMP/Kado package ü/$CHANNEL/$VERSION/libexec"
           public_root="$RUNNER_TEMP/Kado public ü"
@@ -316,6 +338,7 @@ jobs:
           before_kado="$(digest "$package_root/kado")"
           before_a2a="$(digest "$package_root/kado-a2a")"
           "$kado" a2a --output json version >/dev/null
+          "$kado" mcp --help >/dev/null
           if "$kado" update 2>update.err; then exit 1; fi
           grep -F "$UPDATE_COMMAND" update.err
           if "$kado" uninstall --yes --purge-credentials 2>uninstall.err; then exit 1; fi
@@ -327,7 +350,7 @@ jobs:
           if "$kado" a2a --output json version; then exit 1; fi
           mv "$package_root/kado-a2a.good" "$package_root/kado-a2a"
           "$kado" a2a --output json version >/dev/null
-      - name: Exercise Windows package-owned pair
+      - name: Exercise Windows package-owned bundle
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -370,7 +393,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'repaired sidecar did not execute' }
 
   publish:
-    needs: [build, native-smoke, package-pair-smoke]
+    needs: [build, native-smoke, package-bundle-smoke]
     runs-on: depot-ubuntu-24.04
     environment: cli-release
     env:

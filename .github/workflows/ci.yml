@@ -9,6 +9,11 @@ permissions:
   contents: read
 
 jobs:
+  mcp-components:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/mcp-components.yml
+    secrets:
+      KADO_MCP_READ_TOKEN: ${{ secrets.KADO_MCP_READ_TOKEN }}
   test:
     runs-on: depot-ubuntu-24.04
     env:
@@ -48,6 +53,7 @@ jobs:
           done
 
   build-candidate:
+    needs: mcp-components
     runs-on: depot-ubuntu-24.04
     outputs:
       version: ${{ steps.identity.outputs.version }}
@@ -67,7 +73,7 @@ jobs:
       - id: identity
         shell: bash
         run: |
-          version="0.0.0-ci.${GITHUB_RUN_ID}"
+          version="0.2.1-ci.${GITHUB_RUN_ID}"
           commit="$(git rev-parse HEAD)"
           epoch="$(git show -s --format=%ct HEAD)"
           echo "version=$version" >>"$GITHUB_OUTPUT"
@@ -89,6 +95,13 @@ jobs:
           git -C "$checkout" fetch --force --tags origin
           git -C "$checkout" checkout --detach "$commit"
           echo "checkout=$checkout" >>"$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mcp-component-*
+          merge-multiple: true
+          path: mcp-inputs
+      - name: Assemble verified native MCP inputs
+        run: go run ./tools/mcp-components --input mcp-inputs --out mcp-components
       - name: Build signed six-target candidate
         shell: bash
         env:
@@ -99,6 +112,9 @@ jobs:
             --commit "${{ steps.identity.outputs.commit }}" \
             --source-date-epoch "${{ steps.identity.outputs.epoch }}" \
             --a2a-source "${{ steps.a2a.outputs.checkout }}" \
+            --mcp-components mcp-components \
+            --mcp-commit "${{ needs.mcp-components.outputs.commit }}" \
+            --mcp-digests mcp-components/digests.gen.json \
             --out dist/qualification
       - name: Build signed package-channel candidates
         shell: bash
@@ -111,6 +127,9 @@ jobs:
               --commit "${{ steps.identity.outputs.commit }}" \
               --source-date-epoch "${{ steps.identity.outputs.epoch }}" \
               --a2a-source "${{ steps.a2a.outputs.checkout }}" \
+              --mcp-components mcp-components \
+              --mcp-commit "${{ needs.mcp-components.outputs.commit }}" \
+              --mcp-digests mcp-components/digests.gen.json \
               --install-channel "$channel" \
               --out "dist/qualification/packages/$channel"
           done
@@ -128,7 +147,7 @@ jobs:
               -count=1 -timeout=10m
       - uses: actions/upload-artifact@v7
         with:
-          name: kado-a2a-candidate-${{ github.run_id }}
+          name: kado-complete-candidate-${{ github.run_id }}
           path: dist/qualification/
           if-no-files-found: error
           retention-days: 14
@@ -169,7 +188,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v8
         with:
-          name: kado-a2a-candidate-${{ github.run_id }}
+          name: kado-complete-candidate-${{ github.run_id }}
           path: release
       - id: toolchain
         shell: bash
@@ -188,8 +207,8 @@ jobs:
         run: |
           test "$(go env GOOS)" = "$EXPECTED_GOOS"
           test "$(go env GOARCH)" = "$EXPECTED_GOARCH"
-      - name: Test A2A lifecycle, completion, and version presentation
-        run: go test ./internal/a2adispatch ./internal/buildinfo ./internal/cli ./internal/launcher ./internal/shellcompletion ./cmd/kado -count=1 -timeout=15m
+      - name: Test complete lifecycle, skills, dispatch and Search output
+        run: go test ./internal/a2adispatch ./internal/mcpdispatch ./internal/buildinfo ./internal/cli ./internal/launcher ./internal/releaseclient ./internal/skillclient ./internal/searchoutput ./internal/shellcompletion ./cmd/kado -count=1 -timeout=15m
       - name: Test Windows Job Object
         if: runner.os == 'Windows'
         run: go test ./internal/processtree -count=1
@@ -225,7 +244,7 @@ jobs:
           & $env:KADO_A2A_QUALIFICATION_BINARY release verify --directory (Join-Path $PWD 'release')
           if ($LASTEXITCODE -ne 0) { throw 'candidate verification failed' }
 
-  package-pair-smoke:
+  package-bundle-smoke:
     needs: build-candidate
     strategy:
       fail-fast: false
@@ -319,9 +338,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: kado-a2a-candidate-${{ github.run_id }}
+          name: kado-complete-candidate-${{ github.run_id }}
           path: release
-      - name: Exercise Unix package-owned pair
+      - name: Exercise Unix package-owned bundle
         if: runner.os != 'Windows'
         shell: bash
         env:
@@ -350,6 +369,7 @@ jobs:
             image="kado-package-smoke:${VERSION}-${TARGET_ARCH}"
             docker build --build-arg TARGETARCH="$TARGET_ARCH" -t "$image" "release/packages/container"
             docker run --rm "$image" a2a --output json version >/dev/null
+            docker run --rm "$image" mcp --version --json >/dev/null
           fi
           package_root="$RUNNER_TEMP/Kado package ü/$CHANNEL/$VERSION/libexec"
           public_root="$RUNNER_TEMP/Kado public ü"
@@ -365,6 +385,7 @@ jobs:
           before_kado="$(digest "$package_root/kado")"
           before_a2a="$(digest "$package_root/kado-a2a")"
           "$kado" a2a --output json version >/dev/null
+          "$kado" mcp --help >/dev/null
           if "$kado" update 2>update.err; then exit 1; fi
           grep -F "$UPDATE_COMMAND" update.err
           if "$kado" uninstall --yes --purge-credentials 2>uninstall.err; then exit 1; fi
@@ -376,7 +397,7 @@ jobs:
           if "$kado" a2a --output json version; then exit 1; fi
           mv "$package_root/kado-a2a.good" "$package_root/kado-a2a"
           "$kado" a2a --output json version >/dev/null
-      - name: Exercise Windows package-owned pair
+      - name: Exercise Windows package-owned bundle
         if: runner.os == 'Windows'
         shell: pwsh
         env:
