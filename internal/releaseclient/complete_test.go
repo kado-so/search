@@ -210,6 +210,9 @@ func TestCompleteCandidateVersionIdentity(t *testing.T) {
 }
 
 func TestSignedCompleteExecutableLaunchAndFallback(t *testing.T) {
+	// This test owns short-lived executable trees. Background maintenance has
+	// separate coverage and must not keep these executables open on Windows.
+	t.Setenv("KADO_MAINTENANCE_CHILD", "1")
 	key := ed25519.NewKeyFromSeed(make([]byte, 32))
 	dir, _ := filepath.EvalSymlinks(t.TempDir())
 	path := filepath.Join(dir, executableName(runtime.GOOS))
