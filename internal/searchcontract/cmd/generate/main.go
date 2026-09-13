@@ -19,7 +19,7 @@ import (
 )
 
 var pinnedManifestSHA256 = map[string]string{
-	"v1": "69d1cc179f582e808ef05b7c7b30d0bd3560830edcabc51d34e855e8ac7adda5",
+	"v1": "c1ce9b271cbd8719c7a297b664c1c990a137a203953de8210eee7d24a0e4eeb2",
 	"v2": "5c21171cf31a3a94294784c163e588177c4838a745f0bcb5917f2e7a9735bac0",
 }
 

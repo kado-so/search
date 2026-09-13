@@ -47,7 +47,7 @@ var contractIdentities = map[string]contractIdentity{
 		version: "v1", schemaVersion: SchemaVersionV1,
 		contextURL: ContextURLV1, schemaURL: SchemaURLV1,
 		semanticRules: SemanticRulesV1,
-		manifestHash:  "69d1cc179f582e808ef05b7c7b30d0bd3560830edcabc51d34e855e8ac7adda5",
+		manifestHash:  "c1ce9b271cbd8719c7a297b664c1c990a137a203953de8210eee7d24a0e4eeb2",
 	},
 	SchemaVersionV2: {
 		version: "v2", schemaVersion: SchemaVersionV2,
