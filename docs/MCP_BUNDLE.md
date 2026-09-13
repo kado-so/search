@@ -123,5 +123,15 @@ files as busy; it does not claim success or schedule unchecked deletion.
 
 ## Validation
 
+The generated Linux container image runs Kado under `tini`, which reaps exited
+session processes. The package qualification executes the authenticated MCP
+tutorial in the actual image; version-only smoke checks do not verify session
+cleanup. Headless container credentials require an explicit protected-file store
+or an available Secret Service, as described in the MCP usage guide.
+One-shot containers are suitable for direct URL calls. Named sessions require a
+long-lived container: run subsequent commands in that same container and close
+sessions before stopping it. Persisting a profile volume does not keep a bridge
+process alive after its container exits.
+
 See [G8 validation](../../mcp/docs/G8_VALIDATION.md) for the actual local/native
 evidence and the distinction between completed runs and the pending CI matrix.

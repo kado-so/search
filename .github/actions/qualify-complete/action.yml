@@ -1,0 +1,47 @@
+name: Qualify exact complete candidate
+description: Install the signed native archive and exercise the actual bundled MCP runtime
+inputs:
+  binary:
+    description: Absolute path to the extracted native bootstrap
+    required: true
+  release:
+    description: Absolute directory containing signed release artifacts
+    required: true
+  future:
+    description: Optional signed future candidate for upgrade, repair and rollback
+    required: false
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+        cache: false
+    - name: Prepare Linux Secret Service
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y dbus-x11 gnome-keyring libsecret-1-0
+    - name: Qualify Linux candidate
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        KADO_COMPLETE_CANDIDATE_BINARY: ${{ inputs.binary }}
+        KADO_COMPLETE_CANDIDATE_RELEASE: ${{ inputs.release }}
+        KADO_COMPLETE_CANDIDATE_FUTURE: ${{ inputs.future }}
+      run: |
+        dbus-run-session -- bash -e -c '
+          export XDG_DATA_HOME="$RUNNER_TEMP/kado-candidate-keyring"
+          mkdir -p "$XDG_DATA_HOME"
+          printf "\n" | gnome-keyring-daemon --unlock --components=secrets
+          go test ./internal/releaseclient -run "^TestExactMCPReleaseCandidate$" -v -count=1 -timeout=15m
+        '
+    - name: Qualify Windows or macOS candidate
+      if: runner.os != 'Linux'
+      shell: bash
+      env:
+        KADO_COMPLETE_CANDIDATE_BINARY: ${{ inputs.binary }}
+        KADO_COMPLETE_CANDIDATE_RELEASE: ${{ inputs.release }}
+        KADO_COMPLETE_CANDIDATE_FUTURE: ${{ inputs.future }}
+      run: go test ./internal/releaseclient -run '^TestExactMCPReleaseCandidate$' -v -count=1 -timeout=15m

@@ -94,7 +94,7 @@ func TestPackageDefinitionsPreservePrivateSiblingLayout(t *testing.T) {
 			case installchannel.Container:
 				text := readPackageFixture(t, output, "Dockerfile")
 				if !strings.Contains(text, "ADD kado_1.2.3_linux_${TARGETARCH}.tar.gz /usr/local/libexec/kado/") ||
-					!strings.Contains(text, `ENTRYPOINT ["/usr/local/libexec/kado/kado"]`) ||
+					!strings.Contains(text, `ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/libexec/kado/kado"]`) ||
 					strings.Contains(text, `ENTRYPOINT ["/usr/local/libexec/kado/kado-a2a"]`) {
 					t.Fatalf("container definition is invalid: %s", text)
 				}

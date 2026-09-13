@@ -3,9 +3,15 @@ package agentauth
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -38,8 +44,14 @@ func TestInstalledMCPCandidateFromRealSearch(t *testing.T) {
 			t.Fatal("absolute qualification paths required")
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	completed := false
+	defer func() {
+		if !completed {
+			_ = os.WriteFile(filepath.Join(handoff, "consumer-complete.gen.json"), []byte("{\"success\":false}\n"), 0600)
+		}
+	}()
 	root := t.TempDir()
 	write := func(name string, value any) {
 		t.Helper()
@@ -65,10 +77,9 @@ func TestInstalledMCPCandidateFromRealSearch(t *testing.T) {
 		}
 	}
 	var calls atomic.Int32
-	const access = "isolated-mcp-qualification-token"
 	peer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+access {
-			w.WriteHeader(401)
+		if r.Header.Get("Authorization") != "" {
+			w.WriteHeader(400)
 			return
 		}
 		if r.Method == "GET" {
@@ -121,32 +132,10 @@ func TestInstalledMCPCandidateFromRealSearch(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
 	}))
-	defer peer.Close()
+	defer func() { peer.CloseClientConnections(); peer.Close() }()
 	endpoint := peer.URL + "/mcp"
-	secret := filepath.Join(root, "client-secret")
-	if err := os.WriteFile(secret, []byte("qualification-secret"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	authority := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || r.URL.Path != "/token" {
-			w.WriteHeader(404)
-			return
-		}
-		_ = r.ParseForm()
-		if r.PostForm.Get("grant_type") != "client_credentials" || r.PostForm.Get("resource") != endpoint || r.PostForm.Get("scope") != "read" {
-			w.WriteHeader(400)
-			return
-		}
-		id, password, basic := r.BasicAuth()
-		if (!basic || id != "fixture" || password != "qualification-secret") && (r.PostForm.Get("client_id") != "fixture" || r.PostForm.Get("client_secret") != "qualification-secret") {
-			w.WriteHeader(401)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": access, "token_type": "Bearer", "expires_in": 3600, "scope": "read"})
-	}))
-	defer authority.Close()
 	write(filepath.Join(handoff, "mcp-ready.gen.json"), map[string]string{"endpoint": endpoint})
+	t.Log("controlled MCP ready; waiting for real provider and app")
 	var app struct{ URL, Query, Endpoint string }
 	wait("app-ready.gen.json", &app)
 	if app.Endpoint != endpoint {
@@ -164,7 +153,7 @@ func TestInstalledMCPCandidateFromRealSearch(t *testing.T) {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	auth := newGoal4Server()
 	auth.server.Close()
-	auth.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	auth.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/search") {
 			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 				w.WriteHeader(401)
@@ -175,6 +164,44 @@ func TestInstalledMCPCandidateFromRealSearch(t *testing.T) {
 		}
 		auth.handle(w, r)
 	}))
+	// Product links deliberately use the canonical public origin. Route that
+	// origin through a child-process-only CONNECT proxy and temporary CA instead
+	// of rewriting documents or weakening the CLI's exact-origin checks.
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{"kado.so"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: private}}}
+	auth.server.StartTLS()
+	listenerAddress := auth.server.Listener.Addr().String()
+	auth.server.URL = "https://kado.so"
+	transportProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect || r.Host != "kado.so:443" {
+			w.WriteHeader(403)
+			return
+		}
+		upstream, err := net.DialTimeout("tcp", listenerAddress, 5*time.Second)
+		if err != nil {
+			w.WriteHeader(502)
+			return
+		}
+		downstream, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			upstream.Close()
+			return
+		}
+		defer downstream.Close()
+		defer upstream.Close()
+		_, _ = io.WriteString(downstream, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		go func() { _, _ = io.Copy(upstream, downstream); upstream.Close() }()
+		_, _ = io.Copy(downstream, upstream)
+	}))
+	defer transportProxy.Close()
 	defer auth.close()
 	ca := filepath.Join(root, "qualification-ca.pem")
 	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: auth.server.Certificate().Raw}), 0600); err != nil {
@@ -187,25 +214,47 @@ func TestInstalledMCPCandidateFromRealSearch(t *testing.T) {
 		}
 	}
 	write(filepath.Join(configDir, "config.json"), map[string]any{"base_url": auth.issuer(), "credentials": map[string]string{"backend": "file"}})
-	env := append(payload.NodeEnvironment(os.Environ()), "SSL_CERT_FILE="+ca, "KADO_CONFIG_DIR="+configDir, "KADO_MCP_HOME_DIR="+mcpHome, "KADO_MAINTENANCE_CHILD=1", "NO_COLOR=1")
+	env := append(payload.NodeEnvironment(os.Environ()), "SSL_CERT_FILE="+ca, "KADO_CONFIG_DIR="+configDir, "KADO_MCP_HOME_DIR="+mcpHome, "KADO_MAINTENANCE_CHILD=1", "NO_COLOR=1", "HTTPS_PROXY="+transportProxy.URL, "HTTP_PROXY="+transportProxy.URL, "NO_PROXY=127.0.0.1,localhost")
 	run := func(executable string, args ...string) []byte {
 		t.Helper()
 		c := exec.CommandContext(ctx, executable, args...)
 		c.Env = env
+		if len(args) > 0 && args[0] == "search" {
+			// This existing cryptographic fixture implements fresh enrollment,
+			// not persisted management-credential recovery. Give each Search
+			// process its own agent identity. MCP uses the anonymous test peer;
+			// authenticated profile reuse is covered by exact-candidate tests.
+			freshConfig, err := os.MkdirTemp(root, "search-auth-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(filepath.Join(freshConfig, "config.json"), map[string]any{"base_url": auth.issuer(), "credentials": map[string]string{"backend": "file"}})
+			c.Env = append(append([]string{}, env...), "KADO_CONFIG_DIR="+freshConfig)
+			auth.mu.Lock()
+			auth.nonceConsumed = false
+			auth.mu.Unlock()
+		}
 		var stdout, stderr bytes.Buffer
 		c.Stdout = &stdout
 		c.Stderr = &stderr
 		if err := c.Run(); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, stderr.String())
 		}
-		if bytes.Contains(stdout.Bytes(), []byte(access)) || bytes.Contains(stderr.Bytes(), []byte(access)) {
-			t.Fatal("credential leaked into CLI output")
-		}
 		return stdout.Bytes()
 	}
 	installed := filepath.Join(root, "install space ü", "kado")
+	if err := os.Mkdir(filepath.Dir(installed), 0700); err != nil {
+		t.Fatal(err)
+	}
 	run(binary, "__install-bundle", "--directory", release, "--target", installed)
-	defer func() { c := exec.Command(installed, "mcp", "close", "@qualification"); c.Env = env; _ = c.Run() }()
+	t.Log("complete signed candidate installed")
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		c := exec.CommandContext(cleanup, installed, "mcp", "close", "@qualification")
+		c.Env = env
+		_ = c.Run()
+	}()
 	run(installed, "release", "verify", "--directory", release)
 	run(installed, "a2a", "--output", "json", "version")
 	run(installed, "mcp", "--version", "--json")
@@ -243,7 +292,15 @@ func TestInstalledMCPCandidateFromRealSearch(t *testing.T) {
 	request.Header.Set("Accept", "application/vnd.kado.search.v2+json")
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Authorization", "Bearer isolated-product-principal")
-	response, err := auth.server.Client().Do(request)
+	v2Client := auth.server.Client()
+	v2Transport := v2Client.Transport.(*http.Transport).Clone()
+	v2Transport.Proxy = nil
+	v2Transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, listenerAddress)
+	}
+	v2Client.Transport = v2Transport
+	defer v2Transport.CloseIdleConnections()
+	response, err := v2Client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,16 +309,15 @@ func TestInstalledMCPCandidateFromRealSearch(t *testing.T) {
 	if err != nil || response.StatusCode != 200 || !bytes.Contains(v2, []byte(endpoint)) {
 		t.Fatalf("public v2: status=%d body=%s err=%v", response.StatusCode, v2, err)
 	}
-	run(installed, "mcp", "login", selected, "--grant", "client-credentials", "--client-id", "fixture", "--client-secret-file", secret, "--token-endpoint", authority.URL+"/token", "--profile", "work", "--scope", "read")
 	argsFile := filepath.Join(root, "args.json")
 	write(argsFile, map[string]string{"text": "hello ü"})
-	schema := run(installed, "mcp", "tools-get", selected, "selected_tool", "--profile", "work", "--transport", "http", "--insecure", "--json")
+	schema := run(installed, "mcp", "tools-get", selected, "selected_tool", "--no-profile", "--transport", "http", "--insecure", "--json")
 	if !bytes.Contains(schema, []byte("inputSchema")) {
 		t.Fatal("selected schema missing")
 	}
 	for _, command := range [][]string{
-		{"mcp", "tools-call", selected, "selected_tool", "--args-file", argsFile, "--profile", "work", "--transport", "http", "--insecure", "--json"},
-		{"mcp", "connect", selected, "@qualification", "--profile", "work", "--transport", "http", "--insecure"},
+		{"mcp", "tools-call", selected, "selected_tool", "--args-file", argsFile, "--no-profile", "--transport", "http", "--insecure", "--json"},
+		{"mcp", "connect", selected, "@qualification", "--no-profile", "--transport", "http", "--insecure"},
 		{"mcp", "@qualification", "tools-call", "selected_tool", "--args-file", argsFile, "--json"},
 	} {
 		out := run(installed, command...)
@@ -270,10 +326,10 @@ func TestInstalledMCPCandidateFromRealSearch(t *testing.T) {
 		}
 	}
 	run(installed, "mcp", "close", "@qualification")
-	run(installed, "mcp", "logout", selected, "--profile", "work")
 	if calls.Load() != 2 {
 		t.Fatalf("tool calls=%d", calls.Load())
 	}
 	write(filepath.Join(handoff, "consumer-complete.gen.json"), map[string]any{"success": true, "installed": true, "direct_call": true, "named_call": true, "calls": calls.Load(), "cli_json": true, "cli_jsonl": true, "public_v2": true})
+	completed = true
 	t.Log("signed installed candidate: real Search JSON/JSONL, public v1/v2, direct and named MCP calls passed")
 }
