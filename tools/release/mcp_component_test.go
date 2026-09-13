@@ -102,7 +102,12 @@ func TestCompleteReleaseTargetAndSupplyChain(t *testing.T) {
 	target := buildTarget{goos: runtime.GOOS, goarch: runtime.GOARCH}
 	componentDir, digest, c := releaseComponentFixture(t, target)
 	prebuilt := t.TempDir()
-	mcp := t.TempDir()
+	// macOS temporary directories can have symlinked ancestors. Keep the moved
+	// fixture canonical, as required by the component verifier.
+	mcp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Rename(componentDir, filepath.Join(mcp, target.goos+"-"+target.goarch)); err != nil {
 		t.Fatal(err)
 	}
