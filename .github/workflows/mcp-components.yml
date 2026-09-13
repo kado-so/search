@@ -58,6 +58,8 @@ jobs:
         with:
           repository: kado-so/mcp
           ref: ${{ needs.source.outputs.commit }}
+          # Source verification requires the upstream commit and annotated tag.
+          fetch-depth: 0
           token: ${{ secrets.KADO_MCP_READ_TOKEN }}
           persist-credentials: false
           path: mcp
