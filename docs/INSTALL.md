@@ -103,7 +103,8 @@ provider login, direct URL reuse, named sessions and cleanup.
 
 ## Package-manager distribution
 
-Release builds also produce channel-stamped complete bundles and package
+Package-manager publication and its channel-specific qualification are deferred.
+The tooling can produce channel-stamped complete bundles and package
 definitions for Homebrew, WinGet, Scoop, Debian, RPM, and containers. Each
 manager keeps the complete signed payload together in one owned
 directory. Homebrew and Linux packages expose only a public Kado symlink;
@@ -151,3 +152,13 @@ claude plugin update kado-search@kado
 
 These are secondary distribution paths. Their lifecycle remains owned by the
 selected external manager rather than by `kado skill update`.
+
+## Native release baseline
+
+The MCP-capable release retains Kado's existing native release-test platforms:
+Ubuntu 24.04 and macOS 15 on amd64 and arm64; Windows Server 2025 on amd64 and
+Windows 11 on arm64. Windows 11 amd64 is also exercised locally. Node/npm is
+bundled privately and is not an installation prerequisite. Older OS releases
+and musl/Alpine are not claimed by this qualification; upstream Node minimums
+alone do not establish support. Apple signing/notarization and Windows
+Authenticode are deferred; Kado retains its Ed25519 release verification.

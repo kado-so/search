@@ -1,198 +1,147 @@
-# Kado CLI Release Boundary
+# Kado CLI release
 
-The search repository owns CLI release construction and publication. Release
-operators provide the exact semantic version; repository, executable, and
-install URL are fixed in `tools/release`.
+Search owns the public CLI, complete-bundle signing, installers and publication.
+MCP owns its maintained runtime component; it is not published to npm separately.
+The current release scope is direct installation from GitHub and `kado.so` on
+Linux, macOS and Windows, each on amd64 and arm64. Homebrew, Scoop, WinGet,
+deb/rpm and container releases and their channel-specific jobs are deferred.
+Their build support remains available for a later approved release.
 
-## Supported targets
+## Reviewed inputs and versions
 
-Every release contains direct versioned binaries, versioned archives, an SPDX
-2.3 SBOM per target, and one SLSA v1/in-toto provenance statement for:
+The proposed first stable MCP-capable CLI is **0.2.0**, with MCP component
+**0.1.0** and private Node **24.20.0**. These are release choices, not published
+versions. See [release readiness](MCP_RELEASE_READINESS.md) for remaining gates.
 
-- `linux/amd64`
-- `linux/arm64`
-- `darwin/amd64`
-- `darwin/arm64`
-- `windows/amd64`
-- `windows/arm64`
+1. Review and squash-merge the MCP version/qualification changes first.
+2. Set `third_party/mcp/source.lock.json` to that exact merged commit, version,
+   dependency-lock SHA-256 and Node pin. Never use a branch, an uncommitted source
+   identity, or a guessed future commit. The component builder requires a clean
+   committed checkout; `scripts/verify-mcp-source.mjs` checks the complete lock.
+3. Keep the official A2A source pinned by `third_party/a2a-cli/upstream.lock.json`.
+4. Review and squash-merge Search, qualify its exact merged source, and only then
+   approve a release tag. A source commit/push is separate from publication.
 
-Unix archives are `tar.gz` files. Windows archives are ZIP files. Each archive
-contains exactly five root entries: `kado[.exe]`, `kado-a2a[.exe]`, `LICENSE`,
-`LICENSE-A2A-CLI`, and `INSTALL-CLI.md`. Executables use mode `0755`; support
-files use `0644`; timestamps and entry order are deterministic.
+The MCP checkout uses frozen pnpm dependencies and the pinned Node version.
+`scripts/packaging/build.mjs` in MCP emits a native component with
+`--release-component`; qualification-only peers are excluded. The reusable
+`mcp-components.yml` builds and exercises six native targets using the narrowly
+scoped `KADO_MCP_READ_TOKEN`. It uploads component archives and independent
+manifest digests. Search's `tools/mcp-components` verifies and assembles them:
 
-The release workflow also builds every package identity: `homebrew`, `winget`,
-`scoop`, `deb`, `rpm`, and `container`. Homebrew receives both architectures
-for macOS and Linux; WinGet and Scoop receive both Windows architectures; and
-deb, rpm, and containers receive both Linux architectures. Package artifacts
-live under `packages/<channel>/`. They deliberately do not reuse the direct
-updater's six-target metadata contract. Instead, each compact package directory
-contains only its supported paired archives, an Ed25519-signed checksum list,
-the release public key, and the manager-native definition generated from the
-exact archive URLs and hashes: `kado.rb`, `kado.json`, a clean three-file
-WinGet `manifests/` directory, a Debian builder, RPM specs, or a container
-Dockerfile. Each Kado executable is stamped with that closed channel while
-retaining the exact sibling size and SHA-256.
-
-## Signing boundary
-
-Release metadata uses a detached Ed25519 signature. The production signing seed
-exists only in the protected release environment as
-`KADO_RELEASE_SIGNING_KEY`, encoded as one base64 32-byte seed. The builder
-reads it from the process environment, never accepts it as an argument, and
-never prints it. No private or test signing key is stored in this repository.
-
-The corresponding public key and its SHA-256 key ID are non-secret. The builder
-stamps them into every executable and writes `release-public-key.pem` for
-independent verification. In-band signing-key rotation is deliberately
-unsupported in release protocol v2: an installed binary accepts only metadata
-signed by its embedded key. The metadata carries that key's ID, and the
-replacement executable must carry a public key with the same derived ID.
-Rotating the release key therefore
-requires an out-of-band reinstall from the reviewed official
-`https://kado.so/install` boundary. Existing binaries cannot self-update
-across a key rotation, even when a release is signed by the old key.
-
-Local dry runs use an ephemeral key. A production release must use the
-protected production seed and must not reuse a dry-run key.
-
-## Local dry run
-
-Use the Go version pinned by the `toolchain` directive in `go.mod`. Provide a
-Git checkout of the official A2A CLI containing the commit in
-`third_party/a2a-cli/upstream.lock.json`. The release tool verifies the origin,
-commit or tag, source/tree/patch checksums, license, module checksums, and shared
-toolchain. It then builds each A2A executable first, hashes it, builds matching
-Kado with that identity stamped in, and signs the combined release:
-
-```bash
-release_seed_file="$(mktemp "${TMPDIR:-/tmp}/kado-release-seed.XXXXXX")"
-openssl rand -base64 32 >"$release_seed_file"
-chmod 600 "$release_seed_file"
-export KADO_RELEASE_SIGNING_KEY="$(tr -d '\n' <"$release_seed_file")"
-go run ./tools/release \
-  --version 0.1.0 \
-  --commit 0123456789abcdef0123456789abcdef01234567 \
-  --source-date-epoch 1784851200 \
-  --a2a-source /absolute/path/to/a2a-cli \
-  --out dist/release
+```text
+go run ./tools/mcp-components --input mcp-inputs --out mcp-components
 ```
 
-To reproduce one package-owned candidate, add a closed channel and use an
-isolated output directory:
+For a local dry run, provide an ephemeral Ed25519 seed through
+`KADO_RELEASE_SIGNING_KEY` in the process environment. Do not pass a secret on
+the command line or use the production key locally. Supply actual reviewed
+commits and absolute input paths in the following command (one line on any OS):
 
-```bash
-go run ./tools/release \
-  --version 0.1.0 \
-  --commit 0123456789abcdef0123456789abcdef01234567 \
-  --source-date-epoch 1784851200 \
-  --a2a-source /absolute/path/to/a2a-cli \
-  --install-channel homebrew \
-  --out dist/release/packages/homebrew
+```text
+go run ./tools/release --version 0.2.0 --commit <search-commit> --source-date-epoch <commit-epoch> --a2a-source <official-checkout> --mcp-components <component-directory> --mcp-commit <mcp-commit> --mcp-digests <component-directory>/digests.gen.json --out <new-release-directory>
 ```
 
-Delete the temporary seed and dry-run directories after verification. The
-builder requires absent or empty output directories and installs its complete
-output directory with one rename, so a partial build never looks complete.
+The output must be absent or empty. The builder stages the complete output and
+publishes the local directory with one rename; it does not upload anything.
+A test-signed candidate is qualification evidence, never a public release.
 
-## Release contents and verification
+## Complete bundle and signatures
 
-`release-metadata.json` is canonical JSON and binds:
+`kado.release.v3` authenticates six native archives, their manifest descriptors,
+A2A identity, MCP commit/version/lock, per-target Node archive identity, SPDX
+SBOMs and SLSA-shaped provenance (without claiming a SLSA level).
+`kado.payload.v1` inventories the complete tree, including Kado, official A2A,
+private Node, MCP code, native session host, addon, dependencies and licenses.
+Unix archives use tar.gz; Windows uses ZIP. They are not five-file A2A pairs.
+`kado.version.v2` reports the matching component identities.
+See [the bundle contract](MCP_BUNDLE.md) for exact roles, limits and validation.
 
-- version, source commit, UTC build time, and signing-key identity;
-- exact A2A repository/module, tag or snapshot version, commit, source archive,
-  source tree, patched tree, module files, license, toolchain, display patch,
-  and build time;
-- each platform archive and SPDX 2.3 SBOM by URL, size, and SHA-256;
-- each embedded A2A executable by exact size and SHA-256; and
-- the SLSA v1-shaped in-toto provenance descriptor without claiming a SLSA
-  level.
+The protected `cli-release` environment supplies `KADO_RELEASE_SIGNING_KEY`
+(base64 32-byte Ed25519 seed). The public key is embedded into the binaries;
+only metadata signed by that embedded key is accepted. Key rotation requires
+an out-of-band reviewed reinstall. Never print, persist or reuse the production
+seed for local qualification.
 
-`release-metadata.json.sig` authenticates those exact bytes. The archive digest
-authenticates both executables and all three support files as one unit. Signed
-SBOM and provenance descriptors authenticate the standalone supply-chain
-documents. Direct Kado binaries, `checksums.txt`, the install guide, and
-platform install/uninstall scripts remain standalone operator artifacts.
+The user deferred Apple Developer ID/notarization and Windows Authenticode on
+2026-09-14. Retain Kado's existing Ed25519 release-verification approach, extended
+to authenticate the complete MCP bundle. Neither platform-signing setup nor
+notarization is a release prerequisite for this scope. Do not add certificate
+provisioning, platform-signing transformations or security-setting changes.
+Preserve the original vendor-signed Node bytes and its keychain identity.
 
-The generated `INSTALL-CLI.md`, `install.sh`, and `install.ps1` implement the
-agent-first bootstrap from canonical `kado.so` HTTPS endpoints. For a new
-installation they select the host target, download stable signed metadata and
-the immutable versioned archive, run verification through the candidate, and
-install the sidecar first and expose Kado last in a user-owned directory. When
-a current paired Kado installation already occupies the expected destination,
-they invoke its signed updater. A failed legacy update reports the required
-one-time uninstall/reinstall migration. Both successful paths configure user
-PATH when needed, reconcile the signed skill catalog across detected
-harnesses and `~/.agents/skills`, and create or reuse and verify authentication.
-`kado update` verifies the signed archive descriptor, safely extracts the
-candidate, and checks its stamped release identity. A current direct
-installation activates complete pairs from immutable version directories
-without replacing the stable launcher.
+Cin already has working macOS signing/notarization infrastructure, available as
+a reference for a future separately approved change. Its credentials are not
+needed or copied for this release. If platform signing is added later, perform
+it before calculating final payload hashes and release signatures.
 
-## Runtime update and removal policy
+## Native qualification
 
-`kado update` fetches only canonical same-origin HTTPS metadata, its detached
-signature, and the selected platform archive. It rejects redirects, oversized
-responses, unsupported targets, bad signatures, archive digest mismatches,
-unsafe archive paths/types/modes, and mismatched candidate identity before
-activation. Downgrades fail unless `--allow-downgrade` is explicit. `--dry-run`
-performs all verification without changing files. One OS-backed lock serializes
-the complete transaction. Both executables are finalized and revalidated in a
-new version directory before an activation-v2 record publishes their exact
-paths, sizes, and hashes. Previous complete activations remain available for
-fallback.
+CI builds a complete candidate plus a future-version candidate using a public
+test key. `.github/actions/qualify-complete` installs the exact native archive,
+exercises the MCP tutorial, keyring and offline four-skill catalog, then tests
+upgrade, repair, denied implicit downgrade, explicit rollback and uninstall.
+The release workflow requalifies the exact production-signed candidate before
+publication. Earlier CI results do not qualify changed signed bytes.
 
-Pre-A2A direct installations require the documented one-time signed
-uninstall/reinstall migration. Their old `kado update` is not a supported path
-across the bundle boundary.
+Retain the existing Kado native release-test baseline documented in INSTALL.md.
+Older OS versions are not part of this release support claim. Public-install
+checks should record OS prompts under the existing unsigned Kado distribution
+policy; platform signing is explicitly deferred.
+Current evidence and the pinned upstream runtime floors are listed in
+[MCP release readiness](MCP_RELEASE_READINESS.md).
 
-`kado uninstall --yes` removes both executables and managed activation state
-while preserving configuration and autonomous-agent credentials.
-`--purge-credentials` first performs the
-existing authenticated revocation; if revocation fails, the executable remains.
-The generated uninstall scripts provide the same policy and are the preferred
-removal path on Windows, where a running executable can be locked.
+Direct installation selects a host archive and verifies its signed metadata,
+bytes and stamped identity. It stages an immutable complete tree and exposes
+the stable launcher last. Future updates select whole units through
+`activations-v3`; credentials and active-session payloads remain protected.
+`kado update --allow-downgrade` is required for rollback within this format.
+Fresh installs are the approved baseline. Pair-only release/activation-v2
+installations have no automatic migration across this bundle boundary.
 
-For a package-owned build, both lifecycle commands refuse before any release
-or credential mutation and print the owning manager command. A package must
-install the two real files together in its private directory and expose only
-Kado where the manager supports a private sidecar. The release matrix invokes
-every native target through its link or junction, verifies delegation, checks
-the refusal text and unchanged hashes, rejects a tampered sidecar, restores it,
-and proves delegation recovers.
+`kado uninstall --yes` removes managed executables and activations while
+preserving credentials. `--purge-credentials` requires authenticated revocation;
+a failure retains the installation. MCP profiles follow the documented
+credential policy. On Windows, use the generated external uninstall script to
+remove a running launcher. Skill removal is a separate operation.
 
-The CLI release also owns version-compatible embedded copies of the Kado
-skills. Installing, refreshing, or removing those copies is a distinct local
-operation from credential revocation. A CLI update refreshes the bundled source
-and may sync installations previously managed by Kado; it must not overwrite a
-skill managed by another package manager.
+## Publication and recovery
 
-## Publication boundary
+**A pushed `v*.*.*` tag starts publication. Do not push one before explicit
+publication approval and closure of the remaining release gates.**
+`.github/workflows/release.yml` verifies that the tag commit belongs to `main`,
+builds from locked sources, uses protected signing, and runs native tests.
+Its publisher logs into Azure using GitHub OIDC, uploads and verifies immutable
+objects, creates the GitHub Release, then promotes CLI and skill channels.
+It is not an independently configured external publisher.
 
-The release builder creates and verifies release directories but does not
-upload or publish them. External publication is a separate operator action
-after review of:
-
-1. detached signature verification;
-2. checksums, SBOMs, and provenance;
-3. clean install, update, downgrade-policy, rollback, and uninstall tests; and
-4. native Linux and Windows verification.
-
-The protected GitHub workflow publishes the canonical build as one GitHub
-Release. A separate publisher, configured independently from this repository,
-must copy those exact release assets to `kado.so` using this mapping:
-
-| Release artifact | Public location |
+| Artifact | Public path |
 | --- | --- |
-| every immutable artifact | `/install/releases/<cli-version>/<name>` |
-| `install.sh` | `/install.sh` |
-| `install.ps1` | `/install.ps1` |
-| `release-metadata.json` | `/install/releases/stable/release-metadata.json` |
-| `release-metadata.json.sig` | `/install/releases/stable/release-metadata.json.sig` |
-| skill archives | `/install/skills/<name>/<variant>/<version>/<name>.tar.gz` |
-| skill metadata and signature | `/install/skills/<name>/<variant>/<version>/metadata.json[.sig]` |
-| catalog and signature | `/install/skills/latest/catalog.json[.sig]` |
+| Immutable CLI artifacts | `/install/releases/<version>/<name>` |
+| Install/uninstall shell and PowerShell scripts | `/install.sh`, `/install.ps1`, `/uninstall.sh`, `/uninstall.ps1` |
+| Stable metadata and signature | `/install/releases/stable/release-metadata.json[.sig]` |
+| Immutable skill artifacts | `/install/skills/<name>/<variant>/<version>/...` |
+| Immutable catalog revision | `/install/skills/catalogs/<revision>/catalog.json[.sig]` |
+| Latest catalog and signature | `/install/skills/latest/catalog.json[.sig]` |
 
-The publisher uploads and verifies immutable CLI and skill objects first. It
-then promotes stable CLI metadata and the latest signed skill catalog. Existing
-immutable skill versions are accepted only when their bytes match exactly.
+Before promotion, retain the previous channel objects, signatures, content types,
+cache-control values and hashes in protected operational storage. Preserve the
+previous GitHub release and immutable blobs. Verify the signing public key and
+new catalog compatibility before uploading; never overwrite a version with
+different bytes. `scripts/publish-azure-assets.sh` rejects immutable collisions.
+
+Promotion updates multiple objects and is not a single atomic transaction.
+If a response is lost, inspect actual Azure/GitHub state before retrying. On
+failure restore the captured channel objects as a coherent previous set and
+verify their public hashes. Keep newly uploaded immutable artifacts for audit.
+If the previous release is pair-only, restoring the channel stops new installs;
+it does not downgrade existing complete-format installs. Use an authenticated
+complete-format rollback or forward fix for those clients.
+
+Verify public URLs after promotion, including intermediary caches, instead of
+assuming an upload invalidated them. Immutable objects use long-lived caching;
+channel objects use `no-cache,must-revalidate`. Install from the public URL on
+all three OS families and both architectures; verify help/version, all four
+skills, OAuth and production Search-to-MCP direct/named invocation and cleanup.
+No package-manager repository PRs or distribution promotion are part of this
+release scope.
