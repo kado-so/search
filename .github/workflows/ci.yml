@@ -36,6 +36,8 @@ jobs:
           go-version: ${{ steps.toolchain.outputs.version }}
       - run: go test ./...
       - run: go vet ./...
+      - name: Test publication rollback snapshot guards
+        run: bash scripts/test/snapshot-azure-channels.sh
       - name: Check formatting and generated files
         run: |
           test -z "$(gofmt -l .)"

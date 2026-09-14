@@ -1,7 +1,7 @@
 {
   "schema_version": "kado.mcp-source-lock.v1",
   "repository": "kado-so/mcp",
-  "commit": "1b741742e3d9f2f883ff971df9f0fad806618150",
+  "commit": "77c43f69bd97a33b5d8c7e8f5a49bafc2e942891",
   "version": "0.1.0",
   "lock_sha256": "d2dceb5b0a97a0ed1dfed7fb95b03d07c5e53b7c8645fd9ba956a29eb0aa344f",
   "node_version": "24.20.0"

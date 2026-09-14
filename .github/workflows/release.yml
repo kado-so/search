@@ -207,6 +207,15 @@ jobs:
           client-id: ${{ vars.AZURE_RELEASE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Capture previous public channels for rollback
+        run: bash ./scripts/snapshot-azure-channels.sh rollback-snapshot
+      - name: Retain rollback snapshot before publication
+        uses: actions/upload-artifact@v7
+        with:
+          name: kado-channel-rollback-${{ needs.build.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: rollback-snapshot/
+          if-no-files-found: error
+          retention-days: 90
       - name: Upload and verify immutable Blob artifacts
         run: ./scripts/publish-azure-assets.sh upload release
       - name: Publish GitHub Release

@@ -124,16 +124,23 @@ It is not an independently configured external publisher.
 | Immutable catalog revision | `/install/skills/catalogs/<revision>/catalog.json[.sig]` |
 | Latest catalog and signature | `/install/skills/latest/catalog.json[.sig]` |
 
-Before promotion, retain the previous channel objects, signatures, content types,
-cache-control values and hashes in protected operational storage. Preserve the
+The publish job runs `scripts/snapshot-azure-channels.sh` using its existing
+Azure identity before its first upload. Conditional downloads and a final ETag
+recheck capture all eight previous channel objects, signatures, content settings
+and hashes. A complete snapshot is retained as a 90-day workflow artifact before
+publication can proceed. A failed capture or artifact upload stops publication.
+Keep an operational copy beyond artifact expiry when rollback retention requires it. Preserve the
 previous GitHub release and immutable blobs. Verify the signing public key and
 new catalog compatibility before uploading; never overwrite a version with
 different bytes. `scripts/publish-azure-assets.sh` rejects immutable collisions.
 
 Promotion updates multiple objects and is not a single atomic transaction.
 If a response is lost, inspect actual Azure/GitHub state before retrying. On
-failure restore the captured channel objects as a coherent previous set and
-verify their public hashes. Keep newly uploaded immutable artifacts for audit.
+failure download the matching `kado-channel-rollback-<version>-<run>-<attempt>`
+artifact, require `snapshot.gen.json` status `complete`, and run
+`sha256sum --check checksums.txt`. Using the release Azure identity, restore the
+eight objects to their original names with their captured content settings.
+Restore them as a coherent previous set and verify their public hashes. Keep newly uploaded immutable artifacts for audit.
 If the previous release is pair-only, restoring the channel stops new installs;
 it does not downgrade existing complete-format installs. Use an authenticated
 complete-format rollback or forward fix for those clients.

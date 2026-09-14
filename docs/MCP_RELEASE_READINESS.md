@@ -14,12 +14,12 @@ historical, not evidence for changed final bytes.
 | Node | Preserve pinned vendor 24.20.0 and the frozen dependency graph. |
 | A2A | Preserve fdbb3aad6289c0070480147a29e04c3d46aa6c2f. |
 | Search base | main f4c97c2465fd4fbdd9eaf75951d55d61d8cdef4c. |
-| MCP source | main 1b741742e3d9f2f883ff971df9f0fad806618150 (squash merge of PR 2). |
+| MCP source | main 77c43f69bd97a33b5d8c7e8f5a49bafc2e942891 (squash merges of PRs 2 and 3). |
 | Work branches | ayush/f/mcp-direct-release in Search, MCP and search-pipeline. |
-| Exact component pin | `third_party/mcp/source.lock.json` pins MCP 0.1.0 at 1b741742e3d9f2f883ff971df9f0fad806618150, with the frozen dependency-lock digest and Node pin. |
+| Exact component pin | `third_party/mcp/source.lock.json` pins MCP 0.1.0 at 77c43f69bd97a33b5d8c7e8f5a49bafc2e942891, with the frozen dependency-lock digest and Node pin. |
 | Distribution | Direct archives, GitHub release, kado.so installers and four-skill catalog. Homebrew, Scoop, WinGet, deb/rpm and container publishing/qualification deferred. |
 
-MCP PR 2 is squash-merged and pinned. Merge Search after its required checks,
+MCP PRs 2 and 3 are squash-merged and pinned. Merge Search after its required checks,
 then the pipeline readiness-document PR; use squash merges throughout. Pipeline needs documentation only, and kado-app needs no additional
 runtime release. The final Search commit and component digest index must be
 recorded before signing the public candidate. No guessed or dirty source pin.
@@ -49,6 +49,11 @@ read-only payload operation. Its sanitized evidence is retained in MCP's ignored
 `.kado-dev/direct-release-review-summary.gen.json`. First full verification took
 34.3 seconds; three later fresh-process calls took 1.10–1.21 seconds. These are
 local measurements, not a performance guarantee or final signed release proof.
+
+The first PR run exposed macOS tar member-name normalization in the newly
+enabled archive test. MCP PR 3 fixes the test by extracting normally and
+checking the normalized filename and exact contents; production archive bytes
+are unchanged. The corrected commit is pinned for the final native rerun.
 
 The CI and release workflows retain direct six-target construction and native
 qualification, and omit package-channel build/qualification jobs. Ordinary tests
@@ -119,7 +124,12 @@ SHA-256 values and content types in `snapshot.gen.json`. It confirms CLI 0.1.22
 and catalog revision 4. One initial Python download returned 403; all eight
 canonical URLs then downloaded successfully using the documented curl client.
 This is preparation evidence, not the promotion-time Azure rollback snapshot;
-refresh it at the publication boundary and preserve Azure object metadata too.
+The release workflow now captures an ETag-consistent Azure snapshot and uploads
+it as a 90-day rollback artifact before any publication writes. The local
+identity cannot read release blobs directly; the workflow uses the existing
+release OIDC identity. Controlled snapshot checks passed for all eight objects,
+hashes, existing-directory refusal, failed conditional downloads and changes
+during capture. Actual Azure capture will run in the approved release job.
 
 Before publication: finish the source freeze, final native qualification and
 review the signed candidate; capture channel rollback objects; obtain explicit
