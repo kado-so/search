@@ -233,6 +233,32 @@ func TestEmbeddedInstallTracksOwnershipAndProtectsModifications(t *testing.T) {
 	}
 }
 
+func TestEmbeddedSkillFloorIncludesPrereleaseOrdering(t *testing.T) {
+	t.Parallel()
+	for _, version := range []string{"0.2.0-ci.1", "0.2.0", "0.2.1-ci.1", "0.2.2-ci.1"} {
+		t.Run(version, func(t *testing.T) {
+			root := t.TempDir()
+			manager := Manager{ConfigDir: filepath.Join(root, "config"), HomeDir: filepath.Join(root, "home"), CurrentVersion: version}
+			result, err := manager.Install(context.Background(), InstallOptions{Agents: []string{"agents"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"kado-search", "kado-cli-non-search", "kado-a2a", "kado-mcp"} {
+				path := filepath.Join(root, "home", ".agents", "skills", name, "SKILL.md")
+				_, err := os.Stat(path)
+				blocked := version == "0.2.0-ci.1" && name != "kado-a2a"
+				if blocked {
+					if !os.IsNotExist(err) || result.Failures[filepath.Dir(path)] == "" {
+						t.Fatalf("%s bypassed its stable minimum: %v, %#v", name, err, result)
+					}
+				} else if err != nil || result.Failures[filepath.Dir(path)] != "" {
+					t.Fatalf("%s did not install with %s: %v, %#v", name, version, err, result)
+				}
+			}
+		})
+	}
+}
+
 func installationForAgent(t *testing.T, values []Installation, agent string) Installation {
 	t.Helper()
 	for _, value := range values {

@@ -75,7 +75,8 @@ jobs:
       - id: identity
         shell: bash
         run: |
-          version="0.2.0-ci.${GITHUB_RUN_ID}"
+          # A prerelease of 0.2.0 is below the bundled skills' stable 0.2.0 floor.
+          version="0.2.1-ci.${GITHUB_RUN_ID}"
           commit="$(git rev-parse HEAD)"
           epoch="$(git show -s --format=%ct HEAD)"
           echo "version=$version" >>"$GITHUB_OUTPUT"
@@ -124,7 +125,7 @@ jobs:
           KADO_RELEASE_SIGNING_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
         run: |
           go run ./tools/release \
-            --version "0.2.1-ci.${GITHUB_RUN_ID}" \
+            --version "0.2.2-ci.${GITHUB_RUN_ID}" \
             --commit "${{ steps.identity.outputs.commit }}" \
             --source-date-epoch "${{ steps.identity.outputs.epoch }}" \
             --a2a-source "${{ steps.a2a.outputs.checkout }}" \
