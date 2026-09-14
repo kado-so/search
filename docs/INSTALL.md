@@ -53,7 +53,7 @@ does not introduce a migration from pre-MCP installations.
 The target user locations are:
 
 - macOS and Linux: `$HOME/.local/bin/kado`
-- Windows: `%LOCALAPPDATA%\Kado\kado.exe`
+- Windows: `%USERPROFILE%\.local\bin\kado.exe`
 
 The installation flow must explain how to add that directory to `PATH` when it
 is not already present. It must remain non-interactive when the agent supplies
