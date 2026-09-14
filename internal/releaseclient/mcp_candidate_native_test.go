@@ -158,10 +158,10 @@ func TestExactMCPReleaseCandidate(t *testing.T) {
 	defer unavailableCatalog.Close()
 	beforeSkills := env
 	env = append(append([]string{}, env...), "HOME="+home, "USERPROFILE="+home, "KADO_CONFIG_DIR="+filepath.Join(root, "skill-config"), "HTTPS_PROXY="+unavailableCatalog.URL, "HTTP_PROXY="+unavailableCatalog.URL, "NO_PROXY=")
-	require(kado, "skill", "install", "--agent", "codex")
+	skillOutput := require(kado, "skill", "install", "--agent", "codex")
 	for _, name := range []string{"kado-search", "kado-cli-non-search", "kado-a2a", "kado-mcp"} {
 		if data, err := os.ReadFile(filepath.Join(home, ".agents", "skills", name, "SKILL.md")); err != nil || len(data) == 0 {
-			t.Fatalf("embedded %s skill not installed: %v", name, err)
+			t.Fatalf("embedded %s skill not installed: %v\n%s", name, err, skillOutput)
 		}
 	}
 	require(kado, "skill", "uninstall", "--all")
