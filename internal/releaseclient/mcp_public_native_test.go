@@ -104,7 +104,13 @@ func TestPublicMCPCompleteBundle(t *testing.T) {
 	}
 	run := func(executable, input string, args ...string) result {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		timeout := 90 * time.Second
+		if len(args) > 0 && args[0] == "__install-bundle" {
+			// Match exact-candidate qualification: extracting and verifying the
+			// complete runtime takes longer on native Windows runners.
+			timeout = 3 * time.Minute
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		c := exec.CommandContext(ctx, executable, args...)
 		c.Env = env
@@ -112,6 +118,9 @@ func TestPublicMCPCompleteBundle(t *testing.T) {
 		var out, errors bytes.Buffer
 		c.Stdout, c.Stderr = &out, &errors
 		err := c.Run()
+		if ctx.Err() != nil {
+			t.Fatalf("command %q exceeded %s: %v", args, timeout, ctx.Err())
+		}
 		code := 0
 		if err != nil {
 			if e, ok := err.(*exec.ExitError); ok {

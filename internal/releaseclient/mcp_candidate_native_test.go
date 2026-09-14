@@ -53,7 +53,12 @@ func TestExactMCPReleaseCandidate(t *testing.T) {
 	if !ok {
 		t.Fatal("unexpected verifier key type")
 	}
-	root := t.TempDir()
+	// Match the installer's canonical-path requirement: macOS temp roots use
+	// /var symlinks and Windows runners may supply an 8.3 username in TEMP.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	install := filepath.Join(root, "install space ü")
 	if err := os.Mkdir(install, 0700); err != nil {
 		t.Fatal(err)
