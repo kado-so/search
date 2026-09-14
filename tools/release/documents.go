@@ -207,7 +207,7 @@ fi
 
 func installPowerShellScript(source releaseIdentity, keyID string) string {
 	return fmt.Sprintf(`param(
-  [string]$InstallDirectory = $(if ($env:KADO_INSTALL_DIR) { $env:KADO_INSTALL_DIR } else { "$env:LOCALAPPDATA\Kado" }),
+  [string]$InstallDirectory = $(if ($env:KADO_INSTALL_DIR) { $env:KADO_INSTALL_DIR } else { "$env:USERPROFILE\.local\bin" }),
   [switch]$NoModifyPath
 )
 $ErrorActionPreference = "Stop"
@@ -288,7 +288,7 @@ func uninstallPowerShellScript() string {
 param(
   [switch]$Yes,
   [switch]$PurgeCredentials,
-  [string]$Destination = "$env:LOCALAPPDATA\Kado\kado.exe"
+  [string]$Destination = "$env:USERPROFILE\.local\bin\kado.exe"
 )
 $ErrorActionPreference = "Stop"
 if (-not $Yes) { throw "refusing to uninstall without -Yes" }

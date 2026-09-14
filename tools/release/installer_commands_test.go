@@ -46,9 +46,19 @@ func main() {
 }
 
 func TestGeneratedInstallerDelegatesCompleteBundleAndFinishesSetup(t *testing.T) {
+	t.Run("explicit-directory", func(t *testing.T) { testGeneratedInstaller(t, false) })
+	if runtime.GOOS == "windows" {
+		t.Run("default-directory", func(t *testing.T) { testGeneratedInstaller(t, true) })
+	}
+}
+
+func testGeneratedInstaller(t *testing.T, useDefault bool) {
 	root := t.TempDir()
 	fixture := filepath.Join(root, "download")
 	destination := filepath.Join(root, "install space")
+	if useDefault {
+		destination = filepath.Join(root, "profile space", ".local", "bin")
+	}
 	if err := os.Mkdir(fixture, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +80,11 @@ func TestGeneratedInstallerDelegatesCompleteBundleAndFinishesSetup(t *testing.T)
 		if err := os.WriteFile(script, []byte(installPowerShellScript(releaseIdentity{InstallURL: "https://fixture.invalid"}, "unused")), 0600); err != nil {
 			t.Fatal(err)
 		}
-		c = exec.Command("powershell.exe", "-NoProfile", "-Command", `function Invoke-WebRequest {param([switch]$UseBasicParsing,[string]$Uri,[string]$OutFile); Copy-Item -LiteralPath (Join-Path $env:KADO_INSTALL_FIXTURE ([IO.Path]::GetFileName(([uri]$Uri).AbsolutePath))) -Destination $OutFile}; & $env:KADO_INSTALL_SCRIPT -InstallDirectory $env:KADO_INSTALL_DIR -NoModifyPath`)
+		arguments := " -InstallDirectory $env:KADO_INSTALL_DIR -NoModifyPath"
+		if useDefault {
+			arguments = " -NoModifyPath"
+		}
+		c = exec.Command("powershell.exe", "-NoProfile", "-Command", `function Invoke-WebRequest {param([switch]$UseBasicParsing,[string]$Uri,[string]$OutFile); Copy-Item -LiteralPath (Join-Path $env:KADO_INSTALL_FIXTURE ([IO.Path]::GetFileName(([uri]$Uri).AbsolutePath))) -Destination $OutFile}; & $env:KADO_INSTALL_SCRIPT`+arguments)
 		c.Env = append(os.Environ(), "KADO_INSTALL_SCRIPT="+script)
 	} else {
 		tools := filepath.Join(root, "tools")
@@ -81,6 +95,9 @@ func TestGeneratedInstallerDelegatesCompleteBundleAndFinishesSetup(t *testing.T)
 		c.Env = append(os.Environ(), "PATH="+tools+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
 	c.Env = append(c.Env, "KADO_INSTALL_FIXTURE="+fixture, "KADO_INSTALL_DIR="+destination, "KADO_NO_MODIFY_PATH=1", "KADO_TEST_LOG="+log)
+	if useDefault {
+		c.Env = append(c.Env, "KADO_INSTALL_DIR=", "USERPROFILE="+filepath.Join(root, "profile space"), "LOCALAPPDATA="+filepath.Join(root, "redirected-appdata"))
+	}
 	if out, err := c.CombinedOutput(); err != nil {
 		t.Fatalf("installer: %v %s", err, out)
 	}
@@ -104,6 +121,13 @@ func TestGeneratedInstallerDelegatesCompleteBundleAndFinishesSetup(t *testing.T)
 }
 
 func TestGeneratedUninstallerDelegatesWithoutDeletingFiles(t *testing.T) {
+	t.Run("explicit-destination", func(t *testing.T) { testGeneratedUninstaller(t, false) })
+	if runtime.GOOS == "windows" {
+		t.Run("default-destination", func(t *testing.T) { testGeneratedUninstaller(t, true) })
+	}
+}
+
+func testGeneratedUninstaller(t *testing.T, useDefault bool) {
 	root := t.TempDir()
 	b := installerCommandFixture(t, root)
 	suffix := ""
@@ -111,6 +135,12 @@ func TestGeneratedUninstallerDelegatesWithoutDeletingFiles(t *testing.T) {
 		suffix = ".exe"
 	}
 	destination := filepath.Join(root, "kado"+suffix)
+	if useDefault {
+		destination = filepath.Join(root, "profile space", ".local", "bin", "kado.exe")
+		if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	os.WriteFile(destination, b, 0700)
 	log := filepath.Join(root, "commands.jsonl")
 	var c *exec.Cmd
@@ -118,10 +148,16 @@ func TestGeneratedUninstallerDelegatesWithoutDeletingFiles(t *testing.T) {
 		script := filepath.Join(root, "uninstall.ps1")
 		os.WriteFile(script, []byte(uninstallPowerShellScript()), 0600)
 		c = exec.Command("powershell.exe", "-NoProfile", "-File", script, "-Yes", "-Destination", destination)
+		if useDefault {
+			c = exec.Command("powershell.exe", "-NoProfile", "-File", script, "-Yes")
+		}
 	} else {
 		c = exec.Command("sh", "-c", uninstallUnixScript(), "uninstall.sh", "--yes")
 	}
 	c.Env = append(os.Environ(), "KADO_TEST_LOG="+log, "KADO_INSTALL_PATH="+destination)
+	if useDefault {
+		c.Env = append(c.Env, "USERPROFILE="+filepath.Join(root, "profile space"), "LOCALAPPDATA="+filepath.Join(root, "redirected-appdata"))
+	}
 	if out, err := c.CombinedOutput(); err != nil {
 		t.Fatalf("uninstaller: %v %s", err, out)
 	}

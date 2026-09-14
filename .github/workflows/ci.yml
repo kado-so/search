@@ -209,6 +209,8 @@ jobs:
           test "$(go env GOARCH)" = "$EXPECTED_GOARCH"
       - name: Test complete lifecycle, skills, dispatch and Search output
         run: go test ./internal/a2adispatch ./internal/mcpdispatch ./internal/buildinfo ./internal/cli ./internal/launcher ./internal/releaseclient ./internal/skillclient ./internal/searchoutput ./internal/shellcompletion ./cmd/kado -count=1 -timeout=15m
+      - name: Test generated installer and uninstaller defaults
+        run: go test ./tools/release -run 'TestGenerated(Installer|Uninstaller)' -count=1 -timeout=5m
       - name: Test Windows Job Object
         if: runner.os == 'Windows'
         run: go test ./internal/processtree -count=1
