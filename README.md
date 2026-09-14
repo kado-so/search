@@ -130,11 +130,12 @@ on Windows. `host.json` and `identities.json` are non-secret local state.
 
 ## Releases and self-update
 
-Kado's release tool verifies the locked official A2A source, builds the A2A
-sidecar first, and then cross-compiles matching Kado binaries for Linux, macOS,
-and Windows with one pinned Go toolchain. It packages and signs each pair and
-generates SHA-256 checksums, combined SPDX SBOMs, SLSA-shaped/in-toto
-provenance, and local installers.
+Kado's release tool verifies the locked official A2A source and maintained MCP
+component, then builds the complete bundle for Linux, macOS and Windows on both
+amd64 and arm64. The bundle includes private Node and native dependencies;
+users do not need Node or npm. Signed manifests authenticate the entire payload,
+with SHA-256 checksums, SPDX SBOMs, provenance and direct installers.
+Homebrew, Scoop, WinGet, deb/rpm and container releases are deferred.
 
 Installed release binaries verify the signed metadata, selected platform
 archive, and candidate executable identity before activation. Direct installs
@@ -152,8 +153,9 @@ Downgrades require `kado update --allow-downgrade`. Uninstall preserves the
 autonomous-agent credential unless `--purge-credentials` is explicitly
 requested.
 
-Existing direct installations migrate to the launcher layout during one
-explicit `kado update`; package-managed installations do not auto-update.
+This release assumes fresh installations of the complete MCP format. Updates
+and rollback operate within that format; older pair-only installations require
+a fresh install. Package-managed installations do not auto-update.
 
 See [CLI release documentation](docs/RELEASING_CLI.md) for build, signing,
 verification, rollback, and publication details.
