@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -21,11 +22,20 @@ func TestA2ADispatchSupervisesTheUnixProcess(t *testing.T) {
 		t.Run(layout, func(t *testing.T) {
 			root := buildA2ATestPair(t, managed)
 			for _, test := range []struct {
-				name      string
-				terminate func(*os.Process) error
+				name                  string
+				terminate             func(*os.Process) error
+				childExitsWithWrapper bool
 			}{
-				{name: "interrupt", terminate: func(process *os.Process) error { return process.Signal(os.Interrupt) }},
-				{name: "forced kill", terminate: func(process *os.Process) error { return process.Kill() }},
+				{
+					name:                  "interrupt",
+					terminate:             func(process *os.Process) error { return process.Signal(os.Interrupt) },
+					childExitsWithWrapper: true,
+				},
+				{
+					name:                  "forced kill",
+					terminate:             func(process *os.Process) error { return process.Kill() },
+					childExitsWithWrapper: runtime.GOOS == "linux",
+				},
 			} {
 				t.Run(test.name, func(t *testing.T) {
 					command, record := startHeldUnixA2A(t, root, test.name+".json")
@@ -49,7 +59,18 @@ func TestA2ADispatchSupervisesTheUnixProcess(t *testing.T) {
 					}
 					waitUnixA2ACommand(t, command)
 					assertUnixProcessExited(t, publicPID)
-					assertUnixProcessExited(t, record.PID)
+					if test.childExitsWithWrapper {
+						assertUnixProcessExited(t, record.PID)
+					} else {
+						child, err := os.FindProcess(record.PID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := child.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+							t.Fatal(err)
+						}
+						assertUnixProcessExited(t, record.PID)
+					}
 				})
 			}
 		})
