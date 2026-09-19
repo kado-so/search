@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestA2ADispatchReplacesTheUnixProcess(t *testing.T) {
+func TestA2ADispatchSupervisesTheUnixProcess(t *testing.T) {
 	for _, managed := range []bool{false, true} {
 		layout := "developer"
 		if managed {
@@ -30,8 +30,8 @@ func TestA2ADispatchReplacesTheUnixProcess(t *testing.T) {
 				t.Run(test.name, func(t *testing.T) {
 					command, record := startHeldUnixA2A(t, root, test.name+".json")
 					publicPID := command.Process.Pid
-					if record.PID != publicPID {
-						t.Fatalf("Unix dispatch kept a wrapper: public=%d %s", publicPID, processDescription(record))
+					if record.PID == publicPID || record.ParentPID != publicPID {
+						t.Fatalf("Unix dispatch did not supervise sidecar: public=%d %s", publicPID, processDescription(record))
 					}
 					expectedSidecar := filepath.Join(root, a2aTestBinaryName())
 					if managed {
@@ -43,12 +43,13 @@ func TestA2ADispatchReplacesTheUnixProcess(t *testing.T) {
 							a2aTestBinaryName(),
 						)
 					}
-					assertA2AProcessImage(t, publicPID, expectedSidecar)
+					assertA2AProcessImage(t, record.PID, expectedSidecar)
 					if err := test.terminate(command.Process); err != nil {
 						t.Fatal(err)
 					}
 					waitUnixA2ACommand(t, command)
 					assertUnixProcessExited(t, publicPID)
+					assertUnixProcessExited(t, record.PID)
 				})
 			}
 		})

@@ -11,6 +11,7 @@ import (
 	"github.com/kado-so/search/internal/cli"
 	"github.com/kado-so/search/internal/launcher"
 	"github.com/kado-so/search/internal/mcpdispatch"
+	"github.com/kado-so/search/internal/protocoltelemetry"
 	"github.com/kado-so/search/internal/releaseclient"
 )
 
@@ -46,10 +47,13 @@ func main() {
 		}
 		os.Exit(code)
 	}
+	attempt := protocoltelemetry.Begin(os.Args)
 	if code, handled := mcpdispatch.Dispatch(info, os.Args, os.Stdin, os.Stdout, os.Stderr); handled {
+		attempt.Finish(code)
 		os.Exit(code)
 	}
 	if code, handled := a2adispatch.Dispatch(info, os.Args, os.Stdin, os.Stdout, os.Stderr); handled {
+		attempt.Finish(code)
 		os.Exit(code)
 	}
 	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr, info))
