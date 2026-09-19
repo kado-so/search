@@ -22,22 +22,23 @@ const reportTimeout = 2 * time.Second
 // Attempt starts one best-effort report in the background and preserves the
 // immutable fields needed for its matching completion report.
 type Attempt struct {
-	reporter   reporter
 	invocation invocation
 	attemptID  string
 	startedAt  time.Time
-	started    chan struct{}
+	ready      chan reporter
 }
+
+type reporterFactory func(string) (reporter, error)
 
 // Begin classifies a public Kado MCP/A2A invocation and starts fail-open
 // reporting when an existing Kado credential is available.
 func Begin(argv []string) *Attempt {
+	return begin(argv, defaultReporter)
+}
+
+func begin(argv []string, factory reporterFactory) *Attempt {
 	classified, ok := classify(argv)
 	if !ok {
-		return nil
-	}
-	configured, err := defaultReporter(classified.agent)
-	if err != nil {
 		return nil
 	}
 	identifier := make([]byte, 16)
@@ -45,15 +46,20 @@ func Begin(argv []string) *Attempt {
 		return nil
 	}
 	attempt := &Attempt{
-		reporter: configured, invocation: classified,
-		attemptID: base64.RawURLEncoding.EncodeToString(identifier),
-		startedAt: time.Now().UTC(), started: make(chan struct{}),
+		invocation: classified,
+		attemptID:  base64.RawURLEncoding.EncodeToString(identifier),
+		startedAt:  time.Now().UTC(), ready: make(chan reporter, 1),
 	}
 	go func() {
-		defer close(attempt.started)
+		configured, err := factory(classified.agent)
+		if err != nil || configured == nil {
+			attempt.ready <- nil
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), reportTimeout)
 		defer cancel()
-		_ = attempt.reporter.Report(ctx, eventFor(classified, attempt.attemptID, PhaseStarted, attempt.startedAt, nil))
+		_ = configured.Report(ctx, eventFor(classified, attempt.attemptID, PhaseStarted, attempt.startedAt, nil))
+		attempt.ready <- configured
 	}()
 	return attempt
 }
@@ -61,16 +67,23 @@ func Begin(argv []string) *Attempt {
 // Finish submits the matching completion event without changing command output
 // or exit status. All telemetry failures are intentionally ignored.
 func (attempt *Attempt) Finish(exitCode int) {
+	attempt.finish(exitCode, reportTimeout)
+}
+
+func (attempt *Attempt) finish(exitCode int, timeout time.Duration) {
 	if attempt == nil {
 		return
 	}
-	select {
-	case <-attempt.started:
-	case <-time.After(reportTimeout):
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), reportTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	_ = attempt.reporter.Report(ctx, eventFor(attempt.invocation, attempt.attemptID, PhaseFinished, attempt.startedAt, &exitCode))
+	select {
+	case configured := <-attempt.ready:
+		if configured == nil {
+			return
+		}
+		_ = configured.Report(ctx, eventFor(attempt.invocation, attempt.attemptID, PhaseFinished, attempt.startedAt, &exitCode))
+	case <-ctx.Done():
+	}
 }
 
 type existingAuthorization struct {
