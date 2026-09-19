@@ -7,12 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
 )
 
-func TestA2ADispatchReplacesTheUnixProcess(t *testing.T) {
+func TestA2ADispatchSupervisesTheUnixProcess(t *testing.T) {
 	for _, managed := range []bool{false, true} {
 		layout := "developer"
 		if managed {
@@ -21,17 +22,26 @@ func TestA2ADispatchReplacesTheUnixProcess(t *testing.T) {
 		t.Run(layout, func(t *testing.T) {
 			root := buildA2ATestPair(t, managed)
 			for _, test := range []struct {
-				name      string
-				terminate func(*os.Process) error
+				name                  string
+				terminate             func(*os.Process) error
+				childExitsWithWrapper bool
 			}{
-				{name: "interrupt", terminate: func(process *os.Process) error { return process.Signal(os.Interrupt) }},
-				{name: "forced kill", terminate: func(process *os.Process) error { return process.Kill() }},
+				{
+					name:                  "interrupt",
+					terminate:             func(process *os.Process) error { return process.Signal(os.Interrupt) },
+					childExitsWithWrapper: true,
+				},
+				{
+					name:                  "forced kill",
+					terminate:             func(process *os.Process) error { return process.Kill() },
+					childExitsWithWrapper: runtime.GOOS == "linux",
+				},
 			} {
 				t.Run(test.name, func(t *testing.T) {
 					command, record := startHeldUnixA2A(t, root, test.name+".json")
 					publicPID := command.Process.Pid
-					if record.PID != publicPID {
-						t.Fatalf("Unix dispatch kept a wrapper: public=%d %s", publicPID, processDescription(record))
+					if record.PID == publicPID || record.ParentPID != publicPID {
+						t.Fatalf("Unix dispatch did not supervise sidecar: public=%d %s", publicPID, processDescription(record))
 					}
 					expectedSidecar := filepath.Join(root, a2aTestBinaryName())
 					if managed {
@@ -43,12 +53,24 @@ func TestA2ADispatchReplacesTheUnixProcess(t *testing.T) {
 							a2aTestBinaryName(),
 						)
 					}
-					assertA2AProcessImage(t, publicPID, expectedSidecar)
+					assertA2AProcessImage(t, record.PID, expectedSidecar)
 					if err := test.terminate(command.Process); err != nil {
 						t.Fatal(err)
 					}
 					waitUnixA2ACommand(t, command)
 					assertUnixProcessExited(t, publicPID)
+					if test.childExitsWithWrapper {
+						assertUnixProcessExited(t, record.PID)
+					} else {
+						child, err := os.FindProcess(record.PID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := child.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+							t.Fatal(err)
+						}
+						assertUnixProcessExited(t, record.PID)
+					}
 				})
 			}
 		})

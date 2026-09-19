@@ -57,14 +57,44 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 origin = `http://127.0.0.1:${server.address().port}`;
 const endpoint = `${origin}/mcp`;
 const env = { ...process.env, KADO_MCP_HOME_DIR: home, KADO_MAINTENANCE_CHILD: '1', NO_COLOR: '1', PATH: dirname(kado) + (windows ? ';' : ':') + process.env.PATH };
+const commandTimeout = windows && process.arch === 'arm64' ? 60000 : 25000;
+const diagnostic = value => value.replaceAll(access, '[redacted]').slice(-4096);
+const terminate = child => new Promise(resolve => {
+  if (!child.pid) return resolve();
+  const killChild = () => {
+    try { child.kill('SIGKILL'); } catch { /* The process may already be gone. */ }
+  };
+  if (!windows) {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { killChild(); }
+    return resolve();
+  }
+  const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  const fallback = setTimeout(() => { killChild(); resolve(); }, 5000);
+  fallback.unref();
+  killer.once('error', () => { clearTimeout(fallback); killChild(); resolve(); });
+  killer.once('close', () => { clearTimeout(fallback); resolve(); });
+});
 // Literal documentation commands execute through the user's shell, not argv
 // reconstruction. Placeholder substitution is confined to our loopback URL.
 const run = (command, authorize = false) => new Promise((resolve, reject) => {
   const shell = windows ? 'powershell.exe' : '/bin/sh';
   const args = windows ? ['-NoProfile', '-NonInteractive', '-Command', command] : ['-c', command];
-  const child = spawn(shell, args, { cwd: work, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stdout = '', stderr = '', approved = false;
-  const timer = setTimeout(() => { child.kill(); reject(Error('tutorial command timed out')); }, 25000);
+  const child = spawn(shell, args, { cwd: work, env, detached: !windows, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const started = Date.now();
+  let stdout = '', stderr = '', approved = false, finished = false;
+  let timer;
+  const stopAndReject = error => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    void terminate(child).finally(() => reject(error));
+  };
+  timer = setTimeout(() => stopAndReject(Error([
+    `tutorial command timed out after ${Date.now() - started}ms`,
+    `command: ${command}`,
+    `stdout: ${diagnostic(stdout)}`,
+    `stderr: ${diagnostic(stderr)}`,
+  ].join('\n'))), commandTimeout);
   child.stdout.setEncoding('utf8').on('data', chunk => stdout += chunk);
   child.stderr.setEncoding('utf8').on('data', chunk => {
     stderr += chunk;
@@ -82,12 +112,23 @@ const run = (command, authorize = false) => new Promise((resolve, reject) => {
       callback.searchParams.set('state', authorization.searchParams.get('state'));
       callback.searchParams.set('iss', origin);
       assert.equal((await fetch(callback)).status, 200);
-    })().catch(error => { child.kill(); reject(error); });
+    })().catch(stopAndReject);
   });
-  child.on('error', error => { clearTimeout(timer); reject(error); });
-  child.on('close', code => {
+  child.on('error', error => {
+    if (finished) return;
+    finished = true;
     clearTimeout(timer);
-    try { assert.equal(code, 0, stderr); assert.ok(!stdout.includes(access) && !stderr.includes(access)); resolve(stdout); } catch (error) { reject(error); }
+    reject(error);
+  });
+  child.on('close', code => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    try {
+      assert.equal(code, 0, `command: ${command}\n${diagnostic(stderr)}`);
+      assert.ok(!stdout.includes(access) && !stderr.includes(access));
+      resolve(stdout);
+    } catch (error) { reject(error); }
   });
 });
 try {

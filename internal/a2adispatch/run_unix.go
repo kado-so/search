@@ -7,14 +7,15 @@ import (
 	"os"
 	"syscall"
 
+	"github.com/kado-so/search/internal/processforward"
 	"golang.org/x/sys/unix"
 )
 
 func runSidecar(
 	sidecar string,
 	arguments []string,
-	_ io.Reader,
-	_, _ io.Writer,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
 	suppressStderr bool,
 ) (int, error) {
 	if suppressStderr {
@@ -26,10 +27,7 @@ func runSidecar(
 		if err := unix.Dup2(int(null.Fd()), int(os.Stderr.Fd())); err != nil {
 			return 0, err
 		}
+		return 0, syscall.Exec(sidecar, append([]string{sidecar}, arguments...), os.Environ())
 	}
-	argv := append([]string{sidecar}, arguments...)
-	if err := syscall.Exec(sidecar, argv, os.Environ()); err != nil {
-		return 0, err
-	}
-	return 0, nil
+	return processforward.Run(sidecar, arguments, os.Environ(), stdin, stdout, stderr)
 }

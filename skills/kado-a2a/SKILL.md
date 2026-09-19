@@ -1,16 +1,16 @@
 ---
 name: kado-a2a
-description: "Invoke and manage A2A-compatible agents through Kado's bundled official A2A CLI. Use when working with an Agent Card, an A2A endpoint, task or context identifiers, or a Kado Search result whose use protocol is a2a. Do not use this skill to discover which solution to choose; use kado-search first."
+description: "Invoke and use A2A-compatible agents through Kado's bundled official A2A CLI. Use when working with an Agent Card, an A2A endpoint, task or context identifiers, or a Kado Search result whose use protocol is a2a. Do not use this skill to discover which solution to choose; use kado-search first."
 license: "MIT"
 metadata:
   author: "Kado"
-  version: "0.1.0"
+  version: "0.1.1"
   homepage: "https://kado.so"
 ---
 
 # Kado A2A
 
-Use `kado a2a` to interact with A2A-compatible agents. Kado ships the official A2A CLI command surface under this namespace.
+Use `kado a2a` to interact with A2A-compatible agents.
 
 ## Preflight and help
 
@@ -58,6 +58,21 @@ The default `send` behavior waits for completion or an interrupted state. Rely o
 
 Use `--output json` for one machine-readable result. When streaming is explicitly appropriate, use `--output json --stream` and consume stdout as JSONL, one complete JSON object per line.
 
+## Authentication
+
+Kado account authentication and remote A2A-agent authentication are separate.
+
+When authentication is required, consult `kado a2a --help` and `kado a2a config show` for supported non-interactive authentication and configuration mechanisms.
+
+Never forward Kado credentials, infer credentials from the Agent Card, expose secrets in output, or initiate an interactive human login without permission.
+- Follow the authentication scheme declared by the Agent Card or provided by the user. Never infer the scheme or credential.
+- Use `--auth "<authorization value>"` only for an explicitly supplied `Authorization` value.
+- Use `--svc-param key=value` for other explicitly documented service parameters, and `--tenant` only when the agent requires a tenant identifier.
+- Prefer supported `A2ACLI_*` environment variables or an explicit `.env` file via `--config` for reusable secrets. Avoid exposing secrets in command output, logs, or shell history.
+- If credentials are unavailable, explain what authentication is required and ask the user to authenticate or provide an approved credential source. Do not ask them to paste secrets into chat.
+- On `401` or `403`, do not retry repeatedly, don't substitute credentials, and don't fall back to Kado account credentials. Report the failure and request user direction.
+
+
 ## Continue work
 
 The CLI does not remember conversation or task state between invocations.
@@ -66,17 +81,9 @@ Preserve server-provided `taskId` and `contextId` values:
 
 - Use `--task-id` to continue an existing task, including one waiting for input.
 - Use `--context-id` to start a related turn in an existing context.
-- A task ID may be used without also supplying its context ID.
+- A task ID may be used without supplying its associated context ID.
 - Never invent, rewrite, or infer either identifier.
 
 Inspect `kado a2a send --help` and the relevant `task` command help before continuing, listing, subscribing to, retrieving, or cancelling work.
 
 Determine the outcome from the returned message or task state. A successful CLI exit means the exchange was performed; it does not necessarily mean the remote task completed successfully.
-
-## Authentication
-
-Kado account authentication and remote A2A-agent authentication are separate.
-
-Use only credentials or service parameters explicitly supplied for the remote agent. Consult `kado a2a --help` and `kado a2a config show` for supported non-interactive authentication and configuration mechanisms.
-
-Never forward Kado credentials, infer credentials from the Agent Card, expose secrets in output, or initiate an interactive human login without permission.

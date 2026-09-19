@@ -28,7 +28,7 @@ func TestA2ASkillOwnsAgentInvocationWorkflow(t *testing.T) {
 	if strings.Contains(content, "kado search --json") {
 		t.Fatal("A2A skill contains Search instructions")
 	}
-	if Version() != "0.1.0" {
+	if Version() != "0.1.1" {
 		t.Fatalf("Version() = %q", Version())
 	}
 	metadata := string(files["agents/openai.yaml"])

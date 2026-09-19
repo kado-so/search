@@ -91,7 +91,7 @@ func TestSignedMCPSkillLifecycle(t *testing.T) {
 			if err := json.Unmarshal(encoded, &metadata); err != nil {
 				t.Fatal(err)
 			}
-			metadata.Version = "0.1.1"
+			metadata.Version = "0.1.2"
 			fetcher.files[url], err = skillclient.CanonicalMetadata(metadata)
 			if err != nil {
 				t.Fatal(err)
@@ -107,7 +107,7 @@ func TestSignedMCPSkillLifecycle(t *testing.T) {
 		t.Fatalf("compatible signed refresh: %+v %v", updated, err)
 	}
 	for _, item := range updated.Updated {
-		if item.Name != "kado-mcp" || item.Version != "0.1.1" {
+		if item.Name != "kado-mcp" || item.Version != "0.1.2" {
 			t.Fatalf("unexpected refresh: %+v", item)
 		}
 	}
