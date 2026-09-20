@@ -42,7 +42,7 @@ import (
 const helpText = `Kado Search command-line client
 
 Usage:
-  kado [--agent <identity>] <command>
+  kado [--agent <identity>] [--telemetry] <command>
 
 Commands:
   search <query>   Run an authenticated Search
@@ -65,6 +65,7 @@ Commands:
 
 Options:
   --agent identity   Explicitly select the calling agent identity
+  --telemetry        Send bounded MCP/A2A usage telemetry for this invocation
   --json            Emit one canonical Search Document
   --jsonl           Emit result and pagination records
   --width columns   Human output width (40 to 160)

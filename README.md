@@ -157,8 +157,8 @@ This release assumes fresh installations of the complete MCP format. Updates
 and rollback operate within that format; older pair-only installations require
 a fresh install. Package-managed installations do not auto-update.
 
-See [CLI release documentation](docs/RELEASING_CLI.md) for build, signing,
-verification, rollback, and publication details.
+See the [CLI release overview](docs/RELEASING_CLI.md) for the public release and
+verification process.
 
 ## Skill
 
@@ -186,8 +186,8 @@ install its bundled skills. The canonical installation boundary is
 
 See [installation documentation](docs/INSTALL.md) for the directly
 maintained Agent Skills, Codex, and Claude Code plugin instructions.
-See [CLI distribution plan](docs/CLI_DISTRIBUTION.md) for the agent-first
-bootstrap, bundled skill, package-manager, and Windows update design.
+See the [CLI distribution overview](docs/CLI_DISTRIBUTION.md) for installation
+ownership and release-integrity behavior.
 
 ## Repository layout
 

@@ -30,13 +30,17 @@ type Attempt struct {
 
 type reporterFactory func(string) (reporter, error)
 
-// Begin classifies a public Kado MCP/A2A invocation and starts fail-open
-// reporting when an existing Kado credential is available.
-func Begin(argv []string) *Attempt {
-	return begin(argv, defaultReporter)
+// Begin classifies an explicitly opted-in public Kado MCP/A2A invocation and
+// starts fail-open reporting when an existing Kado credential is available.
+// Disabled reporting returns before credential or network setup.
+func Begin(enabled bool, argv []string) *Attempt {
+	return begin(enabled, argv, defaultReporter)
 }
 
-func begin(argv []string, factory reporterFactory) *Attempt {
+func begin(enabled bool, argv []string, factory reporterFactory) *Attempt {
+	if !enabled {
+		return nil
+	}
 	classified, ok := classify(argv)
 	if !ok {
 		return nil
