@@ -6,11 +6,65 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func TestRootArgumentsOwnsOnlyLeadingTelemetryOption(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		arguments []string
+		want      []string
+		enabled   bool
+	}{
+		{name: "empty"},
+		{
+			name: "disabled by default", arguments: []string{"kado", "mcp", "status"},
+			want: []string{"kado", "mcp", "status"},
+		},
+		{
+			name: "mcp enabled", arguments: []string{"kado", "--telemetry", "mcp", "status"},
+			want: []string{"kado", "mcp", "status"}, enabled: true,
+		},
+		{
+			name: "before agent", arguments: []string{"kado", "--telemetry", "--agent", "codex", "a2a", "send"},
+			want: []string{"kado", "--agent", "codex", "a2a", "send"}, enabled: true,
+		},
+		{
+			name: "after agent", arguments: []string{"kado", "--agent=codex", "--telemetry", "mcp", "ping"},
+			want: []string{"kado", "--agent=codex", "mcp", "ping"}, enabled: true,
+		},
+		{
+			name: "completion", arguments: []string{"kado", "__complete", "--telemetry", "--agent", "codex", "mcp", "tools-"},
+			want: []string{"kado", "__complete", "--agent", "codex", "mcp", "tools-"}, enabled: true,
+		},
+		{
+			name: "sidecar option remains opaque", arguments: []string{"kado", "mcp", "future", "--telemetry"},
+			want: []string{"kado", "mcp", "future", "--telemetry"},
+		},
+		{
+			name: "agent value is opaque", arguments: []string{"kado", "--agent", "--telemetry", "mcp", "status"},
+			want: []string{"kado", "--agent", "--telemetry", "mcp", "status"},
+		},
+		{
+			name: "repeated option is idempotent", arguments: []string{"kado", "--telemetry", "--telemetry", "a2a", "card"},
+			want: []string{"kado", "a2a", "card"}, enabled: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, enabled := rootArguments(test.arguments)
+			if enabled != test.enabled || !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("rootArguments(%q) = (%q, %v), want (%q, %v)", test.arguments, got, enabled, test.want, test.enabled)
+			}
+		})
+	}
+}
 
 func TestActualCLIUsesConfiguredFileCredentialBackend(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
