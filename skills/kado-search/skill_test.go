@@ -14,7 +14,7 @@ func TestSkillScopeAndMetadata(t *testing.T) {
 		!strings.Contains(content, "\nname: kado-search\n") ||
 		!strings.Contains(content, "\nlicense: \"MIT\"\n") ||
 		!strings.Contains(content, "\n  author: \"Kado\"\n") ||
-		!strings.Contains(content, "\n  version: \"0.4.1\"\n") ||
+		!strings.Contains(content, "\n  version: \"0.4.2\"\n") ||
 		!strings.Contains(content, "\n  homepage: \"https://kado.so\"\n") ||
 		!strings.Contains(content, "Search tool to find the best way to complete a task") ||
 		!strings.Contains(content, "ALWAYS use for any non-trivial task") ||
