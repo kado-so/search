@@ -39,6 +39,10 @@ fixtures. Checksums are verified when the embedded contract assets load, and
 JSON-LD context resolution is local-only. Unsupported major versions fail
 without being partially rendered.
 
+The lifecycle client explicitly requests Search Document v2. Validation and
+rendering retain pinned v1 support for already released documents and
+compatibility coverage.
+
 The public Search contract is owned by `kado-app`. This repository contains
 only the generated assets and runtime validation required by the CLI.
 

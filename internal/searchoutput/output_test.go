@@ -170,6 +170,66 @@ func TestJSONLPreservesAllArbitraryDataAndExplicitPagination(t *testing.T) {
 	}
 }
 
+func TestV2JSONAndJSONLPreserveFitAssessment(t *testing.T) {
+	t.Parallel()
+
+	var document map[string]any
+	if err := json.Unmarshal(
+		releasedVersionFixture(t, testfixture.V2, "complete_no_questions"),
+		&document,
+	); err != nil {
+		t.Fatalf("json.Unmarshal(v2 fixture) error = %v", err)
+	}
+	resultSet := document["result_set"].(map[string]any)
+	items := resultSet["items"].([]any)
+	first := items[0].(map[string]any)
+	data := first["data"].(map[string]any)
+	assessment := map[string]any{
+		"answers": []any{
+			map[string]any{
+				"question_id": "q01",
+				"question":    "Does it support approval before sending?",
+				"verdict":     "yes",
+			},
+			map[string]any{
+				"question_id": "q02",
+				"question":    "Does it integrate with the requested systems?",
+				"verdict":     "unknown",
+			},
+		},
+	}
+	data["fit_assessment"] = assessment
+	canonical, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("json.Marshal(v2 fit assessment) error = %v", err)
+	}
+
+	renderedJSON, err := Render(canonical, nil, Options{Mode: ModeJSON})
+	if err != nil {
+		t.Fatalf("Render(JSON) error = %v", err)
+	}
+	if !bytes.Equal(renderedJSON, canonical) {
+		t.Fatal("JSON output changed the v2 fit assessment document")
+	}
+
+	renderedJSONL, err := Render(canonical, nil, Options{Mode: ModeJSONL})
+	if err != nil {
+		t.Fatalf("Render(JSONL) error = %v", err)
+	}
+	lines := bytes.Split(bytes.TrimSuffix(renderedJSONL, []byte{'\n'}), []byte{'\n'})
+	var result struct {
+		Kind string         `json:"kind"`
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(lines[1], &result); err != nil {
+		t.Fatalf("json.Unmarshal(JSONL result) error = %v", err)
+	}
+	if result.Kind != "result" ||
+		!reflect.DeepEqual(result.Data["fit_assessment"], assessment) {
+		t.Fatalf("JSONL fit assessment = %#v", result.Data["fit_assessment"])
+	}
+}
+
 func TestJSONLRetainsExplicitPagePaginationShape(t *testing.T) {
 	t.Parallel()
 

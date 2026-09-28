@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf16"
+
+	"github.com/kado-so/search/internal/searchcontract"
 )
 
 func TestRunSuccessAndGloballyCachedRepeatAreObservable(t *testing.T) {
@@ -674,6 +676,15 @@ func TestClientRejectsOversizedBodiesWrongMediaAndForeignLinks(t *testing.T) {
 				response.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(response).Encode(
 					completeDocument(serverURL(request), "tools", "search_media", "", ""),
+				)
+			},
+		},
+		{
+			name: "released v1 media after explicit v2 request",
+			handler: func(response http.ResponseWriter, request *http.Request) {
+				response.Header().Set("Content-Type", "application/vnd.kado.search.v1+json")
+				_ = json.NewEncoder(response).Encode(
+					completeDocument(serverURL(request), "tools", "search_v1_media", "", ""),
 				)
 			},
 		},
@@ -1471,9 +1482,10 @@ func questionDocument(self, query, searchID string) map[string]any {
 	return baseDocument(self, query, searchID, map[string]any{
 		"status": "needs_input",
 		"question": map[string]any{
-			"id":      "question_platform",
-			"prompt":  "Which platform?",
-			"options": []string{"Web", "Desktop", "Mobile"},
+			"id":          "question_platform",
+			"prompt":      "Which platform?",
+			"answer_kind": "single_select",
+			"options":     []string{"Web", "Desktop", "Mobile"},
 		},
 	})
 }
@@ -1561,7 +1573,7 @@ func baseDocument(
 		search["completed_at"] = "2026-07-23T00:00:02Z"
 	}
 	return map[string]any{
-		"@context":       "https://kado.so/contexts/search-document/v1.jsonld",
+		"@context":       searchcontract.ContextURL,
 		"@id":            self,
 		"@type":          "SearchResultsPage",
 		"schema_version": SchemaVersion,
@@ -1569,8 +1581,8 @@ func baseDocument(
 		"state":          state,
 		"links": map[string]any{
 			"self":    self,
-			"schema":  "https://kado.so/schemas/search-document/v1.json",
-			"context": "https://kado.so/contexts/search-document/v1.jsonld",
+			"schema":  searchcontract.SchemaURL,
+			"context": searchcontract.ContextURL,
 		},
 		"metadata": map[string]any{
 			"revision":     1,

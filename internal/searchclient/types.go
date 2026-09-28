@@ -14,7 +14,7 @@ import (
 
 const (
 	// CanonicalMediaType is the versioned Search Document media type.
-	CanonicalMediaType = "application/vnd.kado.search.v1+json"
+	CanonicalMediaType = "application/vnd.kado.search.v2+json"
 	SchemaVersion      = searchcontract.SchemaVersion
 )
 
@@ -75,7 +75,7 @@ type Failure struct {
 	Retryable bool
 }
 
-// Document preserves the exact response bytes after full Search Document v1
+// Document preserves the exact response bytes after full Search Document
 // schema, JSON-LD, and semantic validation while exposing stable lifecycle
 // fields used by the lifecycle client.
 type Document struct {
