@@ -48,7 +48,6 @@ func assertMCPConsumerDocument(t *testing.T, encoded []byte) {
 	}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		assertMachineRequest(t, request, "Bearer token-one")
-		// Existing HTTP negotiation is retained; the lifecycle client requests v1.
 		response.Header().Set("Content-Type", CanonicalMediaType)
 		_, _ = response.Write(encoded)
 	}))
@@ -56,11 +55,11 @@ func assertMCPConsumerDocument(t *testing.T, encoded []byte) {
 	client := newIntegrationClient(t, server, &fakeAuthorizationSource{})
 	var document Document
 	var err error
-	if source.SchemaVersion == searchcontract.SchemaVersionV1 {
+	if source.SchemaVersion == searchcontract.SchemaVersionV2 {
 		document, err = client.Search(context.Background(), source.Search.Query)
 	} else {
-		// v2 is admitted by the existing document consumer without changing the
-		// network media-type negotiation (which is outside this goal).
+		// Retain direct validation coverage for already released v1 documents;
+		// network lifecycle requests explicitly negotiate v2.
 		document, err = client.decodeDocument(encoded, source.Search.Query)
 	}
 	if err != nil {

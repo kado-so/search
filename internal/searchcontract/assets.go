@@ -22,12 +22,12 @@ const (
 	SemanticRulesV1 = "kado.search-document-semantics.v1"
 	SemanticRulesV2 = "kado.search-document-semantics.v2"
 
-	// The Search client requests v1 by default. These aliases preserve its
-	// existing public constants while validation and rendering accept v1/v2.
-	SchemaVersion = SchemaVersionV1
-	ContextURL    = ContextURLV1
-	SchemaURL     = SchemaURLV1
-	SemanticRules = SemanticRulesV1
+	// The Search client requests v2 by default. Validation and rendering retain
+	// explicit v1 support for already released documents and compatibility tests.
+	SchemaVersion = SchemaVersionV2
+	ContextURL    = ContextURLV2
+	SchemaURL     = SchemaURLV2
+	SemanticRules = SemanticRulesV2
 
 	maxAssetBytes      = 256 * 1024
 	maxGeneratedAssets = 8
